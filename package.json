@@ -1,0 +1,41 @@
+{
+  "name": "@meri-imperiumi/signalk-passage-briefing",
+  "version": "0.1.0",
+  "description": "Offshore passage daily briefing webapp for Signal K",
+  "main": "plugin/index.js",
+  "scripts": {
+    "format": "npx @biomejs/biome check --use-editorconfig=true --write plugin/ tests/ bin/ public/",
+    "lint": "npx @biomejs/biome check --use-editorconfig=true plugin/ public/",
+    "test": "node --test --test-force-exit \"tests/*.test.js\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/meri-imperiumi/signalk-passage-briefing.git"
+  },
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk-category-utility",
+    "signalk-webapp"
+  ],
+  "author": "Henri Bergius <henri.bergius@iki.fi>",
+  "license": "EUPL-1.2",
+  "bugs": {
+    "url": "https://github.com/meri-imperiumi/signalk-passage-briefing/issues"
+  },
+  "homepage": "https://github.com/meri-imperiumi/signalk-passage-briefing#readme",
+  "signalk-plugin-enabled-by-default": false,
+  "signalk": {
+    "displayName": "Passage Briefing",
+    "requires": [
+      "@meri-imperiumi/signalk-energy-predictor",
+      "@meri-imperiumi/signalk-internet",
+      "signalk-polar-management"
+    ]
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "devDependencies": {
+    "@signalk/server-api": "^2.30.0"
+  }
+}
