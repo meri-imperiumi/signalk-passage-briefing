@@ -1113,10 +1113,14 @@ describe("plugin", () => {
       ],
     });
 
-    // Provider + asset mount registered
+    // Providers + asset mount registered: the plotter-extension
+    // manifest and the Status Tiles example set
     const providers = app.getResourceProviders();
-    assert.equal(providers.length, 1);
-    assert.equal(providers[0].type, "plotterExtensions");
+    assert.equal(providers.length, 2);
+    assert.deepEqual(
+      providers.map((p) => p.type).sort(),
+      ["plotterExtensions", "statusTileExamples"],
+    );
     assert.equal(
       app.getMounts()[0].prefix,
       "/plotterext/signalk-passage-briefing",
