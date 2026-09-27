@@ -27,6 +27,8 @@ const STREAM_PATHS = [
   "navigation.briefing.route",
   "navigation.briefing.hasNew",
   "navigation.briefing.comfort",
+  "navigation.briefing.stale",
+  "navigation.briefing.ageHours",
 ];
 
 /** The webapp served by the webapp keyword (fallback brief surface). */
@@ -186,13 +188,24 @@ class BriefExtWidget extends HTMLElement {
     if (!this.connected || this.longPressed) {
       return;
     }
-    // 1) pop-up; 2) navigate this frame — the plotter host sandboxes
-    // the iframe without allow-popups, so the blocked window.open
-    // (null return) falls through to navigation
-    const win = window.open(BRIEF_URLS[0], "_blank");
-    if (!win) {
-      location.assign(BRIEF_URLS[0]);
+    // The host sandbox decides what is allowed: pop-up → parent
+    // window → this frame, in that order, each falling through on a
+    // sandbox block
+    try {
+      const win = window.open(BRIEF_URLS[0], "_blank");
+      if (win) {
+        return;
+      }
+    } catch (_error) {
+      // Pop-ups blocked: fall through
     }
+    try {
+      window.top.location.href = BRIEF_URLS[0];
+      return;
+    } catch (_error) {
+      // Top navigation blocked: take over this frame
+    }
+    location.assign(BRIEF_URLS[0]);
   }
 
   /**

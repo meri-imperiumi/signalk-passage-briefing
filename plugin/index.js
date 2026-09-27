@@ -1042,18 +1042,17 @@ module.exports = (app) => {
         (delta) => feedDelta(delta),
       );
 
-      let tickerCount = 0;
+      const tickerCount = 0;
       cronTimer = setInterval(() => {
         const result = stateMachine.tick(new Date());
         if (result.fetch === "cron") {
           runFetch("cron");
         }
-        // Re-emit the tile paths on every 5th tick (work doc #13):
-        // deltas only travel on change, and widgets that connect
-        // after the last compile would otherwise never see values;
-        // stale/ageHours also drift with the clock
-        tickerCount++;
-        if (tickerCount % 5 === 0 && briefMeta.generatedAt != null) {
+        // Re-emit the tile paths every tick (work doc #13): deltas
+        // only travel on change, and widgets that connect after the
+        // last compile would otherwise wait up to five minutes for
+        // values; stale/ageHours also drift with the clock
+        if (briefMeta.generatedAt != null) {
           publishBriefMeta();
         }
       }, CRON_TICK_INTERVAL_MS);

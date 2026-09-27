@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- The plotter tile received no values when its iframe connected
+  after the last compile: the tile paths are now re-emitted on every
+  60s cron tick (delta cost is five small values), the widget
+  subscribes to the new stale/ageHours paths too, and its tap tries
+  pop-up, then the parent window, then takes over its own frame —
+  whatever the host sandbox permits.
+
 - The BoM radiofax hosts stall connections from the boat outright
   (no response, fetch abort): zones 10 and 14 are parked under an
   `_unverified` map section so refreshes no longer stall on doomed
