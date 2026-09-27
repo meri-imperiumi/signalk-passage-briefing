@@ -1218,7 +1218,9 @@ module.exports = (app) => {
           });
           return;
         }
-        res.type("image/png").send(chart.png);
+        res
+          .type(chart.format === "gif" ? "image/gif" : "image/png")
+          .send(chart.bytes);
       });
 
       router.get("/api/cached", async (_req, res) => {

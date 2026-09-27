@@ -12,7 +12,7 @@
 
 const { readFile, writeFile } = require("node:fs/promises");
 const { join } = require("node:path");
-const { convertToPng } = require("./raster-convert.js");
+const { convertChart } = require("./raster-convert.js");
 
 /** @typedef {Record<string, {name: string, source: string, url?: string, hours?: Record<string, string>}>} SynopticMap */
 
@@ -145,21 +145,22 @@ async function refreshSynoptics({
         if (!response.ok) {
           throw new Error(`${response.status} ${response.statusText}`);
         }
-        const bytes = Buffer.from(await response.arrayBuffer());
-        const converted = convertToPng(bytes);
-        if (!converted) {
+        const raw = Buffer.from(await response.arrayBuffer());
+        const chart = convertChart(raw);
+        if (!chart) {
           throw new Error("unsupported chart format");
         }
-        const file = `synoptic-${pick.zone}.png`;
-        await writeFile(join(dataDir, file), converted.png);
+        const file = `synoptic-${pick.zone}.${chart.format}`;
+        await writeFile(join(dataDir, file), chart.bytes);
         index[pick.zone] = {
           url: pick.urls[0],
           fetchedFrom: url,
           validHour: pick.validHour,
           fetchedAt: new Date().toISOString(),
           file,
-          width: converted.width,
-          height: converted.height,
+          format: chart.format,
+          width: chart.width,
+          height: chart.height,
         };
         fetched.push(pick.zone);
         break;
@@ -200,7 +201,7 @@ async function loadSynopticFailure(dataDir, zone) {
  *
  * @param {string} dataDir
  * @param {number} zone
- * @returns {Promise<{png: Buffer, fetchedAt: string}|null>}
+ * @returns {Promise<{bytes: Buffer, format: string, fetchedAt: string}|null>}
  */
 async function loadSynoptic(dataDir, zone) {
   const index = await loadIndex(dataDir);
@@ -209,8 +210,8 @@ async function loadSynoptic(dataDir, zone) {
     return null;
   }
   try {
-    const png = await readFile(join(dataDir, entry.file));
-    return { png, fetchedAt: entry.fetchedAt };
+    const bytes = await readFile(join(dataDir, entry.file));
+    return { bytes, format: entry.format ?? "png", fetchedAt: entry.fetchedAt };
   } catch {
     return null;
   }

@@ -26,30 +26,12 @@
     "source": "NOAA TGFTP",
     "url": "https://tgftp.nws.noaa.gov/fax/PPBA11.TIF"
   },
-  "_unverified": {
-    "note": "BoM radiofax entries parked 2026-09-27: both anon hosts stall connections from the boat (fetch aborts). Re-add to active zones once a reachable host/product is verified.",
-    "10": {
-      "name": "Australia / Tasman",
-      "source": "BoM radiofax",
-      "url": [
-        "http://ftp2.bom.gov.au/anon/gen/radio_fax/IDX0102.TIF",
-        "http://ftp.bom.gov.au/anon/gen/radio_fax/IDX0102.TIF"
-      ]
-    },
-    "14": {
-      "name": "South Pacific / NZ",
-      "source": "BoM radiofax (dedicated South Pacific MSLP analysis)",
-      "hours": {
-        "00": [
-          "http://ftp2.bom.gov.au/anon/gen/radio_fax/IDX0032.TIF",
-          "http://ftp.bom.gov.au/anon/gen/radio_fax/IDX0032.TIF"
-        ],
-        "12": [
-          "http://ftp2.bom.gov.au/anon/gen/radio_fax/IDX0532.TIF",
-          "http://ftp.bom.gov.au/anon/gen/radio_fax/IDX0532.TIF"
-        ]
-      },
-      "verifyOnBoard": "BoM anon host: ftp2 is the documented server, ftp.bom.gov.au kept as fallback"
+  "14": {
+    "name": "South Pacific / New Zealand",
+    "source": "BoM difacs (Fiji Met broadcast)",
+    "hours": {
+      "00": ["http://www.bom.gov.au/difacs/IDX0032.gif"],
+      "12": ["http://www.bom.gov.au/difacs/IDX0532.gif"]
     }
   }
 }

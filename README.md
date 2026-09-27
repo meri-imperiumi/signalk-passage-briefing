@@ -51,9 +51,9 @@ and [@meri-imperiumi/signalk-logbook](https://github.com/meri-imperiumi/signalk-
 - [JPL SBDB query API](https://ssd-api.jpl.nasa.gov/doc/sbdb_query.html)
   — comet brightness parameters (M1/K1) behind the Sky Notes comets
 - [NOAA TGFTP radiofax tree](https://tgftp.nws.noaa.gov/fax/) and the
-  [BoM radiofax service](http://ftp2.bom.gov.au/anon/gen/radio_fax/) —
-  synoptic surface-analysis charts per METAREA zone (work doc #11),
-  per the schedule in
+  [BoM difacs charts](http://www.bom.gov.au/difacs/) — synoptic
+  surface-analysis charts per METAREA zone (work doc #11), per the
+  schedule in
   [otherfax.txt](https://tgftp.nws.noaa.gov/fax/otherfax.txt)
 - [Open-Meteo Marine API](https://open-meteo.com/en/docs) —
   NOAA GFS-Wave 0.25° combined sea/wind sea/swell partitions, and

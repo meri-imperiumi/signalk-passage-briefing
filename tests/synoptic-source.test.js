@@ -21,7 +21,7 @@ const {
   loadSynopticMap,
   refreshSynoptics,
 } = require("../plugin/synoptic-source.js");
-const { convertToPng, detectFormat } = require("../plugin/raster-convert.js");
+const { convertChart, detectFormat } = require("../plugin/raster-convert.js");
 
 function dataDir() {
   return mkdtempSync(join(tmpdir(), "synoptic-"));
@@ -45,12 +45,12 @@ describe("chart URL selection", () => {
 
   test("hour boundaries pick 00Z before noon, 12Z from noon", () => {
     const map2 = {
-      "14": {
+      14: {
         name: "x",
         source: "t",
         hours: {
           "00": "http://a/00.TIF",
-          "12": "http://a/12.TIF",
+          12: "http://a/12.TIF",
         },
       },
     };
@@ -60,12 +60,6 @@ describe("chart URL selection", () => {
     assert.equal(before.validHour, "00");
     assert.equal(at.urls[0], "http://a/12.TIF");
     assert.equal(at.validHour, "12");
-  });
-
-  test("parked unverified zones resolve to nothing", () => {
-    // The BoM hosts stall connections from the boat: zone 14 rides
-    // chartless until a reachable product is verified
-    assert.equal(chartUrlForZone(map, 14), null);
   });
 
   test("static filenames skip the hour logic", () => {
@@ -90,14 +84,27 @@ describe("chart URL selection", () => {
 });
 
 describe("conversion and cache", () => {
-  test("tiff converts to grayscale png; png passes through; gif rejected", () => {
-    const png = convertToPng(fixtureTif());
-    assert.equal(detectFormat(png.png), "png");
+  test("tiff converts to grayscale png; gif passes through as-is", () => {
+    const png = convertChart(fixtureTif());
+    assert.equal(detectFormat(png.bytes), "png");
     assert.equal(png.converted, true);
     assert.equal(png.width, 8);
     assert.equal(png.height, 4);
 
-    assert.equal(convertToPng(Buffer.from("GIF89a whatever")), null);
+    // BoM difacs GIF: cached as-is, size read from the header
+    const gif = Buffer.concat([
+      Buffer.from("GIF89a"),
+      Buffer.from([12, 0, 6, 0]), // 12x6 logical screen
+      Buffer.from("trailer bytes would follow"),
+    ]);
+    const passthrough = convertChart(gif);
+    assert.equal(passthrough.format, "gif");
+    assert.equal(passthrough.converted, false);
+    assert.equal(passthrough.width, 12);
+    assert.equal(passthrough.height, 6);
+    assert.equal(passthrough.bytes, gif);
+
+    assert.equal(convertChart(Buffer.from("NOT AN IMAGE")), null);
   });
 
   test("refresh fetches, caches, then skips the same chart", async () => {
@@ -121,7 +128,8 @@ describe("conversion and cache", () => {
     assert.equal(fetches, 1);
     assert.ok(existsSync(join(dir, "synoptic-11.png")));
     const cached = await loadSynoptic(dir, 11);
-    assert.equal(detectFormat(cached.png), "png");
+    assert.equal(cached.format, "png");
+    assert.equal(detectFormat(cached.bytes), "png");
     assert.ok(cached.fetchedAt);
 
     const second = await refreshSynoptics({
@@ -158,8 +166,8 @@ describe("conversion and cache", () => {
   });
 });
 
-test("convertToPng output is a well-formed grayscale PNG", () => {
-  const { png } = convertToPng(fixtureTif(6, 3));
+test("converted chart output is a well-formed grayscale PNG", () => {
+  const { bytes: png } = convertChart(fixtureTif(6, 3));
   assert.deepEqual(
     [...png.subarray(0, 8)],
     [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],

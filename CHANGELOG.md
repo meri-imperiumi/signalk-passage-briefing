@@ -66,6 +66,13 @@
 
 ### Added
 
+- Zone 14 synoptic chart repointed to the BoM difacs web host
+  (www.bom.gov.au/difacs/IDX0032/IDX0532.gif) after the anon FTP
+  hosts proved unreachable from the boat; GIF charts are cached and
+  served as-is (browsers render them natively), so the omggif
+  decoder is not needed and was removed again. TIFF charts still
+  convert to grayscale PNG via the vendored UTIF.
+
 - Styling pass per the house UI spec: shadow-DOM components carried
   no panel styling (document-level visuals.css cannot pierce a
   shadow root), so the webapp rendered as unstyled text. A shared

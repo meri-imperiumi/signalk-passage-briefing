@@ -1,10 +1,9 @@
 /**
- * Raster conversion for synoptic charts (work doc #11): decodes the
- * agencies' TIFF charts with the vendored pure-JS UTIF decoder and
- * re-encodes them as compact 8-bit grayscale PNGs using only
- * node:zlib — no native image dependency. Radiofax charts are
- * near-bilevel line art, so grayscale PNG deflates well below the
- * ~100 KB target.
+ * Raster conversion for synoptic charts (work doc #11). The BoM
+ * difacs charts arrive as GIF and are cached as-is — browsers render
+ * GIF natively. TIFF inputs (NOAA TGFTP) are decoded with the
+ * vendored pure-JS UTIF decoder and re-encoded as compact 8-bit
+ * grayscale PNGs using only node:zlib — no native image dependency.
  *
  * @file raster-convert.js
  */
@@ -17,12 +16,13 @@ const TIF_MAGICS = [
   Buffer.from([0x4d, 0x4d, 0x00, 0x2a]),
 ];
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+const GIF_MAGIC = Buffer.from([0x47, 0x49, 0x46]); // "GIF"
 
 /**
  * Detects the image format from magic bytes.
  *
  * @param {Buffer|Uint8Array} bytes
- * @returns {"tif"|"png"|"unknown"}
+ * @returns {"tif"|"png"|"gif"|"unknown"}
  */
 function detectFormat(bytes) {
   const head = bytes.subarray(0, 4);
@@ -31,6 +31,9 @@ function detectFormat(bytes) {
   }
   if (head.compare(PNG_MAGIC) === 0) {
     return "png";
+  }
+  if (bytes.subarray(0, 3).compare(GIF_MAGIC) === 0) {
+    return "gif";
   }
   return "unknown";
 }
@@ -99,18 +102,46 @@ function luma(r, g, b) {
   return Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b);
 }
 
+/** Grayscale of an RGBA buffer. */
+function rgbaToGray(rgba, pixelCount) {
+  const gray = new Uint8Array(pixelCount);
+  for (let i = 0; i < pixelCount; i++) {
+    gray[i] = luma(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]);
+  }
+  return gray;
+}
+
+/** GIF logical screen size: little-endian u16 at bytes 6 and 8. */
+function gifSize(bytes) {
+  return {
+    width: bytes[6] | (bytes[7] << 8),
+    height: bytes[8] | (bytes[9] << 8),
+  };
+}
+
+/** PNG IHDR size: big-endian u32 at bytes 16 and 20. */
+function pngSize(bytes) {
+  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+}
+
 /**
- * Converts chart bytes to a grayscale PNG. TIFF inputs are decoded
- * with the vendored UTIF; PNG input passes through unchanged; other
- * formats (GIF sources) are not supported and yield null.
+ * Prepares chart bytes for the briefing. TIFF inputs are decoded and
+ * re-encoded as grayscale PNG; GIF and PNG inputs pass through
+ * unchanged (browsers render them natively); other formats yield
+ * null.
  *
  * @param {Buffer} bytes - Source image bytes
- * @returns {{png: Buffer, width: number, height: number, converted: boolean}|null}
+ * @returns {{bytes: Buffer, format: "gif"|"png", width: number|null, height: number|null, converted: boolean}|null}
  */
-function convertToPng(bytes) {
+function convertChart(bytes) {
   const format = detectFormat(bytes);
+  if (format === "gif") {
+    const { width, height } = gifSize(bytes);
+    return { bytes, format, width, height, converted: false };
+  }
   if (format === "png") {
-    return { png: bytes, width: 0, height: 0, converted: false };
+    const { width, height } = pngSize(bytes);
+    return { bytes, format, width, height, converted: false };
   }
   if (format !== "tif") {
     return null;
@@ -121,12 +152,9 @@ function convertToPng(bytes) {
   const rgba = UTIF.toRGBA8(ifds[0]);
   const width = ifds[0].width;
   const height = ifds[0].height;
-  const gray = new Uint8Array(width * height);
-  for (let i = 0; i < width * height; i++) {
-    gray[i] = luma(rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]);
-  }
   return {
-    png: encodeGrayPng(gray, width, height),
+    bytes: encodeGrayPng(rgbaToGray(rgba, width * height), width, height),
+    format: "png",
     width,
     height,
     converted: true,
@@ -136,5 +164,5 @@ function convertToPng(bytes) {
 module.exports = {
   detectFormat,
   encodeGrayPng,
-  convertToPng,
+  convertChart,
 };
