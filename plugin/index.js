@@ -459,7 +459,6 @@ module.exports = (app) => {
       bulletin,
       zone,
       synopticChartFor: () => chart,
-      ref: waypoints.length > 0 ? [waypoints[0].lon, waypoints[0].lat] : null,
     });
     if (result.published.length > 0 || result.pruned.length > 0) {
       app.debug?.(

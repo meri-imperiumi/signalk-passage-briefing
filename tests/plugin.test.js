@@ -1047,9 +1047,9 @@ describe("plugin", () => {
       assert.equal(metareaIds.length, 1, "one metarea note written");
       const note = listed[metareaIds[0]];
       assert.match(note.description, /SOUTHEAST WINDS/);
-      // Position clamps to the vessel inside the warning area
-      assert.equal(note.position.latitude, -18.658);
-      assert.equal(note.position.longitude, -173.982);
+      // Position is the center of the warning area's bbox
+      assert.equal(note.position.latitude, -50);
+      assert.equal(note.position.longitude, -172.5);
       assert.equal(note.properties.zone, 14);
       assert.equal(note.properties.sourcePlugin, "signalk-passage-briefing");
     } finally {
