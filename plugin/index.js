@@ -397,6 +397,9 @@ module.exports = (app) => {
     const result = await refreshSynoptics({
       dataDir: app.getDataDirPath(),
       zones,
+      // Short on purpose: a hanging agency host must not stall the
+      // whole briefing window (candidates are tried in order)
+      timeoutMs: 8000,
     });
     for (const failure of result.failed) {
       app.error?.(
