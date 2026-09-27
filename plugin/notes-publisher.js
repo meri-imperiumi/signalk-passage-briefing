@@ -210,6 +210,8 @@ async function saveManifest(dataDir, manifest) {
  * @param {number|null} params.zone - resolved zone for chart links
  * @param {(zone: number) => {url: string, mimeType: string}|null}
  *   [params.synopticChartFor] - cached chart lookup (work doc #11)
+ * @param {number[]} [params.ref] - vessel position [lon, lat] for
+ *   nearest-point note placement
  * @returns {Promise<{published: string[], deleted: string[]}>}
  */
 async function publishNotes({
@@ -218,6 +220,7 @@ async function publishNotes({
   bulletin,
   zone = null,
   synopticChartFor = () => null,
+  ref = null,
 }) {
   const resources = app.resourcesApi;
   if (
@@ -237,7 +240,7 @@ async function publishNotes({
       issuedAt: bulletin.issuedAt,
       zone,
       chart,
-      ref: bulletin.ref ?? null,
+      ref,
     });
     if (!note) {
       continue;

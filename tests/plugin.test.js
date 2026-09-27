@@ -981,6 +981,90 @@ describe("plugin", () => {
     plugin.stop();
   });
 
+  test("notes: here refresh publishes placeable blocks to resources", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const TGFTP_TEXT = [
+      "FQPS01 NFFN 271800",
+      "ZCZC GA14",
+      "NAVAREA XIV 114/26",
+      "IN THE AREA SOUTH OF 10S AND WEST OF 165W, EXPECT SOUTHEAST WINDS 20",
+      "TO 30 KNOTS. ROUGH TO VERY ROUGH SEAS.",
+      "NNNN",
+    ].join("\n");
+
+    const written = {};
+    const app = createMockApp();
+    app.getSelfPath = (path) =>
+      path === "navigation.position"
+        ? { latitude: -18.658, longitude: -173.982 }
+        : null;
+    app.resourcesApi = {
+      async setResource(type, id, value) {
+        written[id] = value;
+      },
+      async deleteResource(type, id) {
+        delete written[id];
+      },
+      async listResources() {
+        return { ...written };
+      },
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const call = async (path) => {
+      const r = app.getRoutes().find((x) => x.path === path);
+      const res = {
+        code: null,
+        payload: null,
+        status(c) {
+          this.code = c;
+          return this;
+        },
+        json(p) {
+          this.payload = p;
+        },
+      };
+      await r.handler({ query: {} }, res);
+      return res;
+    };
+
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "online" }] },
+      ],
+    });
+    const openMeteoFetch = mockOpenMeteo();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      if (String(url).includes("tgftp.nws.noaa.gov")) {
+        return { ok: true, text: async () => TGFTP_TEXT };
+      }
+      return openMeteoFetch(url);
+    };
+    try {
+      const res = await call("/api/briefing/refresh");
+      assert.equal(res.code, null);
+
+      const metareaIds = Object.keys(written).filter((id) =>
+        id.startsWith("metarea-"),
+      );
+      assert.equal(metareaIds.length, 1, "one metarea note written");
+      const note = written[metareaIds[0]];
+      assert.match(note.description, /SOUTHEAST WINDS/);
+      // Position clamps to the vessel inside the warning area
+      assert.equal(note.position.latitude, -18.658);
+      assert.equal(note.position.longitude, -173.982);
+      assert.equal(note.properties.zone, 14);
+      assert.equal(note.properties.sourcePlugin, "signalk-passage-briefing");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    plugin.stop();
+  });
+
   test("space events: attached to here briefings, degraded when endpoints fail", async () => {
     const { mockOpenMeteo } = require("./openmeteo-mock.js");
     // Forecast rows inside the 24h forward window relative to now
