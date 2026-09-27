@@ -963,6 +963,12 @@ describe("plugin", () => {
       assert.equal(res.body[0], 0x89);
       assert.ok(res.body.length > 8);
 
+      // Brief meta serves the same view the tile publishes
+      const meta = await call("/api/brief-meta");
+      assert.equal(meta.payload.comfort, "coffee");
+      assert.equal(meta.payload.stale, false);
+      assert.equal(meta.payload.ageHours, 0);
+
       // Explicit zone override and the no-chart case
       const z1 = await call("/api/synoptic?zone=1");
       assert.equal(z1.body[0], 0x89);

@@ -143,7 +143,11 @@ describe("fetchWeatherAlongTrack", () => {
     ]);
     assert.equal(payload.waypoints.length, 5);
     const [step] = payload.waypoints[0].forecasts;
-    assert.equal(step.timestamp, "2026-09-27T00:00:00.000Z");
+    // First step is the current hour (fixture times are relative)
+    const firstTimestamp = new Date(
+      Date.now() - (Date.now() % 3600000),
+    ).toISOString();
+    assert.equal(step.timestamp, firstTimestamp);
     assert.deepEqual(step.surface, {
       tws: 12,
       twd: 45,

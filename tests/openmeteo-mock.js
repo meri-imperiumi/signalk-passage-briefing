@@ -2,7 +2,13 @@
  * Shared Open-Meteo fixtures and mock fetch for tests.
  */
 
-const TIMES = ["2026-09-27T00:00", "2026-09-27T01:00"];
+// Hours relative to now, aligned to the hour like the real API: the
+// here/briefing window filters rows to [fetchedAt, +24h), so fixed
+// past timestamps would drop every row
+const HOUR = Date.now() - (Date.now() % 3600000);
+const TIMES = [0, 1].map((hours) =>
+  new Date(HOUR + hours * 3600000).toISOString().slice(0, 16),
+);
 
 /**
  * @returns {object} Forecast API fixture (single location)

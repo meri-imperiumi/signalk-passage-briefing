@@ -80,6 +80,11 @@
 
 ### Added
 
+- `GET /api/brief-meta` serves the current tile view (comfort tier,
+  route, generatedAt, staleness, age hours, hasNew) — the plotter
+  widget pulls it on connect so the mini summary is populated right
+  away instead of waiting for the next delta emission.
+
 - METAREA warnings as Signal K Notes (work doc #12): after each
   bulletin filter pass the placeable blocks are published as
   georeferenced `resources/notes` — title from the first sentence,

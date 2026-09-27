@@ -218,6 +218,25 @@ class BriefExtWidget extends HTMLElement {
     this.connected = true;
     this.client = client;
 
+    // Current values right away: deltas only travel on change, so
+    // without this the tile would wait for the next ticker emission
+    try {
+      const meta = await fetch(`${BRIEF_URLS[0]}api/brief-meta`).then((r) =>
+        r.json(),
+      );
+      Object.assign(this.values, {
+        "navigation.briefing.generatedAt": meta.generatedAt,
+        "navigation.briefing.route": meta.route,
+        "navigation.briefing.hasNew": meta.hasNew,
+        "navigation.briefing.comfort": meta.comfort,
+        "navigation.briefing.stale": meta.stale,
+        "navigation.briefing.ageHours": meta.ageHours,
+      });
+      this.render();
+    } catch (_error) {
+      // Meta unavailable: the subscription still fills values in
+    }
+
     try {
       await client.signalk.subscribe(STREAM_PATHS, (ev) => {
         // Event name is `sk.<path>`; the path is the dict key.

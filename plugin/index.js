@@ -745,28 +745,21 @@ module.exports = (app) => {
     const hasNew =
       briefMeta.generatedAt != null &&
       (lastAckAt == null || briefMeta.generatedAt > lastAckAt);
-    // The freshness verdict is recomputed on every emission: delta
-    // values only travel on change, and status-tiles reads staleness
-    // from how long ago a path last emitted — so the ticker re-emits.
-    const ageMs =
-      briefMeta.generatedAt != null
-        ? Date.now() - new Date(briefMeta.generatedAt).getTime()
-        : null;
-    const ttl = briefMeta.mode === "route" ? ROUTE_TTL_MS : HERE_TTL_MS;
-    const stale = ageMs != null && ageMs > ttl;
-    const ageHours =
-      ageMs != null ? Math.round((ageMs / 3600000) * 10) / 10 : null;
+    const view = briefMetaView();
     app.handleMessage(PLUGIN_ID, {
       context: "vessels.self",
       updates: [
         {
           timestamp: new Date().toISOString(),
           values: [
-            { path: BRIEF_GENERATED_AT_PATH, value: briefMeta.generatedAt },
-            { path: BRIEF_ROUTE_PATH, value: briefMeta.route },
-            { path: BRIEF_COMFORT_PATH, value: briefMeta.comfort },
-            { path: BRIEF_STALE_PATH, value: stale },
-            { path: BRIEF_AGE_HOURS_PATH, value: ageHours },
+            {
+              path: BRIEF_GENERATED_AT_PATH,
+              value: view.generatedAt,
+            },
+            { path: BRIEF_ROUTE_PATH, value: view.route },
+            { path: BRIEF_COMFORT_PATH, value: view.comfort },
+            { path: BRIEF_STALE_PATH, value: view.stale },
+            { path: BRIEF_AGE_HOURS_PATH, value: view.ageHours },
             { path: BRIEF_HAS_NEW_PATH, value: hasNew },
           ],
         },
@@ -781,6 +774,36 @@ module.exports = (app) => {
    * @param {string|null} generatedAt
    * @param {string|null} route - Route name; empty string in here mode
    */
+  /**
+   * The tile/meta view: current values plus the freshness verdict,
+   * shared by the bus publication and GET /api/brief-meta so every
+   * consumer sees the same numbers.
+   *
+   * @param {Date} [now]
+   * @returns {object} generatedAt/route/comfort/stale/ageHours/hasNew
+   */
+  function briefMetaView(now = new Date()) {
+    const ageMs =
+      briefMeta.generatedAt != null
+        ? now.getTime() - new Date(briefMeta.generatedAt).getTime()
+        : null;
+    const ttl = briefMeta.mode === "route" ? ROUTE_TTL_MS : HERE_TTL_MS;
+    const stale = ageMs != null && ageMs > ttl;
+    const ageHours =
+      ageMs != null ? Math.round((ageMs / 3600000) * 10) / 10 : null;
+    const hasNew =
+      briefMeta.generatedAt != null &&
+      (lastAckAt == null || briefMeta.generatedAt > lastAckAt);
+    return {
+      generatedAt: briefMeta.generatedAt,
+      route: briefMeta.route,
+      comfort: briefMeta.comfort,
+      stale,
+      ageHours,
+      hasNew,
+    };
+  }
+
   function recordBriefCompile(
     generatedAt,
     route,
@@ -1307,6 +1330,10 @@ module.exports = (app) => {
           urls: bulletinUrls,
         });
         res.json(result);
+      });
+
+      router.get("/api/brief-meta", (_req, res) => {
+        res.json(briefMetaView());
       });
 
       router.get("/api/synoptic", async (req, res) => {
