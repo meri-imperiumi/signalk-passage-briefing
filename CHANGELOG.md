@@ -99,6 +99,17 @@
   updates only, zero dependencies. Pure view models
   (`public/components/models.mjs`) are Node-tested; `GET /api/config`
   serves the simulation-relevant plugin settings to the worker.
+- Backtest & calibration CLI (`bin/backtest-cli.js` +
+  `plugin/backtest.js`, SPEC §7): replays the vessel's history
+  through the Sereno motion model — attitude component paths from
+  the History API (`/signalk/v2/api/history/values`, same contract
+  as the signalk-polar-tools replays) are reconstructed into
+  measured RMS vertical acceleration per 15-minute sliding window,
+  Nelder-Mead tunes (k_heel, k_pitch) on the MAE loss, and a 5×5
+  predicted-vs-measured comfort confusion matrix reports the fit.
+  Sea state falls back to a Pierson-Moskowitz wind-sea
+  approximation when no wave history is recorded; the report JSON
+  records resolution, sample and window counts.
 - README with credits; the `yaml` runtime dependency for reading the
   logbook store.
 - Smoketests for the physics, the logbook source, the backfill, the
