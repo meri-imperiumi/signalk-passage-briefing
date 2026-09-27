@@ -225,6 +225,7 @@ async function publishNotes({
   }
   const manifest = await loadManifest(dataDir);
   const published = [];
+  const failures = [];
   for (const block of bulletin.blocks ?? []) {
     const chart = zone != null ? synopticChartFor(zone) : null;
     const note = buildNote(block, {
@@ -239,8 +240,15 @@ async function publishNotes({
     const id = noteId(block.text, bulletin.issuedAt);
     try {
       await resources.setResource("notes", id, note);
-    } catch {
-      continue; // Server rejected the note: skip, never fail the refresh
+    } catch (error) {
+      // Ambiguous or missing notes provider: name the fallback
+      // provider explicitly before giving up on this note
+      try {
+        await resources.setResource("notes", id, note, "signalk-resources");
+      } catch (retryError) {
+        failures.push(`${id}: ${error.message} / ${retryError.message}`);
+        continue;
+      }
     }
     if (!manifest.owned.includes(id)) {
       manifest.owned.push(id);
@@ -263,7 +271,12 @@ async function publishNotes({
   }
   manifest.owned = manifest.owned.filter((id) => !deleted.includes(id));
   await saveManifest(dataDir, manifest);
-  return { published, deleted };
+  if (failures.length > 0) {
+    app.error?.(
+      `Notes publish failures (${failures.length}): ${failures.join("; ")}`,
+    );
+  }
+  return { published, deleted, failures };
 }
 
 /**
