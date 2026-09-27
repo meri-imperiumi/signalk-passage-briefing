@@ -868,6 +868,98 @@ describe("plugin", () => {
     plugin.stop();
   });
 
+  test("synoptic chart: fetched on the online gate, served for the position zone", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const UTIF = require("../public/vendor/utif/UTIF.js");
+    const rgba = new Uint8Array(8 * 4 * 4);
+    for (let i = 0; i < 8 * 4; i++) {
+      const v = i % 3 === 0 ? 0 : 255;
+      rgba[i * 4] = v;
+      rgba[i * 4 + 1] = v;
+      rgba[i * 4 + 2] = v;
+      rgba[i * 4 + 3] = 255;
+    }
+    const tif = Buffer.from(UTIF.encodeImage(rgba, 8, 4));
+
+    const app = createMockApp();
+    // Vessel at anchor in zone XIV (Tonga)
+    app.getSelfPath = (path) =>
+      path === "navigation.position"
+        ? { latitude: -18.658, longitude: -173.982 }
+        : null;
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const call = async (path) => {
+      const [base, qs] = path.split("?");
+      const r = app.getRoutes().find((x) => x.path === base);
+      const res = {
+        code: null,
+        payload: null,
+        body: null,
+        type: null,
+        status(c) {
+          this.code = c;
+          return this;
+        },
+        json(p) {
+          this.payload = p;
+        },
+        type(t) {
+          this.type = t;
+          return this;
+        },
+        send(b) {
+          this.body = b;
+          return this;
+        },
+      };
+      await r.handler(
+        { query: Object.fromEntries(new URLSearchParams(qs ?? "")) },
+        res,
+      );
+      return res;
+    };
+
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "online" }] },
+      ],
+    });
+    const openMeteoFetch = mockOpenMeteo();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      if (String(url).includes("ftp.bom.gov.au")) {
+        return {
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => tif,
+        };
+      }
+      return openMeteoFetch(url);
+    };
+    try {
+      // The online transition runs the here refresh, which pulls the
+      // zone XIV chart alongside the weather
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const res = await call("/api/synoptic");
+      assert.equal(res.type, "image/png");
+      assert.equal(res.body[0], 0x89);
+      assert.ok(res.body.length > 8);
+
+      // Explicit zone override and the no-chart case
+      const z14 = await call("/api/synoptic?zone=14");
+      assert.equal(z14.body[0], 0x89);
+      const missing = await call("/api/synoptic?zone=15");
+      assert.equal(missing.code, 404);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    plugin.stop();
+  });
+
   test("space events: attached to here briefings, degraded when endpoints fail", async () => {
     const { mockOpenMeteo } = require("./openmeteo-mock.js");
     // Forecast rows inside the 24h forward window relative to now

@@ -46,6 +46,22 @@
 
 ### Added
 
+- Synoptic surface-analysis chart in the strategic screen (work doc
+  #11): a bundled `synoptic-map.json` maps GMDSS zone integers to
+  per-agency chart URLs (NOAA TGFTP backbone, BoM radiofax for the
+  Tasman/South Pacific) with 00Z/12Z time-aware selection and static
+  entries; charts download on the same online-transition gate as the
+  weather, convert from TIFF to compact grayscale PNG via the
+  vendored pure-JS UTIF decoder plus a hand-rolled zlib PNG encoder
+  (no native image dependency), cache as `synoptic-<zone>.png` with
+  metadata, and skip re-downloads for the already-cached valid hour.
+  `GET /api/synoptic` serves the position-zone chart; the strategic
+  screen renders it in a figure that inverts for the night palette
+  and stays omitted when nothing is cached. Zones without a usable
+  chart (e.g. the unverified Chile source) are absent from the map
+  and a logged no-op. `biome.json` added to keep the vendored decoder
+  out of formatting.
+
 - An ℹ️ next to the comfort tier (tactical dashboard and
   conditions-here) expanding an explainer for the Sereno comfort
   scale — what each tier means and the apparent-wind / vertical-motion

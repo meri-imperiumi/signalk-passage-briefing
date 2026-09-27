@@ -33,6 +33,11 @@ class StrategicOutlook extends HTMLElement {
           color: var(--color-orange);
           text-transform: uppercase;
         }
+        figure { margin: 0; }
+        img { width: 100%; height: auto; display: block; }
+        :host([data-mode="night"]) img {
+          filter: invert(0.93) hue-rotate(180deg);
+        }
       </style>
       <section class="sk-card theme-teal">
         <h2>ETA &amp; Motor Plan</h2>
@@ -71,7 +76,24 @@ class StrategicOutlook extends HTMLElement {
         <h2>Warnings On Your Waters</h2>
         <div class="console" id="blocks"></div>
       </section>
+      <section class="sk-card" id="synoptic-card" hidden>
+        <h2>Surface Analysis</h2>
+        <figure id="synoptic-fig">
+          <img
+            id="synoptic-img"
+            alt="Synoptic surface analysis for the current zone"
+          >
+        </figure>
+      </section>
     `;
+    this._synopticCard = this.shadowRoot.getElementById("synoptic-card");
+    const img = this.shadowRoot.getElementById("synoptic-img");
+    img.addEventListener("load", () => {
+      this._synopticCard.hidden = false;
+    });
+    // No cached chart (or no zone): the figure stays omitted, like
+    // the bulletin console
+    img.src = "/plugins/signalk-passage-briefing/api/synoptic";
     this._etaBody = this.shadowRoot.getElementById("eta-body");
     this._motorEl = this.shadowRoot.getElementById("motor");
     this._fuelEl = this.shadowRoot.getElementById("fuel");

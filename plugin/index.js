@@ -35,6 +35,7 @@ const {
   ukhoBlocksFromWarnings,
 } = require("./bulletin-engine.js");
 const { loadBulletinCache, refreshBulletins } = require("./bulletin-source.js");
+const { loadSynoptic, refreshSynoptics } = require("./synoptic-source.js");
 const {
   fetchZoneBulletins,
   parseUkhoWarnings,
@@ -373,6 +374,35 @@ module.exports = (app) => {
   }
 
   /**
+   * Pulls the resolved zones' synoptic surface-analysis charts while
+   * online (work doc #11), sharing the online gate and the zone
+   * resolution with the bulletin pull.
+   *
+   * @param {"oneshot"|"cron"|"briefing"|"manual"|"here"} trigger
+   * @param {Array<{lat: number, lon: number}>} [waypoints]
+   */
+  async function refreshSynopticsOnline(trigger, waypoints = []) {
+    if (!isOnline()) {
+      return;
+    }
+    const zones = resolveZones(waypoints.map((w) => [w.lon, w.lat]));
+    if (zones.length === 0) {
+      return;
+    }
+    const result = await refreshSynoptics({
+      dataDir: app.getDataDirPath(),
+      zones,
+    });
+    if (result.fetched.length > 0) {
+      app.debug?.(
+        `Synoptic charts refreshed (${trigger}): zones ` +
+          `${result.fetched.join(",")}` +
+          (result.failed.length ? `, failed ${result.failed.join(",")}` : ""),
+      );
+    }
+  }
+
+  /**
    * Vessel position from the Signal K self path (work doc #7 here
    * mode). Both wrapped and plain value shapes are unwrapped.
    *
@@ -422,7 +452,7 @@ module.exports = (app) => {
    *
    * @returns {Promise<{cachedAt: string}>}
    */
-  async function refreshHere() {
+  async function refreshHereQueued() {
     const position = vesselPosition();
     if (!position) {
       throw new Error("No vessel position available");
@@ -432,6 +462,7 @@ module.exports = (app) => {
     ];
     // Bulletins ride the same online window, filtered to the position
     await refreshBulletinsOnline("here", waypoints);
+    await refreshSynopticsOnline("here", waypoints);
     // forecast_days=2: Open-Meteo's first day starts at 00Z, so two
     // days guarantee 24 forward hours from any fetch time
     const payload = await fetchWeatherAlongTrack({
@@ -457,6 +488,26 @@ module.exports = (app) => {
     return { cachedAt: payload.metadata.fetchedAt };
   }
 
+  /** Single-flight refresh chain: the online-transition refresh and
+   * a manual/API refresh can overlap (cron + crew button), and two
+   * concurrent payload writes race on the cache files. Queue instead —
+   * overlapping triggers run one after the other. */
+  let refreshChain = Promise.resolve();
+
+  function serializeRefresh(task) {
+    const run = refreshChain.then(task, task);
+    refreshChain = run.catch(() => {});
+    return run;
+  }
+
+  function refreshHere() {
+    return serializeRefresh(() => refreshHereQueued());
+  }
+
+  function refreshBriefing(routeId, forecastDays) {
+    return serializeRefresh(() => refreshBriefingQueued(routeId, forecastDays));
+  }
+
   /**
    * Fetches and caches the briefing payload for a route. Internet
    * weather is only fetched while the link is up; everything served
@@ -468,7 +519,7 @@ module.exports = (app) => {
    * @param {number} [forecastDays]
    * @returns {Promise<{routeId: string, cached: boolean, cachedAt: string|null, fetchedAt?: string}>}
    */
-  async function refreshBriefing(
+  async function refreshBriefingQueued(
     routeId,
     forecastDays = DEFAULT_FORECAST_DAYS,
   ) {
@@ -487,6 +538,7 @@ module.exports = (app) => {
     // Bulletins ride the same online window as the weather (SPEC §3.1
     // metareaBulletin): pulled first so this briefing carries them
     await refreshBulletinsOnline("briefing", waypoints);
+    await refreshSynopticsOnline("briefing", waypoints);
     const payload = await fetchWeatherAlongTrack({ waypoints, forecastDays });
     const bulletin = await bulletinForTrack(waypoints);
     if (bulletin) {
@@ -1073,6 +1125,29 @@ module.exports = (app) => {
           urls: bulletinUrls,
         });
         res.json(result);
+      });
+
+      router.get("/api/synoptic", async (req, res) => {
+        let zone =
+          typeof req.query.zone === "string" && /^\d+$/.test(req.query.zone)
+            ? Number(req.query.zone)
+            : null;
+        if (zone == null) {
+          const position = vesselPosition();
+          zone = position
+            ? (resolveZones([[position.lon, position.lat]])[0] ?? null)
+            : null;
+        }
+        if (zone == null) {
+          res.status(404).json({ error: "No zone to serve a chart for" });
+          return;
+        }
+        const chart = await loadSynoptic(app.getDataDirPath(), zone);
+        if (!chart) {
+          res.status(404).json({ error: "No cached chart for this zone" });
+          return;
+        }
+        res.type("image/png").send(chart.png);
       });
 
       router.get("/api/cached", async (_req, res) => {

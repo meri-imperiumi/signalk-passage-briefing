@@ -114,6 +114,9 @@ class PassageOutlook extends HTMLElement {
       onMode: (mode) => {
         document.documentElement.dataset.mode =
           mode === "day" ? "day" : "night";
+        this._view
+          ?.querySelector("strategic-outlook, tactical-dashboard")
+          ?.setAttribute("data-mode", mode);
       },
       onConnection: (connected) => {
         this._onlinePill.classList.toggle("online", connected);
@@ -285,6 +288,12 @@ class PassageOutlook extends HTMLElement {
     this._view.innerHTML = strategic
       ? "<strategic-outlook></strategic-outlook>"
       : "<tactical-dashboard></tactical-dashboard>";
+    this._view
+      .querySelector("strategic-outlook, tactical-dashboard")
+      ?.setAttribute(
+        "data-mode",
+        document.documentElement.dataset.mode ?? "night",
+      );
     if (this._exceptions) {
       this.renderData();
     }
