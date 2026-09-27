@@ -48,6 +48,7 @@ const {
 } = require("./zone-source.js");
 const { fetchSpaceEvents } = require("./celestial-source.js");
 const { registerPlotterExtension } = require("./brief-ext.js");
+const { registerStatusTileExamples } = require("./statustilesexamples.js");
 const {
   backfillSailEvents,
   createHistoryWindStats,
@@ -95,6 +96,11 @@ const BRIEF_ROUTE_PATH = "navigation.briefing.route";
 const BRIEF_HAS_NEW_PATH = "navigation.briefing.hasNew";
 const BRIEF_ACK_PATH = "navigation.briefing.acknowledgedAt";
 const BRIEF_COMFORT_PATH = "navigation.briefing.comfort";
+const BRIEF_STALE_PATH = "navigation.briefing.stale";
+const BRIEF_AGE_HOURS_PATH = "navigation.briefing.ageHours";
+/** A route briefing is overdue when the next daily edition misses
+ * this line (work doc #13); here mode keeps its 3h TTL. */
+const ROUTE_TTL_MS = 26 * 60 * 60 * 1000;
 
 /**
  * How often the cron ticker checks whether a publication window is due.
@@ -177,6 +183,7 @@ module.exports = (app) => {
   let lastAckAt = null;
   /** Plotter-extension provider teardown (registered at start). */
   let teardownPlotterExt = null;
+  let teardownStatusTiles = null;
 
   /**
    * Whether the internet link currently allows fetching.
@@ -499,7 +506,12 @@ module.exports = (app) => {
     await writeFile(join(dir, "here.json"), JSON.stringify(payload));
     // Tile freshness; the route field stays empty in here mode
     payload.comfortTier = await currentComfortTier(payload);
-    recordBriefCompile(payload.metadata.fetchedAt, "", payload.comfortTier);
+    recordBriefCompile(
+      payload.metadata.fetchedAt,
+      "",
+      payload.comfortTier,
+      "here",
+    );
     return { cachedAt: payload.metadata.fetchedAt };
   }
 
@@ -611,6 +623,7 @@ module.exports = (app) => {
       payload.metadata.fetchedAt,
       routeName,
       payload.comfortTier,
+      "route",
     );
     return {
       routeId,
@@ -683,6 +696,17 @@ module.exports = (app) => {
     const hasNew =
       briefMeta.generatedAt != null &&
       (lastAckAt == null || briefMeta.generatedAt > lastAckAt);
+    // The freshness verdict is recomputed on every emission: delta
+    // values only travel on change, and status-tiles reads staleness
+    // from how long ago a path last emitted — so the ticker re-emits.
+    const ageMs =
+      briefMeta.generatedAt != null
+        ? Date.now() - new Date(briefMeta.generatedAt).getTime()
+        : null;
+    const ttl = briefMeta.mode === "route" ? ROUTE_TTL_MS : HERE_TTL_MS;
+    const stale = ageMs != null && ageMs > ttl;
+    const ageHours =
+      ageMs != null ? Math.round((ageMs / 3600000) * 10) / 10 : null;
     app.handleMessage(PLUGIN_ID, {
       context: "vessels.self",
       updates: [
@@ -692,6 +716,8 @@ module.exports = (app) => {
             { path: BRIEF_GENERATED_AT_PATH, value: briefMeta.generatedAt },
             { path: BRIEF_ROUTE_PATH, value: briefMeta.route },
             { path: BRIEF_COMFORT_PATH, value: briefMeta.comfort },
+            { path: BRIEF_STALE_PATH, value: stale },
+            { path: BRIEF_AGE_HOURS_PATH, value: ageHours },
             { path: BRIEF_HAS_NEW_PATH, value: hasNew },
           ],
         },
@@ -706,10 +732,16 @@ module.exports = (app) => {
    * @param {string|null} generatedAt
    * @param {string|null} route - Route name; empty string in here mode
    */
-  function recordBriefCompile(generatedAt, route, comfort = null) {
+  function recordBriefCompile(
+    generatedAt,
+    route,
+    comfort = null,
+    mode = "here",
+  ) {
     briefMeta.generatedAt = generatedAt;
     briefMeta.route = route;
     briefMeta.comfort = comfort;
+    briefMeta.mode = mode;
     publishBriefMeta();
   }
 
@@ -752,6 +784,7 @@ module.exports = (app) => {
           cached.payload.metadata.fetchedAt,
           name,
           cached.payload.comfortTier ?? null,
+          "route",
         );
         return;
       }
@@ -765,6 +798,7 @@ module.exports = (app) => {
           here.payload.metadata.fetchedAt,
           "",
           here.payload.comfortTier ?? null,
+          "here",
         );
       }
     } catch (_error) {
@@ -942,10 +976,19 @@ module.exports = (app) => {
         (delta) => feedDelta(delta),
       );
 
+      let tickerCount = 0;
       cronTimer = setInterval(() => {
         const result = stateMachine.tick(new Date());
         if (result.fetch === "cron") {
           runFetch("cron");
+        }
+        // Re-emit the tile paths on every 5th tick (work doc #13):
+        // deltas only travel on change, and widgets that connect
+        // after the last compile would otherwise never see values;
+        // stale/ageHours also drift with the clock
+        tickerCount++;
+        if (tickerCount % 5 === 0 && briefMeta.generatedAt != null) {
+          publishBriefMeta();
         }
       }, CRON_TICK_INTERVAL_MS);
       cronTimer.unref?.();
@@ -955,6 +998,12 @@ module.exports = (app) => {
       if (typeof app.registerResourceProvider === "function") {
         teardownPlotterExt = registerPlotterExtension(app, { id: PLUGIN_ID });
       }
+
+      // Status Tiles example set (work doc #13): read-only provider
+      // so the comfort tile can be copied in the tiles screen
+      teardownStatusTiles = registerStatusTileExamples(app, {
+        id: PLUGIN_ID,
+      });
       // Acknowledge put clears the tile's NEW badge
       if (typeof app.registerPutHandler === "function") {
         app.registerPutHandler(
@@ -990,6 +1039,10 @@ module.exports = (app) => {
       if (cronTimer) {
         clearInterval(cronTimer);
         cronTimer = null;
+      }
+      if (teardownStatusTiles) {
+        teardownStatusTiles();
+        teardownStatusTiles = null;
       }
       if (teardownPlotterExt) {
         teardownPlotterExt();

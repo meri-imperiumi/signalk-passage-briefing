@@ -1,0 +1,55 @@
+{
+  "name": "Passage Briefing examples",
+  "description": "Example Status Tiles set for signalk-passage-briefing: the Sereno comfort tier for the hour in progress, with an amber flag when the briefing behind it is past its freshness window (3 h at anchor, 26 h on passage).",
+  "sets": [
+    {
+      "id": "passage-comfort",
+      "name": "Comfort",
+      "description": "Comfort now plus briefing trust: the tier colors green/amber/red, and the tile goes amber — not neutral — when the briefing is stale, so yesterday's forecast never sits silently green.",
+      "contexts": [],
+      "tiles": [
+        {
+          "id": "passageComfort",
+          "label": "Comfort",
+          "size": "1x1",
+          "checks": [
+            {
+              "type": "stateMatch",
+              "path": "navigation.briefing.comfort",
+              "map": [
+                { "value": "champagne", "state": "green" },
+                { "value": "easy", "state": "green" },
+                { "value": "coffee", "state": "amber" },
+                { "value": "rough", "state": "amber" },
+                { "value": "sick", "state": "red" }
+              ],
+              "default": "neutral",
+              "reason": "Comfort tier unknown",
+              "staleState": "neutral",
+              "staleMs": 330000
+            },
+            {
+              "type": "boolean",
+              "path": "navigation.briefing.stale",
+              "trueState": "amber",
+              "falseState": "green",
+              "reason": "Briefing past its freshness window — refresh",
+              "staleState": "neutral",
+              "staleMs": 330000
+            }
+          ],
+          "footer": [
+            {
+              "label": "Age",
+              "path": "navigation.briefing.ageHours"
+            },
+            {
+              "label": "Route",
+              "path": "navigation.briefing.route"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

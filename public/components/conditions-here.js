@@ -107,15 +107,15 @@ class ConditionsHere extends HTMLElement {
           <dt>Pressure</dt><dd id="pressure">—</dd>
         </dl>
         <horizon-sparkline id="spark"></horizon-sparkline>
-        <section class="sk-card theme-red" id="warnings-card" hidden>
-          <h3>Warnings for these waters</h3>
-          <div class="console" id="warnings"></div>
-        </section>
-        <synoptic-chart hidden></synoptic-chart>
-        <section class="sk-card" id="events-card" hidden>
-          <h3>Celestial &amp; space events</h3>
-          <div id="events"></div>
-        </section>
+      </section>
+      <section class="sk-card theme-red" id="warnings-card" hidden>
+        <h3>Warnings for these waters</h3>
+        <div class="console" id="warnings"></div>
+      </section>
+      <synoptic-chart hidden></synoptic-chart>
+      <section class="sk-card" id="events-card" hidden>
+        <h3>Celestial &amp; space events</h3>
+        <div id="events"></div>
       </section>
     `;
     this._posEl = this.shadowRoot.getElementById("pos");

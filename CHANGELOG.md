@@ -66,6 +66,21 @@
 
 ### Added
 
+- Status Tiles integration (work doc #13): the tile paths gain
+  `navigation.briefing.stale` (boolean freshness verdict — 3h here,
+  26h for route briefings — recomputed on every emission) and
+  `navigation.briefing.ageHours`; the ticker re-emits the tile paths
+  every 5th tick so widgets connecting after the last compile still
+  receive values. A read-only `statusTileExamples` resource provider
+  ships a copyable Comfort tile (tier colors, amber on stale,
+  Age/Route footer).
+- The conditions-here view renders warnings, the synoptic chart and
+  the celestial-events card as siblings instead of cards nested
+  inside the conditions card.
+- Plotter tile tap: pop-up first, then navigate the widget frame
+  itself — the host sandbox blocks pop-ups, and the probe-then-open
+  dance only added failure modes.
+
 - Zone 14 synoptic chart repointed to the BoM difacs web host
   (www.bom.gov.au/difacs/IDX0032/IDX0532.gif) after the anon FTP
   hosts proved unreachable from the boat; GIF charts are cached and
