@@ -62,6 +62,16 @@ describe("chart URL selection", () => {
     assert.equal(at.validHour, "12");
   });
 
+  test("zone 14 ladder: MetService first, NOAA then BoM fallbacks", () => {
+    const at = chartUrlForZone(map, 14, new Date("2026-09-27T12:00:00Z"));
+    assert.equal(at.validHour, "12");
+    assert.deepEqual(
+      at.urls.map((u) => new URL(u).host),
+      ["alerts.metservice.com", "tgftp.nws.noaa.gov", "tgftp.nws.noaa.gov"],
+    );
+    assert.match(at.urls[1], /PPBA89\.TIF$/);
+  });
+
   test("static filenames skip the hour logic", () => {
     const pick = chartUrlForZone(map, 11, new Date("2026-09-27T18:00:00Z"));
     assert.match(pick.urls[0], /PJAA99\.TIF$/);

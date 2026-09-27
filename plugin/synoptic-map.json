@@ -28,10 +28,18 @@
   },
   "14": {
     "name": "South Pacific / New Zealand",
-    "source": "BoM difacs (Fiji Met broadcast)",
+    "authority": "MetService NZ / NOAA / BoM",
     "hours": {
-      "00": ["http://www.bom.gov.au/difacs/IDX0032.gif"],
-      "12": ["http://www.bom.gov.au/difacs/IDX0532.gif"]
+      "00": [
+        "https://alerts.metservice.com/mobile/swPacificCharts/analysis/latest",
+        "https://tgftp.nws.noaa.gov/fax/PPBA88.TIF",
+        "http://www.bom.gov.au/difacs/IDX0032.gif"
+      ],
+      "12": [
+        "https://alerts.metservice.com/mobile/swPacificCharts/analysis/latest",
+        "https://tgftp.nws.noaa.gov/fax/PPBA89.TIF",
+        "https://tgftp.nws.noaa.gov/fax/PPBA88.TIF"
+      ]
     }
   }
 }
