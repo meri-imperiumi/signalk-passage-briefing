@@ -51,23 +51,71 @@ function noteTitle(text) {
  * @param {object} geometry - block geometry (bbox or polygon/line)
  * @returns {{latitude: number, longitude: number}|null}
  */
-function geometryPosition(geometry) {
+function geometryPosition(geometry, ref) {
   if (!geometry) {
     return null;
   }
+  /** Normalizes a longitude to (-180, 180]. */
+  const normalizeLon = (lon) => ((((lon + 180) % 360) + 360) % 360) - 180;
+
   if (geometry.type === "bbox") {
     const [minLon, minLat, maxLon, maxLat] = geometry.coordinates;
     let lon = minLon + (maxLon - minLon) / 2;
-    lon = ((((lon + 180) % 360) + 360) % 360) - 180;
+    let lat = (minLat + maxLat) / 2;
+    if (ref && Number.isFinite(ref[0]) && Number.isFinite(ref[1])) {
+      // Clamp the vessel position into the box: inside the area the
+      // note lands on the crew, outside it lands at the nearest edge
+      let clamped = null;
+      for (const shift of [0, 360, -360]) {
+        const candidate = ref[0] + shift;
+        if (candidate >= minLon && candidate <= maxLon) {
+          clamped = candidate;
+          break;
+        }
+      }
+      if (clamped == null) {
+        // Vessel outside the box entirely: nearest representation,
+        // clamped to the nearest edge
+        const mid = (minLon + maxLon) / 2;
+        const nearest = [ref[0], ref[0] + 360, ref[0] - 360].sort(
+          (a, b) => Math.abs(a - mid) - Math.abs(b - mid),
+        )[0];
+        clamped = Math.min(Math.max(nearest, minLon), maxLon);
+      }
+      lon = clamped;
+      lat = Math.min(Math.max(ref[1], minLat), maxLat);
+    }
     return {
-      latitude: (minLat + maxLat) / 2,
-      longitude: Math.round(lon * 1e4) / 1e4,
+      latitude: Math.round(lat * 1e4) / 1e4,
+      longitude: Math.round(normalizeLon(lon) * 1e4) / 1e4,
     };
   }
+
   const points = geometry.coordinates ?? [];
   if (points.length === 0) {
     return null;
   }
+  if (ref && Number.isFinite(ref[0])) {
+    // Nearest vertex to the vessel, comparing across the seam
+    let best = null;
+    let bestDistance = Infinity;
+    for (const [lon, lat] of points) {
+      for (const shift of [0, 360, -360]) {
+        const d = (lon + shift - ref[0]) ** 2 + (lat - ref[1]) ** 2;
+        if (d < bestDistance) {
+          bestDistance = d;
+          best = { longitude: normalizeLon(lon + shift), latitude: lat };
+        }
+      }
+    }
+    if (best) {
+      return {
+        latitude: Math.round(best.latitude * 1e4) / 1e4,
+        longitude: Math.round(best.longitude * 1e4) / 1e4,
+      };
+    }
+  }
+
   let prev = null;
   let lonSum = 0;
   let latSum = 0;
@@ -87,18 +135,12 @@ function geometryPosition(geometry) {
     count++;
     prev = value;
   }
-  let lon = lonSum / count;
-  lon = ((((lon + 180) % 360) + 360) % 360) - 180;
   return {
     latitude: Math.round((latSum / count) * 1e4) / 1e4,
-    longitude: Math.round(lon * 1e4) / 1e4,
+    longitude: Math.round(normalizeLon(lonSum / count) * 1e4) / 1e4,
   };
 }
 
-/**
- * Builds the note id: content-addressed so re-publishing the same
- * block updates in place.
- */
 function noteId(text, issuedAt) {
   const hash = createHash("sha1").update(`${text}|${issuedAt}`).digest("hex");
   return `metarea-${hash.slice(0, 12)}`;
@@ -189,12 +231,17 @@ async function publishNotes({
       issuedAt: bulletin.issuedAt,
       zone,
       chart,
+      ref: bulletin.ref ?? null,
     });
     if (!note) {
       continue;
     }
     const id = noteId(block.text, bulletin.issuedAt);
-    await resources.setResource("notes", id, note);
+    try {
+      await resources.setResource("notes", id, note);
+    } catch {
+      continue; // Server rejected the note: skip, never fail the refresh
+    }
     if (!manifest.owned.includes(id)) {
       manifest.owned.push(id);
     }

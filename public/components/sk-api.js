@@ -118,7 +118,22 @@ export function createStream({ onMode, onConnection }) {
  */
 export async function fetchNotes() {
   try {
-    const notes = await fetchJson(`${BASE}/api/resources/notes`);
+    // SK v2 servers serve resources under /signalk/v2, older ones
+    // under /signalk/v1 — probe in that order, both best-effort
+    for (const version of ["v2", "v1"]) {
+      try {
+        const notes = await fetchJson(
+          `${BASE.replace("/v1", `/${version}`)}/api/resources/notes`,
+          8000,
+        );
+        if (notes && Object.keys(notes).length > 0) {
+          return notes;
+        }
+      } catch {
+        // Missing resource type or old server: try the next version
+      }
+    }
+    return {};
     return Object.entries(notes ?? {}).map(([id, note]) => ({
       id,
       description: note?.description ?? note?.name ?? null,
