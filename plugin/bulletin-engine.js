@@ -184,13 +184,17 @@ function parseCoordinateChain(text) {
       ring.push([lon, lat]);
     }
   }
-  if (ring.length < 3) {
+  if (ring.length < 2) {
     return null;
   }
-  const first = ring[0];
-  const last = ring[ring.length - 1];
-  if (first[0] !== last[0] || first[1] !== last[1]) {
-    ring.push([...first]);
+  // Two pairs form an open trough/front axis line; three or more
+  // close into a polygon ring
+  if (ring.length >= 3) {
+    const first = ring[0];
+    const last = ring[ring.length - 1];
+    if (first[0] !== last[0] || first[1] !== last[1]) {
+      ring.push([...first]);
+    }
   }
   return ring;
 }
@@ -215,14 +219,17 @@ function parseCardinalBounds(text) {
   let maxLat = 90;
   let found = false;
 
+  // SOUTH OF x means lat ≤ x (x becomes the box's max), NORTH OF x
+  // means lat ≥ x (the box's min). The bound's own hemisphere only
+  // sets its sign.
   const southOf = text.match(/SOUTH OF\s+(\d+(?:\.\d+)?)\s*([NS])/i);
   if (southOf) {
-    minLat = hemisphereDegrees(southOf[1], southOf[2].toUpperCase());
+    maxLat = hemisphereDegrees(southOf[1], southOf[2].toUpperCase());
     found = true;
   }
   const northOf = text.match(/NORTH OF\s+(\d+(?:\.\d+)?)\s*([NS])/i);
   if (northOf) {
-    maxLat = hemisphereDegrees(northOf[1], northOf[2].toUpperCase());
+    minLat = hemisphereDegrees(northOf[1], northOf[2].toUpperCase());
     found = true;
   }
 
@@ -275,12 +282,16 @@ function parseCardinalBounds(text) {
  *   {type: "bbox", coordinates: number[]}|null}
  */
 function extractGeometry(blockText) {
-  const bandMatch = blockText.match(/WITHIN\s+(\d+(?:\.\d+)?)\s*NM/i);
+  const bandMatch = blockText.match(
+    /WITHIN\s+(\d+(?:\.\d+)?)\s*(?:NM|NAUTICAL\s+MILES?)\b/i,
+  );
   const bufferNm = bandMatch ? Number.parseFloat(bandMatch[1]) : null;
   const polygon = parseCoordinateChain(blockText);
   if (polygon) {
     return {
-      type: "polygon",
+      // Two coordinate pairs are a trough/front axis line, three or
+      // more close into an area polygon
+      type: polygon.length === 2 ? "line" : "polygon",
       coordinates: polygon,
       ...(bufferNm != null ? { bufferNm } : {}),
     };
@@ -425,25 +436,48 @@ function intersectsTrack(geometry, track) {
   if (track.length === 0) {
     return true;
   }
-  if (geometry.type === "polygon") {
+  if (geometry.type === "polygon" || geometry.type === "line") {
     if (polygonIntersectsTrack(geometry.coordinates, track)) {
       return true;
     }
-    // Band expansion for axis lines
+    // Band expansion for axis lines and WITHIN-nm areas. Chains that
+    // cross the antimeridian are unfolded into a continuous frame and
+    // track longitudes are tested in all three representations.
     if (geometry.bufferNm > 0) {
       const lats = geometry.coordinates.map(([, lat]) => lat);
       const meanLat =
         ((Math.min(...lats) + Math.max(...lats)) / 2) * (Math.PI / 180);
       const latPad = geometry.bufferNm / 60;
       const lonPad = latPad / Math.max(0.2, Math.cos(meanLat));
-      const lons = geometry.coordinates.map(([lon]) => lon);
-      const minLon = Math.min(...lons) - lonPad;
-      const maxLon = Math.max(...lons) + lonPad;
+      const unfolded = [];
+      let prev = null;
+      for (const [lon] of geometry.coordinates) {
+        let value = prev == null ? lon : lon;
+        if (prev != null) {
+          while (value - prev > 180) {
+            value -= 360;
+          }
+          while (value - prev < -180) {
+            value += 360;
+          }
+        }
+        unfolded.push(value);
+        prev = value;
+      }
+      const minLon = Math.min(...unfolded) - lonPad;
+      const maxLon = Math.max(...unfolded) + lonPad;
       const minLat = Math.min(...lats) - latPad;
       const maxLat = Math.max(...lats) + latPad;
-      return track.some(
-        ([lon, lat]) =>
-          lon >= minLon && lon <= maxLon && lat >= minLat && lat <= maxLat,
+      return track.some(([lon, lat]) =>
+        [0, 360, -360].some((shift) => {
+          const shifted = lon + shift;
+          return (
+            shifted >= minLon &&
+            shifted <= maxLon &&
+            lat >= minLat &&
+            lat <= maxLat
+          );
+        }),
       );
     }
     return false;

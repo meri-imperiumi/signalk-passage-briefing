@@ -115,18 +115,69 @@ test("coordinate chains parse with hemisphere letters and closing", () => {
   approx(ring[3][0], 170); // Ring closed back to start
 });
 
+test("two coordinate pairs form an open axis line", () => {
+  // NFFN trough style: lat-first pairs, no TO separators
+  const line = parseCoordinateChain("TROUGH T1 10S 160E 12S 166E SLOW MOVING");
+  assert.equal(line.length, 2);
+  approx(line[0][0], 160);
+  approx(line[0][1], -10);
+  approx(line[1][0], 166);
+  approx(line[1][1], -12);
+  assert.equal(parseCoordinateChain("10S 160E"), null); // single pair
+});
+
 test("cardinal bounds translate to a bbox", () => {
-  // West-of only: half a world against the fixed bound
+  // SOUTH OF x means lat ≤ x: the box extends to the south pole
   assert.deepEqual(
     parseCardinalBounds("SOUTH OF 12S AND WEST OF 173W"),
-    [-180, -12, -173, 90],
+    [-180, -90, -173, -12],
   );
-  // East-of only
+  // NORTH OF x means lat ≥ x: the box extends to the north pole
   assert.deepEqual(
     parseCardinalBounds("NORTH OF 25S AND EAST OF 179E"),
-    [179, -90, 180, -25],
+    [179, -25, 180, 90],
   );
   assert.equal(parseCardinalBounds("no geography here"), null);
+});
+
+test("live NFFN bulletin: axis lines band-filtered, cardinal areas kept", () => {
+  // Real FQPS01 NFFN text as received on board 2026-09-27, vessel at
+  // anchor 18.7S 174W: T1/T2 axis bands lie well north (dropped), the
+  // "south of 10S and west of 169W" area contains the vessel (kept)
+  const text = [
+    "FQPS01 NFFN 270700",
+    "MARINE WEATHER BULLETIN FOR ISLANDS AREA",
+    "EQUATOR TO 25S BETWEEN 160E AND 120W.",
+    "ISSUED BY FIJI METEOROLOGICAL SERVICE SEP 270800 UTC.",
+    "",
+    "PART 1 : WARNINGNIL.",
+    "",
+    "PARTS 2 AND 3 : SYNOPSIS AND FORECAST VALID UNTIL SEP 280600 UTC.",
+    "",
+    " TROUGH T1 10S 160E 12S 166E SLOW MOVING. POOR VISIBILITY IN",
+    "OCCASIONAL SHOWERS AND FEW THUNDERSTORMS WITHIN 100 NAUTICAL MILES OF",
+    "T1.",
+    "",
+    "TROUGH T2 08S 172E 11S 179W 13S 173W SLOW MOVING. POOR VISIBILITY IN",
+    "OCCASIONAL SHOWERS AND FEW THUNDERSTORMS WITHIN 120 NAUTICAL MILES OF",
+    "T2.",
+    "",
+    "IN THE AREA SOUTH OF 10S AND WEST OF 169W, EXPECT SOUTHEAST WINDS 25",
+    "TO 30 KNOTS. ROUGH TO VERY ROUGH SEAS. MODERATE TO HEAVY SOUTH TO",
+    "SOUTHEAST SWELLS. ",
+  ].join("\n");
+  const bulletin = filterBulletin({
+    rawText: text,
+    source: "api",
+    track: [[-173.982, -18.658]],
+  });
+  const texts = bulletin.blocks.map((b) => b.text);
+  assert.ok(
+    texts.some((t) => t.includes("SOUTHEAST WINDS 25")),
+    "area containing the vessel kept",
+  );
+  assert.ok(!texts.some((t) => t.includes("TROUGH T1")), "T1 band dropped");
+  assert.ok(!texts.some((t) => t.includes("TROUGH T2")), "T2 band dropped");
 });
 
 // --- Antimeridian -------------------------------------------------------------

@@ -4,6 +4,21 @@
 
 ### Fixed
 
+- Bulletin geography parsing, corrected against a live NFFN
+  bulletin: two-coordinate trough axes now parse as open lines (the
+  NFFN style omits `TO` separators, so `10S 160E 12S 166E` produced
+  no geometry at all and the discard rule passed the block
+  unfiltered); `WITHIN 100 NAUTICAL MILES` now matches the band
+  regex (only `NM` did); `SOUTH OF 10S` built its box on the wrong
+  side (lat −10..90 instead of −90..−10), dropping the area block
+  that contained the vessel while keeping far-away bands. Wrapped
+  chains unfold before band expansion. Regression test uses the live
+  bulletin text.
+- The SBDB comet query negotiates its field list against the live
+  endpoint (the documented `r` field is rejected for `sb-kind=c`);
+  when current distances are unavailable the parse falls back to a
+  perihelion-brightness estimate, labelled as such in Sky Notes.
+
 - The forecast request listed `precipitable_water`, which Open-Meteo
   rejects (`400 Cannot initialize ... Variable`) — every forecast
   fetch failed with it, so nothing ever cached on board. Removed;

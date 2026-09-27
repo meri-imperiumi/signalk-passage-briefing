@@ -151,28 +151,67 @@ function parseComets(json, { maxMagnitude = NAKED_EYE_MAGNITUDE } = {}) {
   const iK1 = index("k1");
   const iR = index("r");
   const iDelta = index("dist");
-  if (iName < 0 || iM1 < 0 || iK1 < 0 || iR < 0 || iDelta < 0) {
+  const iQ = index("q");
+  const iTpCal = index("tp_cal");
+  if (iName < 0 || iM1 < 0 || iK1 < 0) {
     return [];
   }
   const comets = [];
   for (const row of rows) {
     const M1 = Number(row[iM1]);
     const K1 = Number(row[iK1]);
-    const r = Number(row[iR]);
-    const delta = Number(row[iDelta]);
-    const magnitude = cometApparentMagnitude({ M1, K1, r, delta });
     const name = row[iName];
-    if (magnitude == null || typeof name !== "string") {
+    if (
+      ![M1, K1].every((v) => Number.isFinite(v)) ||
+      typeof name !== "string"
+    ) {
+      continue;
+    }
+    if (iR >= 0 && iDelta >= 0) {
+      // Current distances available: apparent magnitude now
+      const r = Number(row[iR]);
+      const delta = Number(row[iDelta]);
+      const magnitude = cometApparentMagnitude({ M1, K1, r, delta });
+      if (magnitude == null) {
+        continue;
+      }
+      if (magnitude <= maxMagnitude) {
+        comets.push({
+          name: name.trim(),
+          magnitude: Math.round(magnitude * 10) / 10,
+          estimate: "now",
+          M1,
+          K1,
+          r,
+          delta,
+        });
+      }
+      continue;
+    }
+    // No current distances from this endpoint: screen on the
+    // perihelion brightness instead (r = delta = q is the comet at
+    // its brightest). The result is a peak-brightness estimate, not
+    // a now-cast — flagged so the display can say so.
+    if (iQ < 0) {
+      continue;
+    }
+    const q = Number(row[iQ]);
+    if (!Number.isFinite(q) || q <= 0) {
+      continue;
+    }
+    const magnitude = cometApparentMagnitude({ M1, K1, r: q, delta: q });
+    if (magnitude == null) {
       continue;
     }
     if (magnitude <= maxMagnitude) {
       comets.push({
         name: name.trim(),
         magnitude: Math.round(magnitude * 10) / 10,
+        estimate: "perihelion",
+        perihelion: iTpCal >= 0 ? row[iTpCal] : null,
         M1,
         K1,
-        r,
-        delta,
+        q,
       });
     }
   }
@@ -181,8 +220,18 @@ function parseComets(json, { maxMagnitude = NAKED_EYE_MAGNITUDE } = {}) {
 
 const SWPC_KP_URL =
   "https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json";
-const SBDB_COMETS_URL =
-  "https://ssd-api.jpl.nasa.gov/sbdb_query.api?fields=full_name,M1,K1,r,dist&sb-kind=c";
+
+/** Field list the SBDB comet query is attempted with. The API rejects
+ * unknown/unsupported fields one at a time (400 "invalid field
+ * specified: 'x'"), so fetchComets negotiates the list down to what
+ * the live endpoint accepts. `r`/`dist` (current heliocentric and
+ * geocentric distance) are not documented query fields for comets —
+ * `q` (perihelion distance) is, and powers the fallback estimate. */
+const SBDB_COMET_FIELDS = ["full_name", "M1", "K1", "r", "dist", "q", "tp_cal"];
+
+function sbdbCometsUrl(fields) {
+  return `https://ssd-api.jpl.nasa.gov/sbdb_query.api?fields=${fields.join(",")}&sb-kind=c`;
+}
 
 /**
  * Builds the space-event list from parsed inputs (all gating that
@@ -240,7 +289,10 @@ async function buildSpaceEvents({
       tactical: false,
       name: comet.name,
       magnitude: comet.magnitude,
-      description: `Naked-eye comet ${comet.name} (mag ${comet.magnitude.toFixed(1)}) in range`,
+      description:
+        comet.estimate === "perihelion"
+          ? `Comet ${comet.name} peaks near mag ${comet.magnitude.toFixed(1)} at perihelion${comet.perihelion ? ` (${comet.perihelion})` : ""} — ephemeris check advised`
+          : `Naked-eye comet ${comet.name} (mag ${comet.magnitude.toFixed(1)}) in range`,
     });
   }
   return events;
@@ -260,6 +312,49 @@ async function buildSpaceEvents({
  *   Night test override (tests)
  * @returns {Promise<Array<object>>} Space events (possibly empty)
  */
+/**
+ * Fetches the SBDB comet query, negotiating the field list against
+ * the live endpoint: each 400 names one invalid field, which is
+ * dropped and the query retried until it answers or the fields run
+ * out.
+ *
+ * @param {object} params
+ * @param {typeof fetch} params.fetchImpl
+ * @param {number} params.timeoutMs
+ * @returns {Promise<object|null>} Parsed `{fields, rows}` response,
+ *   null when every attempt failed
+ */
+async function fetchComets({ fetchImpl, timeoutMs }) {
+  let fields = [...SBDB_COMET_FIELDS];
+  while (fields.length >= 2) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let response;
+    try {
+      response = await fetchImpl(sbdbCometsUrl(fields), {
+        signal: controller.signal,
+      });
+    } catch (_error) {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      const invalid = detail.match(/invalid field specified: '(\w+)'/);
+      if (response.status === 400 && invalid) {
+        fields = fields.filter(
+          (field) => field.toLowerCase() !== invalid[1].toLowerCase(),
+        );
+        continue;
+      }
+      return null;
+    }
+    return await response.json();
+  }
+  return null;
+}
+
 async function fetchSpaceEvents({
   lat,
   lon,
@@ -286,7 +381,7 @@ async function fetchSpaceEvents({
 
   const [kpJson, cometJson] = await Promise.all([
     grab(SWPC_KP_URL),
-    grab(SBDB_COMETS_URL),
+    fetchComets({ fetchImpl, timeoutMs }),
   ]);
   const kpEntries = kpJson ? parseKpForecast(kpJson, { from: now }) : [];
   const comets = cometJson ? parseComets(cometJson) : [];
@@ -315,6 +410,8 @@ module.exports = {
   parseKpForecast,
   cometApparentMagnitude,
   parseComets,
+  fetchComets,
+  sbdbCometsUrl,
   buildSpaceEvents,
   fetchSpaceEvents,
 };

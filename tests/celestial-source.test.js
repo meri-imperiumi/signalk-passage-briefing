@@ -33,6 +33,70 @@ function sbdbFixture() {
   };
 }
 
+test("parseComets falls back to perihelion estimate without r/dist", () => {
+  // The live SBDB endpoint rejects r/dist for sb-kind=c: with q only,
+  // the parse screens on perihelion brightness and flags the estimate
+  const comets = cs.parseComets({
+    fields: ["full_name", "M1", "K1", "q", "tp_cal"],
+    rows: [
+      // mPeri = 4.0 + 15·log10(0.9) ≈ 3.31 → naked eye at perihelion
+      ["C/2026 D1 (Peri)", 4.0, 10, 0.9, "2026-Nov-03.1"],
+      // mPeri = 9 + 15·log10(3) ≈ 16.2 → never naked eye
+      ["C/2020 E4 (Faint)", 9.0, 10, 3.0, "2020-Aug-01.5"],
+    ],
+  });
+  assert.equal(comets.length, 1);
+  assert.equal(comets[0].name, "C/2026 D1 (Peri)");
+  assert.equal(comets[0].estimate, "perihelion");
+  assert.equal(comets[0].perihelion, "2026-Nov-03.1");
+});
+
+test("fetchComets negotiates invalid fields away and retries", async () => {
+  const attempted = [];
+  const responses = [
+    // 1st: full list rejected on r
+    {
+      ok: false,
+      status: 400,
+      text: async () =>
+        JSON.stringify({ message: "invalid field specified: 'r'" }),
+    },
+    // 2nd: dist rejected too
+    {
+      ok: false,
+      status: 400,
+      text: async () =>
+        JSON.stringify({ message: "invalid field specified: 'dist'" }),
+    },
+    // 3rd: accepted
+    {
+      ok: true,
+      status: 200,
+      json: async () => ({ fields: ["ok"], rows: [] }),
+    },
+  ];
+  const comets = await cs.fetchComets({
+    fetchImpl: async (url) => {
+      attempted.push(String(url));
+      return responses[attempted.length - 1];
+    },
+    timeoutMs: 500,
+  });
+  assert.deepEqual(comets, { fields: ["ok"], rows: [] });
+  assert.equal(attempted.length, 3);
+  assert.match(attempted[0], /fields=full_name,M1,K1,r,dist,q,tp_cal/);
+  assert.match(attempted[1], /fields=full_name,M1,K1,dist,q,tp_cal/);
+  assert.match(attempted[2], /fields=full_name,M1,K1,q,tp_cal/);
+});
+
+test("fetchComets returns null when the endpoint never answers", async () => {
+  const comets = await cs.fetchComets({
+    fetchImpl: async () => ({ ok: false, status: 503, text: async () => "" }),
+    timeoutMs: 500,
+  });
+  assert.equal(comets, null);
+});
+
 const NIGHT = (_date, _lat, _lon) => true;
 const DAY = (_date, _lat, _lon) => false;
 
