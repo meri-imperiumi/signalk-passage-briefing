@@ -18,8 +18,20 @@
 /** @typedef {import("@signalk/server-api").ServerAPI} ServerAPI */
 /** @typedef {import("@signalk/server-api").Plugin} Plugin */
 
+const { join } = require("node:path");
+
 const { PassageStateMachine } = require("./state-machine.js");
 const { PassageDatabase } = require("./sqlite-db.js");
+const {
+  readLogbookEntries,
+  readLogbookSailEvents,
+} = require("./logbook-source.js");
+const { readSailsConfiguration } = require("./sails-configuration.js");
+const {
+  backfillSailEvents,
+  createHistoryWindStats,
+  createLogbookWindStats,
+} = require("./history-backfill.js");
 
 /**
  * Plugin identifier (matches package name without the scope).
@@ -109,6 +121,36 @@ module.exports = (app) => {
     if (result.fetch === "oneshot") {
       runFetch("oneshot");
     }
+  }
+
+  /**
+   * Location of the signalk-logbook on-disk store. When the Signal K
+   * Resource API grows logbook support, this (and the logbook-source
+   * module behind it) is the swap point.
+   *
+   * @returns {string}
+   */
+  function logbookStoreDir() {
+    const configPath = app.config?.configPath ?? app.dataDir;
+    return join(configPath, "plugin-config-data", "signalk-logbook");
+  }
+
+  /**
+   * Sail inventory keys (from `@signalk/sailsconfiguration`) used to
+   * filter free-text noise out of manually edited log entries. Empty
+   * set when no inventory is configured: everything then parses.
+   *
+   * @returns {Promise<Set<string>>}
+   */
+  async function knownSailKeys() {
+    const configPath = app.config?.configPath ?? app.dataDir;
+    const sails = await readSailsConfiguration(
+      join(configPath, "plugin-config-data", "sailsconfiguration.json"),
+    );
+    // Empty inventory means no filter: every component parses
+    return sails.length > 0
+      ? new Set(sails.map((sail) => sail.nameKey))
+      : undefined;
   }
 
   const plugin = {
@@ -203,7 +245,18 @@ module.exports = (app) => {
     },
 
     /**
-     * Hook for the REST API routes (backtest, matrix, briefing payloads).
+     * REST API routes under `/plugins/<id>/`:
+     *
+     * - `GET /api/status` — state machine state and next cron window
+     * - `GET /api/matrix` — learned sail preference matrix (SPEC §3.2)
+     * - `GET /api/events` — recorded logbook sail events
+     * - `GET /api/logbook-events` — sail events extracted from the
+     *   logbook store (not yet necessarily learned)
+     * - `POST /api/backfill` — run the SPEC §4.2 backfill. Query
+     *   params: `from`/`to` (ISO window, optional), `source`
+     *   (`logbook` default: wind snapshots written in the log entries;
+     *   `history`: Signal K History API, needs `baseUrl` and works
+     *   only on board with history present).
      *
      * @param {object} router - Express router mounted at the plugin root
      */
@@ -213,6 +266,63 @@ module.exports = (app) => {
           state: stateMachine ? stateMachine.state : null,
           nextCronRun: stateMachine?.scheduledCronRun?.toISOString() ?? null,
         });
+      });
+
+      router.get("/api/matrix", (_req, res) => {
+        res.json(db ? db.getSailPreferenceMatrix() : null);
+      });
+
+      router.get("/api/events", (_req, res) => {
+        res.json(db ? db.getSailEvents({ limit: 1000 }) : []);
+      });
+
+      router.get("/api/logbook-events", async (req, res) => {
+        try {
+          const events = await readLogbookSailEvents({
+            dir: logbookStoreDir(),
+            from:
+              typeof req.query.from === "string" ? req.query.from : undefined,
+            to: typeof req.query.to === "string" ? req.query.to : undefined,
+            knownSailKeys: await knownSailKeys(),
+          });
+          res.json(events);
+        } catch (error) {
+          res.status(500).json({ error: error.message });
+        }
+      });
+
+      router.post("/api/backfill", async (req, res) => {
+        if (!db) {
+          res.status(503).json({ error: "Plugin not started" });
+          return;
+        }
+        try {
+          const from =
+            typeof req.query.from === "string" ? req.query.from : undefined;
+          const to =
+            typeof req.query.to === "string" ? req.query.to : undefined;
+          const events = await readLogbookSailEvents({
+            dir: logbookStoreDir(),
+            from,
+            to,
+            knownSailKeys: await knownSailKeys(),
+          });
+          const source =
+            req.query.source === "history" &&
+            typeof req.query.baseUrl === "string"
+              ? createHistoryWindStats({ baseUrl: req.query.baseUrl })
+              : createLogbookWindStats(
+                  await readLogbookEntries(logbookStoreDir()),
+                );
+          const summary = await backfillSailEvents({
+            db,
+            events,
+            getWindStats: source,
+          });
+          res.json(summary);
+        } catch (error) {
+          res.status(500).json({ error: error.message });
+        }
       });
     },
   };

@@ -108,6 +108,8 @@ function loadSqlite() {
  * @property {string} timestamp - ISO-8601 instant of the event
  * @property {"REEF_INCREASE"|"REEF_DECREASE"|"SAIL_CHANGE"} eventType
  * @property {string} sailState - e.g. `REEF_1_GENOA`
+ * @property {boolean} [night] - Whether the event happened at night
+ *   (sun below civil twilight)
  * @property {string} [notes]
  */
 
@@ -169,6 +171,7 @@ class PassageDatabase {
         timestamp TEXT NOT NULL,
         event_type TEXT NOT NULL,
         sail_state TEXT NOT NULL,
+        night INTEGER NOT NULL DEFAULT 0,
         notes TEXT
       );
 
@@ -182,11 +185,12 @@ class PassageDatabase {
       CREATE TABLE IF NOT EXISTS learned_sail_matrix (
         tws_bin INTEGER NOT NULL,
         twa_bin INTEGER NOT NULL,
+        night INTEGER NOT NULL DEFAULT 0,
         preferred_sail TEXT NOT NULL,
         avg_tws_trigger REAL NOT NULL,
         peak_gust_trigger REAL NOT NULL,
         sample_count INTEGER NOT NULL,
-        PRIMARY KEY (tws_bin, twa_bin)
+        PRIMARY KEY (tws_bin, twa_bin, night)
       );
     `);
   }
@@ -197,13 +201,13 @@ class PassageDatabase {
    * @param {SailEvent} event
    * @returns {number} Inserted row id
    */
-  recordSailEvent({ timestamp, eventType, sailState, notes }) {
+  recordSailEvent({ timestamp, eventType, sailState, night = false, notes }) {
     const result = this.db
       .prepare(
-        `INSERT INTO logbook_sail_events (timestamp, event_type, sail_state, notes)
-         VALUES (?, ?, ?, ?)`,
+        `INSERT INTO logbook_sail_events (timestamp, event_type, sail_state, night, notes)
+         VALUES (?, ?, ?, ?, ?)`,
       )
-      .run(timestamp, eventType, sailState, notes ?? null);
+      .run(timestamp, eventType, sailState, night ? 1 : 0, notes ?? null);
     return Number(result.lastInsertRowid);
   }
 
@@ -212,17 +216,19 @@ class PassageDatabase {
    *
    * @param {object} [options]
    * @param {number} [options.limit] - Maximum rows (default 100)
-   * @returns {Array<SailEvent & {id: number}>}
+   * @returns {Array<SailEvent & {id: number, night: boolean}>}
    */
   getSailEvents({ limit = 100 } = {}) {
     return this.db
       .prepare(
-        `SELECT id, timestamp, event_type AS eventType, sail_state AS sailState, notes
+        `SELECT id, timestamp, event_type AS eventType, sail_state AS sailState,
+                night, notes
          FROM logbook_sail_events
          ORDER BY timestamp DESC, id DESC
          LIMIT ?`,
       )
-      .all(limit);
+      .all(limit)
+      .map((row) => ({ ...row, night: Boolean(row.night) }));
   }
 
   /**
@@ -266,11 +272,15 @@ class PassageDatabase {
   }
 
   /**
-   * Inserts or replaces a learned matrix cell.
+   * Inserts or replaces a learned matrix cell. The day/night buckets
+   * stay separate: the crew reefs deeper at night than the conditions
+   * alone require (windvane steering, unseeable squalls), and that is
+   * a behavior worth keeping.
    *
    * @param {object} bin
    * @param {number} bin.twsBin
    * @param {number} bin.twaBin
+   * @param {boolean} [bin.night]
    * @param {string} bin.preferredSail
    * @param {number} bin.avgTwsTrigger
    * @param {number} bin.peakGustTrigger
@@ -279,6 +289,7 @@ class PassageDatabase {
   upsertMatrixBin({
     twsBin,
     twaBin,
+    night = false,
     preferredSail,
     avgTwsTrigger,
     peakGustTrigger,
@@ -287,9 +298,9 @@ class PassageDatabase {
     this.db
       .prepare(
         `INSERT INTO learned_sail_matrix
-           (tws_bin, twa_bin, preferred_sail, avg_tws_trigger, peak_gust_trigger, sample_count)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT (tws_bin, twa_bin) DO UPDATE SET
+           (tws_bin, twa_bin, night, preferred_sail, avg_tws_trigger, peak_gust_trigger, sample_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (tws_bin, twa_bin, night) DO UPDATE SET
            preferred_sail = excluded.preferred_sail,
            avg_tws_trigger = excluded.avg_tws_trigger,
            peak_gust_trigger = excluded.peak_gust_trigger,
@@ -298,6 +309,7 @@ class PassageDatabase {
       .run(
         twsBin,
         twaBin,
+        night ? 1 : 0,
         preferredSail,
         avgTwsTrigger,
         peakGustTrigger,
@@ -308,20 +320,21 @@ class PassageDatabase {
   /**
    * Raw learned matrix rows, ordered by bin coordinates.
    *
-   * @returns {Array<{twsBin: number, twaBin: number, preferredSail: string, avgTwsTrigger: number, peakGustTrigger: number, sampleCount: number}>}
+   * @returns {Array<{twsBin: number, twaBin: number, night: boolean, preferredSail: string, avgTwsTrigger: number, peakGustTrigger: number, sampleCount: number}>}
    */
   getMatrixBins() {
     return this.db
       .prepare(
-        `SELECT tws_bin AS twsBin, twa_bin AS twaBin,
+        `SELECT tws_bin AS twsBin, twa_bin AS twaBin, night,
                 preferred_sail AS preferredSail,
                 avg_tws_trigger AS avgTwsTrigger,
                 peak_gust_trigger AS peakGustTrigger,
                 sample_count AS sampleCount
          FROM learned_sail_matrix
-         ORDER BY tws_bin ASC, twa_bin ASC`,
+         ORDER BY tws_bin ASC, twa_bin ASC, night ASC`,
       )
-      .all();
+      .all()
+      .map((row) => ({ ...row, night: Boolean(row.night) }));
   }
 
   /**
@@ -336,6 +349,7 @@ class PassageDatabase {
       matrix: this.getMatrixBins().map((row) => ({
         twsBin: row.twsBin,
         twaBin: row.twaBin,
+        night: row.night,
         preferredSailState: row.preferredSail,
         minTwsGustTrigger: row.peakGustTrigger,
         samplesCount: row.sampleCount,

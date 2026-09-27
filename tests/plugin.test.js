@@ -36,6 +36,9 @@ function createMockApp() {
       get(path, handler) {
         routes.push({ method: "get", path, handler });
       },
+      post(path, handler) {
+        routes.push({ method: "post", path, handler });
+      },
     },
     dataDir,
     getStatus: () => status,

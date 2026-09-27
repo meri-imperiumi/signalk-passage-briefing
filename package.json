@@ -36,6 +36,9 @@
   "engines": {
     "node": ">=22.5.0"
   },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  },
   "devDependencies": {
     "@signalk/server-api": "^2.30.0"
   }
