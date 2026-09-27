@@ -19,6 +19,7 @@
 /** @typedef {import("@signalk/server-api").Plugin} Plugin */
 
 const { join } = require("node:path");
+const { homedir } = require("node:os");
 const { readFile, writeFile } = require("node:fs/promises");
 
 const { PassageStateMachine } = require("./state-machine.js");
@@ -54,10 +55,18 @@ const PLUGIN_ID = "signalk-passage-briefing";
 const INTERNET_STATE_PATH = "network.internet.state";
 const NAVIGATION_STATE_PATH = "navigation.state";
 const HOUSE_SOC_PATH = "electrical.batteries.house.capacity.stateOfCharge";
+
+/**
+ * Self path of the vessel's active route, as published by autopilot /
+ * navigation apps (same source the dead-reckoning webapp consumes).
+ */
+const ACTIVE_ROUTE_PATH = "navigation.course.activeRoute";
+
 const WATCHED_PATHS = [
   INTERNET_STATE_PATH,
   NAVIGATION_STATE_PATH,
   HOUSE_SOC_PATH,
+  ACTIVE_ROUTE_PATH,
 ];
 
 /**
@@ -66,13 +75,16 @@ const WATCHED_PATHS = [
 const CRON_TICK_INTERVAL_MS = 60 * 1000;
 
 /**
- * Plugin configuration defaults (SPEC §2.1).
+ * Plugin configuration defaults (SPEC §2.1). The spool directory
+ * resolves against the server user's home so no absolute path is
+ * hardcoded (on the standard install this is
+ * `~/.signalk/spool/passage-outlook`).
  */
 const DEFAULTS = {
   motoring_tws_threshold: 3.5,
   drift_mode_enabled: true,
   waterline_length_m: 9.4,
-  spool_directory: "/home/node/.signalk/spool/passage-outlook",
+  spool_directory: join(homedir(), ".signalk", "spool", "passage-outlook"),
   k_heel: 0.35,
   k_pitch: 0.4,
 };
@@ -106,6 +118,34 @@ module.exports = (app) => {
   function isOnline() {
     const state = observations[INTERNET_STATE_PATH];
     return state === "online" || state === "metered";
+  }
+
+  /**
+   * Resolves the id of the vessel's active route from
+   * `navigation.course.activeRoute`. Both REST shapes occur — the
+   * whole node wrapped (`{value: {href…}}`) and individual leaves
+   * wrapped (`{href: {value…}}`) — so both are unwrapped, matching
+   * the dead-reckoning plugin's reading of the same path.
+   *
+   * @param {unknown} [cached] - Pre-read value (delta cache) tried first
+   * @returns {string|null} Route resource id, or null when not navigating a route
+   */
+  function activeRouteId(cached) {
+    const raw =
+      cached !== undefined
+        ? cached
+        : typeof app.getSelfPath === "function"
+          ? app.getSelfPath(ACTIVE_ROUTE_PATH)
+          : null;
+    const unwrap = (v) =>
+      v && typeof v === "object" && v.value !== undefined ? v.value : v;
+    const active = unwrap(raw);
+    const href = unwrap(active?.href);
+    if (typeof href !== "string") {
+      return null;
+    }
+    const match = href.match(/\/resources\/routes\/([^/?#]+)/);
+    return match ? decodeURIComponent(match[1]) : null;
   }
 
   /**
@@ -161,17 +201,20 @@ module.exports = (app) => {
       setStatus(`Fetch skipped while offline (${trigger})`);
       return;
     }
-    let routeId;
-    try {
-      routeId = (
-        await readFile(
-          join(app.getDataDirPath(), "weather", "last-route"),
-          "utf8",
-        )
-      ).trim();
-    } catch (_error) {
-      setStatus("No route briefed yet: pick a route in the webapp");
-      return;
+    // The route being sailed wins; otherwise re-brief the last one
+    let routeId = activeRouteId(observations[ACTIVE_ROUTE_PATH]);
+    if (!routeId) {
+      try {
+        routeId = (
+          await readFile(
+            join(app.getDataDirPath(), "weather", "last-route"),
+            "utf8",
+          )
+        ).trim();
+      } catch (_error) {
+        setStatus("No route briefed yet: pick a route in the webapp");
+        return;
+      }
     }
     try {
       const result = await refreshBriefing(routeId);
@@ -350,6 +393,8 @@ module.exports = (app) => {
         res.json({
           state: stateMachine ? stateMachine.state : null,
           nextCronRun: stateMachine?.scheduledCronRun?.toISOString() ?? null,
+          online: isOnline(),
+          activeRouteId: activeRouteId(observations[ACTIVE_ROUTE_PATH]),
         });
       });
 
@@ -429,16 +474,47 @@ module.exports = (app) => {
             return;
           }
           const routes = await app.resourcesApi.listResources("routes", {});
+          const activeId = activeRouteId(observations[ACTIVE_ROUTE_PATH]);
           const list = Object.entries(routes || {}).map(([id, route]) => ({
             id,
             name: route?.name ?? id,
             distanceNm: routeDistanceNm(
               route?.feature?.geometry?.coordinates ?? [],
             ),
+            active: id === activeId,
           }));
           res.json(list);
         } catch (error) {
           res.status(500).json({ error: error.message });
+        }
+      });
+
+      router.get("/api/polar", async (_req, res) => {
+        try {
+          const { parseActivePolarId, parsePerformanceFactor } = await import(
+            "../public/polar.mjs"
+          );
+          const raw =
+            typeof app.getSelfPath === "function"
+              ? app.getSelfPath("polars.activePolar")
+              : null;
+          const id = parseActivePolarId(raw);
+          if (!id) {
+            res.json(null); // No active polar: webapp falls back to default
+            return;
+          }
+          const table = await app.resourcesApi.getResource("polars", id);
+          res.json({
+            id,
+            table,
+            performanceFactor: parsePerformanceFactor(
+              typeof app.getSelfPath === "function"
+                ? app.getSelfPath("polars.performanceFactor")
+                : null,
+            ),
+          });
+        } catch {
+          res.json(null);
         }
       });
 

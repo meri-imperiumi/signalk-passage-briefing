@@ -1,9 +1,14 @@
 const { test, describe } = require("node:test");
 const assert = require("node:assert/strict");
-const { mkdtempSync } = require("node:fs");
+const {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+} = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
-const { existsSync } = require("node:fs");
 
 const pluginFactory = require("../plugin/index.js");
 
@@ -74,7 +79,7 @@ describe("plugin", () => {
     plugin.stop();
   });
 
-  test("subscribes to the three state machine paths", () => {
+  test("subscribes to the state machine and active-route paths", () => {
     const app = createMockApp();
     const plugin = pluginFactory(app);
     plugin.start({});
@@ -87,6 +92,7 @@ describe("plugin", () => {
       "network.internet.state",
       "navigation.state",
       "electrical.batteries.house.capacity.stateOfCharge",
+      "navigation.course.activeRoute",
     ]);
   });
 
@@ -135,6 +141,154 @@ describe("plugin", () => {
       ],
     });
     assert.match(app.getStatus(), /started/);
+
+    plugin.stop();
+  });
+
+  test("active route: resolved from deltas and surfaced in status and routes", async () => {
+    const app = createMockApp();
+    app.resourcesApi = {
+      async listResources(resType) {
+        if (resType === "routes") {
+          return {
+            r1: {
+              name: "Crossing",
+              feature: {
+                geometry: {
+                  coordinates: [
+                    [0, 0],
+                    [0, 1],
+                  ],
+                },
+              },
+            },
+            r2: {
+              name: "Other",
+              feature: {
+                geometry: {
+                  coordinates: [
+                    [0, 0],
+                    [1, 0],
+                  ],
+                },
+              },
+            },
+          };
+        }
+        return {};
+      },
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const call = async (path) => {
+      const route = app.getRoutes().find((r) => r.path === path);
+      const res = {
+        json(p) {
+          this.payload = p;
+        },
+      };
+      await route.handler({}, res);
+      return res.payload;
+    };
+
+    assert.equal((await call("/api/status")).activeRouteId, null);
+
+    // Whole-node wrapped delta form ({value: {href…}})
+    feed({
+      updates: [
+        {
+          values: [
+            {
+              path: "navigation.course.activeRoute",
+              value: { href: "/resources/routes/r2", pointIndex: 1 },
+            },
+          ],
+        },
+      ],
+    });
+    assert.equal((await call("/api/status")).activeRouteId, "r2");
+    const routes = await call("/api/routes");
+    assert.deepEqual(
+      routes.filter((r) => r.active).map((r) => r.id),
+      ["r2"],
+    );
+
+    plugin.stop();
+
+    // Leaf-wrapped form ({href: {value…}}) via getSelfPath fallback
+    // on an app that has seen no delta for the path
+    const app2 = createMockApp();
+    app2.getSelfPath = (path) =>
+      path === "navigation.course.activeRoute"
+        ? { href: { value: "/signalk/v1/api/resources/routes/r1" } }
+        : null;
+    const plugin2 = pluginFactory(app2);
+    plugin2.start({});
+    plugin2.registerWithRouter(app2.router);
+    const res = {
+      json(p) {
+        this.payload = p;
+      },
+    };
+    await app2
+      .getRoutes()
+      .find((r) => r.path === "/api/status")
+      .handler({}, res);
+    assert.equal(res.payload.activeRouteId, "r1");
+
+    plugin2.stop();
+  });
+
+  test("polar route: resolves the active polar, null when none", async () => {
+    const TABLE = {
+      kind: "polarTable",
+      axes: { tws: [5.14], twa: [1.047] },
+      values: { boatSpeedMatrix: [[3.29]] },
+      symmetry: { portStarboardSymmetric: true },
+    };
+    const app = createMockApp();
+    app.resourcesApi = {
+      async getResource(resType, resId) {
+        if (resType === "polars" && resId === "lille-o") {
+          return TABLE;
+        }
+        throw new Error("not found");
+      },
+    };
+    app.getSelfPath = (path) => {
+      if (path === "polars.activePolar") {
+        return { value: { href: "/resources/polars/lille-o" } };
+      }
+      if (path === "polars.performanceFactor") {
+        return { value: 0.9 };
+      }
+      return null;
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+    const route = app.getRoutes().find((r) => r.path === "/api/polar");
+    const res = {
+      json(payload) {
+        this.payload = payload;
+      },
+    };
+    await route.handler({}, res);
+    assert.equal(res.payload.id, "lille-o");
+    assert.equal(res.payload.table, TABLE);
+    assert.equal(res.payload.performanceFactor, 0.9);
+
+    // No active polar → null, not an error
+    app.getSelfPath = () => null;
+    const res2 = {
+      json(p) {
+        this.payload = p;
+      },
+    };
+    await route.handler({}, res2);
+    assert.equal(res2.payload, null);
 
     plugin.stop();
   });
@@ -284,6 +438,76 @@ describe("plugin", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+
+    plugin.stop();
+  });
+
+  test("oneshot fetch prefers the active route over the last briefed one", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const app = createMockApp();
+    const geometry = (lat) => ({
+      feature: {
+        geometry: {
+          coordinates: [
+            [0, 0],
+            [0, lat],
+          ],
+        },
+      },
+    });
+    app.resourcesApi = {
+      async getResource(resType, resId) {
+        if (resType === "routes" && resId === "r1") {
+          return { name: "Old", ...geometry(1.5) };
+        }
+        if (resType === "routes" && resId === "r2") {
+          return { name: "Active", ...geometry(1.2) };
+        }
+        throw new Error("not found");
+      },
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({});
+
+    // Previous session briefed r1
+    mkdirSync(join(app.dataDir, "weather"), { recursive: true });
+    writeFileSync(join(app.dataDir, "weather", "last-route"), "r1");
+
+    // Now sailing r2 while the link comes up
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockOpenMeteo();
+    try {
+      app.getDeltaHandlers()[0]({
+        updates: [
+          {
+            values: [
+              { path: "network.internet.state", value: "online" },
+              {
+                path: "navigation.course.activeRoute",
+                value: { href: "/resources/routes/r2" },
+              },
+            ],
+          },
+        ],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    assert.ok(
+      existsSync(join(app.dataDir, "weather", "latest-r2.json")),
+      "active route r2 briefed",
+    );
+    assert.ok(
+      !existsSync(join(app.dataDir, "weather", "latest-r1.json")),
+      "stale r1 not re-briefed",
+    );
+    assert.ok(existsSync(join(app.dataDir, "weather", "last-route")));
+    assert.equal(
+      readFileSync(join(app.dataDir, "weather", "last-route"), "utf8"),
+      "r2",
+    );
 
     plugin.stop();
   });

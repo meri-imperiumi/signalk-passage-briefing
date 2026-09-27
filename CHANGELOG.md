@@ -64,7 +64,27 @@
   window; REST routes `GET /api/routes`, `GET /api/briefing` (cached,
   works offline), `GET /api/cached` and `POST /api/briefing/refresh`
   (internet only, refuses while offline). Cron/oneshot triggers
-  refresh the last briefed route.
+  prefer the route currently being sailed
+  (`navigation.course.activeRoute`, resolved the same way as in the
+  dead-reckoning plugin) and fall back to the last briefed route.
+- Step-forward isochrone simulation (`public/route-sim.mjs`, SPEC
+  §5.1): hourly advance along the sampled route with the §5.1 speed
+  decision tree (polar sailing / drift mode / motoring), current set
+  and drift added to the boat vector, partial-hour arrivals, Sereno
+  comfort per hour, learned sail-change suggestions anchored to the
+  watch-change day/night buckets, steep-sea and convective anomaly
+  detection, hazard-note alerts (polygon containment or 5 nm point
+  radius) and a three-run TWS perturbation pseudo-ensemble producing
+  ETA p10/p50/p90 plus the 24 h energy balance.
+- Polar performance lookup (`public/polar.mjs`): consumes the
+  vessel's canonical `polars` resource table (SI axes, bilinear with
+  the pinch/hull-speed edge semantics shared with signalk-polar-tools)
+  and the `polars.performanceFactor` derating, falling back to a
+  built-in conservative monohull polar when no polar is active. REST
+  route `GET /api/polar` resolves the active polar server-side.
+- Simulation web worker (`public/worker.js`): runs the passage
+  simulation off the main thread and replies with the result plus its
+  pre-filtered exception views (next-24h blocks, passage summary).
 - README with credits; the `yaml` runtime dependency for reading the
   logbook store.
 - Smoketests for the physics, the logbook source, the backfill, the
