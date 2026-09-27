@@ -50,6 +50,21 @@
 - Sail inventory reader (`plugin/sails-configuration.js`): reads the
   `@signalk/sailsconfiguration` store (m/s wind limits, reef
   configurations as remaining areas in m²) for priors and annotation.
+- Fetch engine (`plugin/fetch-engine.js`, SPEC §3.1): builds the
+  UnifiedWeatherPayload along route waypoints sampled evenly from the
+  route geometry (great-circle interpolation). Surface wind, gusts,
+  pressure, CAPE and pressure-layer fields come from the Open-Meteo
+  forecast API (K-index computed from T850/T700/T500 + dewpoints),
+  the combined sea and its wind sea/swell partitions from GFS-Wave,
+  surface current from SMOC. Marine and current endpoints degrade
+  gracefully; per-attempt timeouts and retry with backoff on 429/5xx.
+- Payload cache: fetched briefings are persisted per route
+  (`weather/latest-<route>.json` plus dated snapshots, pruned to the
+  newest eight) so the boat can run ~23h offline on the last fetch
+  window; REST routes `GET /api/routes`, `GET /api/briefing` (cached,
+  works offline), `GET /api/cached` and `POST /api/briefing/refresh`
+  (internet only, refuses while offline). Cron/oneshot triggers
+  refresh the last briefed route.
 - README with credits; the `yaml` runtime dependency for reading the
   logbook store.
 - Smoketests for the physics, the logbook source, the backfill, the

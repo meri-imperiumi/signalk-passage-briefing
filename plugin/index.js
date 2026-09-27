@@ -19,6 +19,7 @@
 /** @typedef {import("@signalk/server-api").Plugin} Plugin */
 
 const { join } = require("node:path");
+const { readFile, writeFile } = require("node:fs/promises");
 
 const { PassageStateMachine } = require("./state-machine.js");
 const { PassageDatabase } = require("./sqlite-db.js");
@@ -32,6 +33,15 @@ const {
   createHistoryWindStats,
   createLogbookWindStats,
 } = require("./history-backfill.js");
+const {
+  DEFAULT_FORECAST_DAYS,
+  fetchWeatherAlongTrack,
+  listCachedRoutes,
+  loadPayload,
+  routeDistanceNm,
+  sampleRoutePoints,
+  savePayload,
+} = require("./fetch-engine.js");
 
 /**
  * Plugin identifier (matches package name without the scope).
@@ -89,14 +99,89 @@ module.exports = (app) => {
   };
 
   /**
-   * Runs a weather fetch. The multi-endpoint fetch engine lands here;
-   * for now the trigger is surfaced through the plugin status so the
-   * state machine wiring is observable.
+   * Whether the internet link currently allows fetching.
+   *
+   * @returns {boolean}
+   */
+  function isOnline() {
+    const state = observations[INTERNET_STATE_PATH];
+    return state === "online" || state === "metered";
+  }
+
+  /**
+   * Fetches and caches the briefing payload for a route. Internet
+   * weather is only fetched while the link is up; everything served
+   * afterwards comes from the cache (on passage the boat is online
+   * for about an hour a day, so the last payload must survive the
+   * other 23 offline hours).
+   *
+   * @param {string} routeId
+   * @param {number} [forecastDays]
+   * @returns {Promise<{routeId: string, cached: boolean, cachedAt: string|null, fetchedAt?: string}>}
+   */
+  async function refreshBriefing(
+    routeId,
+    forecastDays = DEFAULT_FORECAST_DAYS,
+  ) {
+    if (!isOnline()) {
+      throw new Error("Offline: internet weather is only fetched while online");
+    }
+    let coordinates;
+    if (typeof app.resourcesApi?.getResource === "function") {
+      const route = await app.resourcesApi.getResource("routes", routeId);
+      coordinates = route?.feature?.geometry?.coordinates;
+    }
+    if (!Array.isArray(coordinates) || coordinates.length < 2) {
+      throw new Error(`Route ${routeId} has no track`);
+    }
+    const waypoints = sampleRoutePoints(coordinates);
+    const payload = await fetchWeatherAlongTrack({ waypoints, forecastDays });
+    await savePayload(app.getDataDirPath(), routeId, payload);
+    await writeFile(
+      join(app.getDataDirPath(), "weather", "last-route"),
+      routeId,
+    );
+    return {
+      routeId,
+      cached: true,
+      cachedAt: payload.metadata.fetchedAt,
+      fetchedAt: payload.metadata.fetchedAt,
+    };
+  }
+
+  /**
+   * Runs a weather fetch for the last briefed route (cron/oneshot
+   * trigger). The multi-endpoint fetch lands in the briefing refresh;
+   * the outcome is surfaced through the plugin status.
    *
    * @param {"oneshot"|"cron"} trigger
    */
-  function runFetch(trigger) {
-    setStatus(`Fetching weather (trigger: ${trigger})`);
+  async function runFetch(trigger) {
+    if (!isOnline()) {
+      setStatus(`Fetch skipped while offline (${trigger})`);
+      return;
+    }
+    let routeId;
+    try {
+      routeId = (
+        await readFile(
+          join(app.getDataDirPath(), "weather", "last-route"),
+          "utf8",
+        )
+      ).trim();
+    } catch (_error) {
+      setStatus("No route briefed yet: pick a route in the webapp");
+      return;
+    }
+    try {
+      const result = await refreshBriefing(routeId);
+      setStatus(
+        `Briefing for ${routeId} cached at ${result.fetchedAt} (${trigger})`,
+      );
+    } catch (error) {
+      app.error(`Briefing refresh failed (${trigger}): ${error.message}`);
+      setStatus(`Briefing refresh failed: ${error.message}`);
+    }
   }
 
   /**
@@ -286,6 +371,72 @@ module.exports = (app) => {
             knownSailKeys: await knownSailKeys(),
           });
           res.json(events);
+        } catch (error) {
+          res.status(500).json({ error: error.message });
+        }
+      });
+
+      router.post("/api/briefing/refresh", async (req, res) => {
+        const routeId =
+          typeof req.query.route === "string" ? req.query.route : "";
+        if (!routeId) {
+          res.status(400).json({ error: "route query parameter required" });
+          return;
+        }
+        if (!isOnline()) {
+          res
+            .status(503)
+            .json({ error: "Offline: serving cached briefings only" });
+          return;
+        }
+        try {
+          const days =
+            typeof req.query.days === "string" && Number(req.query.days) > 0
+              ? Number(req.query.days)
+              : DEFAULT_FORECAST_DAYS;
+          res.json(await refreshBriefing(routeId, days));
+        } catch (error) {
+          app.error(`Briefing refresh failed: ${error.message}`);
+          res.status(502).json({ error: error.message });
+        }
+      });
+
+      router.get("/api/briefing", async (req, res) => {
+        const routeId =
+          typeof req.query.route === "string" ? req.query.route : "";
+        if (!routeId) {
+          res.status(400).json({ error: "route query parameter required" });
+          return;
+        }
+        const cached = await loadPayload(app.getDataDirPath(), routeId);
+        if (!cached) {
+          res.status(404).json({ error: "No cached briefing for this route" });
+          return;
+        }
+        res.json({ ...cached, online: isOnline() });
+      });
+
+      router.get("/api/cached", async (_req, res) => {
+        res.json(await listCachedRoutes(app.getDataDirPath()));
+      });
+
+      router.get("/api/routes", async (_req, res) => {
+        try {
+          if (typeof app.resourcesApi?.listResources !== "function") {
+            res
+              .status(501)
+              .json({ error: "Resources API not available on this server" });
+            return;
+          }
+          const routes = await app.resourcesApi.listResources("routes", {});
+          const list = Object.entries(routes || {}).map(([id, route]) => ({
+            id,
+            name: route?.name ?? id,
+            distanceNm: routeDistanceNm(
+              route?.feature?.geometry?.coordinates ?? [],
+            ),
+          }));
+          res.json(list);
         } catch (error) {
           res.status(500).json({ error: error.message });
         }

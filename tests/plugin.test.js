@@ -90,7 +90,7 @@ describe("plugin", () => {
     ]);
   });
 
-  test("internet transition triggers a oneshot fetch via plugin status", () => {
+  test("internet transition triggers a oneshot fetch via plugin status", async () => {
     const app = createMockApp();
     const plugin = pluginFactory(app);
     plugin.start({});
@@ -106,7 +106,9 @@ describe("plugin", () => {
         },
       ],
     });
-    assert.match(app.getStatus(), /trigger: oneshot/);
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
+    await tick();
+    assert.match(app.getStatus(), /No route briefed yet/);
 
     // Stable repeat: no new fetch.
     feed({
@@ -114,7 +116,8 @@ describe("plugin", () => {
         { values: [{ path: "network.internet.state", value: "online" }] },
       ],
     });
-    assert.match(app.getStatus(), /trigger: oneshot/);
+    await tick();
+    assert.match(app.getStatus(), /No route briefed yet/);
 
     plugin.stop();
   });
@@ -163,6 +166,124 @@ describe("plugin", () => {
     await route.handler({}, res);
     assert.equal(res.payload.state, "STANDBY_OFFSHORE");
     assert.equal(res.payload.nextCronRun, null);
+
+    plugin.stop();
+  });
+
+  test("briefing routes: refresh caches, briefing serves the cache, offline refuses", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const app = createMockApp();
+    app.resourcesApi = {
+      async getResource(resType, resId) {
+        if (resType === "routes" && resId === "r1") {
+          return {
+            name: "Test crossing",
+            feature: {
+              geometry: {
+                coordinates: [
+                  [0, 0],
+                  [0, 1.5],
+                ],
+              },
+            },
+          };
+        }
+        throw new Error("not found");
+      },
+      async listResources(resType) {
+        if (resType === "routes") {
+          return {
+            r1: {
+              name: "Test crossing",
+              feature: {
+                geometry: {
+                  coordinates: [
+                    [0, 0],
+                    [0, 1.5],
+                  ],
+                },
+              },
+            },
+          };
+        }
+        return {};
+      },
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const routeCalls = app.getRoutes();
+    const call = async (path, req) => {
+      const route = routeCalls.find((r) => r.path === path);
+      assert.ok(route, `${path} registered`);
+      const res = {
+        code: null,
+        payload: null,
+        status(code) {
+          this.code = code;
+          return this;
+        },
+        json(payload) {
+          this.payload = payload;
+        },
+      };
+      await route.handler(req, res);
+      return res;
+    };
+
+    // No cache yet
+    let res = await call("/api/briefing", { query: { route: "r1" } });
+    assert.equal(res.code, 404);
+
+    // Refresh refuses while offline
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "offline" }] },
+      ],
+    });
+    res = await call("/api/briefing/refresh", { query: { route: "r1" } });
+    assert.equal(res.code, 503);
+
+    // Online: refresh fetches, caches and records the route
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "online" }] },
+      ],
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockOpenMeteo();
+    try {
+      res = await call("/api/briefing/refresh", { query: { route: "r1" } });
+      assert.equal(res.code, null);
+      assert.equal(res.payload.cached, true);
+      assert.ok(existsSync(join(app.dataDir, "weather", "latest-r1.json")));
+
+      // The briefing now serves from cache, also after going offline
+      feed({
+        updates: [
+          { values: [{ path: "network.internet.state", value: "offline" }] },
+        ],
+      });
+      res = await call("/api/briefing", { query: { route: "r1" } });
+      assert.equal(res.code, null);
+      assert.equal(res.payload.online, false);
+      assert.equal(res.payload.payload.metadata.source, "api");
+      assert.ok(res.payload.cachedAt);
+
+      // Routes listing carries distances
+      res = await call("/api/routes", { query: {} });
+      assert.equal(res.payload.length, 1);
+      assert.ok(
+        res.payload[0].distanceNm > 89 && res.payload[0].distanceNm < 91,
+      );
+
+      // Unknown route briefing: 404
+      res = await call("/api/briefing", { query: { route: "nope" } });
+      assert.equal(res.code, 404);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
 
     plugin.stop();
   });
