@@ -35,7 +35,11 @@ const {
   ukhoBlocksFromWarnings,
 } = require("./bulletin-engine.js");
 const { loadBulletinCache, refreshBulletins } = require("./bulletin-source.js");
-const { loadSynoptic, refreshSynoptics } = require("./synoptic-source.js");
+const {
+  loadSynoptic,
+  loadSynopticFailure,
+  refreshSynoptics,
+} = require("./synoptic-source.js");
 const {
   fetchZoneBulletins,
   parseUkhoWarnings,
@@ -394,6 +398,12 @@ module.exports = (app) => {
       dataDir: app.getDataDirPath(),
       zones,
     });
+    for (const failure of result.failed) {
+      app.error?.(
+        `Synoptic chart fetch failed (zone ${failure.zone}): ` +
+          `${failure.url} — ${failure.error}`,
+      );
+    }
     if (result.fetched.length > 0) {
       app.debug?.(
         `Synoptic charts refreshed (${trigger}): zones ` +
@@ -1195,7 +1205,14 @@ module.exports = (app) => {
         }
         const chart = await loadSynoptic(app.getDataDirPath(), zone);
         if (!chart) {
-          res.status(404).json({ error: "No cached chart for this zone" });
+          const lastFailure = await loadSynopticFailure(
+            app.getDataDirPath(),
+            zone,
+          );
+          res.status(404).json({
+            error: "No cached chart for this zone",
+            ...(lastFailure ? { lastFailure } : {}),
+          });
           return;
         }
         res.type("image/png").send(chart.png);

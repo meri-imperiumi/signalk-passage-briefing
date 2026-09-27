@@ -167,8 +167,30 @@ async function refreshSynoptics({
       }
     }
   }
+  if (failed.length > 0) {
+    index._lastFailures = index._lastFailures ?? {};
+    for (const entry of failed) {
+      index._lastFailures[entry.zone] = {
+        url: entry.url,
+        error: entry.error,
+        at: new Date().toISOString(),
+      };
+    }
+  }
   await saveIndex(dataDir, index);
   return { fetched, skipped, failed };
+}
+
+/**
+ * The last recorded fetch failure for a zone, if any.
+ *
+ * @param {string} dataDir
+ * @param {number} zone
+ * @returns {Promise<{url: string, error: string, at: string}|null>}
+ */
+async function loadSynopticFailure(dataDir, zone) {
+  const index = await loadIndex(dataDir);
+  return index._lastFailures?.[zone] ?? null;
 }
 
 /**
@@ -198,4 +220,5 @@ module.exports = {
   chartsForZones,
   refreshSynoptics,
   loadSynoptic,
+  loadSynopticFailure,
 };
