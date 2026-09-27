@@ -727,6 +727,140 @@ describe("plugin", () => {
     plugin.stop();
   });
 
+  test("zone sources: TGFTP fast path and UKHO structured warnings merge", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const TGFTP_TEXT = [
+      "FQPS01 NFFN 011200Z AUG 26",
+      "ZCZC GA14",
+      "NAVAREA XIV 114/26",
+      "GALE WARNING.",
+      "DEVELOPING TROUGH T1 WITH GALES WITHIN 120NM",
+      "OF AXIS 21S 178W TO 24S 175W.",
+      "NNNN",
+    ].join("\n");
+    const UKHO_JSON = JSON.stringify({
+      warnings: [
+        {
+          text: "NAVAREA XIV 115/26",
+          issuedAt: "2026-09-27T10:00:00Z",
+          coordinates: [
+            [-20.8, -175.6],
+            [-21.2, -174.8],
+            [-21.6, -175.4],
+          ],
+        },
+        {
+          text: "NAVAREA I 1/26",
+          issuedAt: "2026-09-27T09:00:00Z",
+          coordinates: [[50.0, -5.0]],
+        },
+      ],
+    });
+
+    const app = createMockApp();
+    const route = {
+      name: "Tonga to Opua",
+      feature: {
+        geometry: {
+          coordinates: [
+            [-175.2, -21.1],
+            [174.3, -35.3],
+          ],
+        },
+      },
+    };
+    app.resourcesApi = {
+      async getResource(resType, resId) {
+        if (resType === "routes" && resId === "r1") {
+          return route;
+        }
+        throw new Error("not found");
+      },
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({
+      bulletin_stations: [{ zone: 14, header: "fqps01", station: "NFFN" }],
+    });
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const call = async (path) => {
+      const r = app.getRoutes().find((x) => x.path === path);
+      const res = {
+        code: null,
+        payload: null,
+        status(c) {
+          this.code = c;
+          return this;
+        },
+        json(p) {
+          this.payload = p;
+        },
+      };
+      await r.handler({ query: { route: "r1" } }, res);
+      return res;
+    };
+
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "online" }] },
+      ],
+    });
+    const openMeteoFetch = mockOpenMeteo();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes("tgftp.nws.noaa.gov")) {
+        return { ok: true, text: async () => TGFTP_TEXT };
+      }
+      if (u.includes("msi.admiralty.co.uk")) {
+        return { ok: true, text: async () => UKHO_JSON };
+      }
+      if (u.includes("weather.gmdss.org")) {
+        throw new Error("portal down");
+      }
+      return openMeteoFetch(url);
+    };
+    try {
+      const res = await call("/api/briefing/refresh");
+      assert.equal(res.code, null);
+
+      // Both ingestion paths merge into one console, track-filtered:
+      // the UKHO polygon near Tonga and the TGFTP trough axis band
+      // stay, the UKHO warning in the North Sea is dropped
+      const briefing = await call("/api/briefing");
+      const bulletin = briefing.payload.payload.metareaBulletin;
+      assert.ok(bulletin, "bulletin attached");
+      const texts = bulletin.blocks.map((b) => b.text);
+      assert.ok(texts.includes("NAVAREA XIV 115/26"), "ukho polygon kept");
+      assert.ok(!texts.includes("NAVAREA I 1/26"), "ukho far warning dropped");
+      assert.ok(
+        bulletin.blocks.some((b) => b.text.includes("TROUGH")),
+        "tgftp text block kept",
+      );
+      assert.ok(
+        bulletin.blocks.some((b) => b.source === "ukho"),
+        "ukho blocks carry their source",
+      );
+      assert.match(bulletin.header, /NAVAREA XIV/);
+      assert.equal(bulletin.issuedAt, "2026-09-27T10:00:00.000Z");
+
+      // Standalone bulletin route serves the merged view too
+      const direct = await call("/api/bulletin");
+      assert.ok(
+        direct.payload.blocks.some((b) => b.source === "ukho"),
+        "ukho blocks on the standalone route",
+      );
+      assert.ok(
+        direct.payload.blocks.some((b) => b.text.includes("TROUGH")),
+        "tgftp blocks on the standalone route",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    plugin.stop();
+  });
+
   test("space events: attached to here briefings, degraded when endpoints fail", async () => {
     const { mockOpenMeteo } = require("./openmeteo-mock.js");
     // Forecast rows inside the 24h forward window relative to now

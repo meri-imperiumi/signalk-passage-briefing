@@ -23,6 +23,7 @@ const {
   stripBoilerplate,
   bboxIntersectsTrack,
   ringContains,
+  ukhoBlocksFromWarnings,
 } = require("../plugin/bulletin-engine.js");
 const {
   loadBulletinCache,
@@ -200,6 +201,43 @@ test("retained bulletin: blocks filtered against the Tonga track", () => {
   assert.ok(synopsis, "no-geometry block kept");
   assert.equal(synopsis.geometryType, null);
 });
+test("ukhoBlocksFromWarnings: structured geometry vs track, point bbox", () => {
+  const warnings = [
+    {
+      text: "BUOY OFF STATION NEAR OPUA",
+      issuedAt: "2026-09-27T10:00:00Z",
+      coordinates: [
+        [174.0, -35.0],
+        [174.6, -35.4],
+        [174.2, -35.8],
+      ],
+    },
+    {
+      text: "FAR SHORE EVENT",
+      issuedAt: null,
+      coordinates: [
+        [0, 0],
+        [1, 0],
+        [1, 1],
+      ],
+    },
+    { text: "POINT HAZARD", issuedAt: null, coordinates: [[174.31, -35.31]] },
+  ];
+  const track = [
+    [174.3, -35.3],
+    [174.9, -35.6],
+  ];
+  const blocks = ukhoBlocksFromWarnings(warnings, track);
+  assert.deepEqual(
+    blocks.map((b) => b.text),
+    ["BUOY OFF STATION NEAR OPUA", "POINT HAZARD"],
+  );
+  assert.equal(blocks[0].source, "ukho");
+  assert.equal(blocks[0].geometryType, "polygon");
+  assert.equal(blocks[1].geometryType, "bbox");
+  assert.equal(blocks[1].subject, null);
+});
+
 test("discard rule drops geographically irrelevant warnings", () => {
   // Same warning re-anchored to the Atlantic: nowhere near the track
   const atlantic = NAVAREA_FIXTURE.replace(

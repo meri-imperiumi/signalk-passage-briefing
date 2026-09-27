@@ -180,10 +180,10 @@ function ukhoWarningsUrl(zone) {
  * @param {string} station - Station CCCC (e.g. "NFFN")
  * @returns {string}
  */
-function tgftpUrl(wmoId, station) {
-  return `https://tgftp.nws.noaa.gov/data/raw/${wmoId
+function tgftpUrl(header, station) {
+  return `https://tgftp.nws.noaa.gov/data/raw/${header
     .slice(0, 2)
-    .toLowerCase()}/${wmoId.toLowerCase()}.${station.toLowerCase()}..txt`;
+    .toLowerCase()}/${header.toLowerCase()}.${station.toLowerCase()}..txt`;
 }
 
 /**
@@ -232,7 +232,7 @@ async function fetchZoneBulletins({
   for (const zone of zones ?? []) {
     const station = (tgftpStations ?? []).find((s) => s.zone === zone);
     if (station) {
-      const url = tgftpUrl(station.wmoId, station.station);
+      const url = tgftpUrl(station.header, station.station);
       try {
         const { text } = await resolveBulletinSource(url, {
           fetchImpl,
@@ -258,11 +258,78 @@ async function fetchZoneBulletins({
   return out;
 }
 
+/**
+ * Normalizes the UKHO MSI JSON into the warning shape the bulletin
+ * engine filters (work doc #9: structured geometry bypasses the regex
+ * engine entirely for navigational hazards).
+ *
+ * The live response shape could not be verified from the dev sandbox
+ * (msi.admiralty.co.uk is IPv4-only) — the parser accepts the
+ * documented description (array of warnings with text, issue date,
+ * geometry coordinates) tolerantly: the list under `warnings`, `items`
+ * or `results`, text under `text`/`message`/`body`/`title`, dates under
+ * `issuedAt`/`issued`/`issueDate`/`created`, coordinate arrays under
+ * `coordinates`/`positions`/`geometry.coordinates`. Coordinate pairs
+ * are assumed [lat, lon] and normalized to GeoJSON [lon, lat]; verify
+ * both on the first live fetch.
+ *
+ * @param {unknown} payload - Parsed UKHO JSON response
+ * @returns {Array<{text: string, issuedAt: string|null,
+ *   coordinates: number[][]}>}
+ */
+function parseUkhoWarnings(payload) {
+  const list = Array.isArray(payload)
+    ? payload
+    : (["warnings", "items", "results"]
+        .map((key) =>
+          payload && typeof payload === "object" ? payload[key] : null,
+        )
+        .find(Array.isArray) ?? []);
+  const out = [];
+  for (const warning of list) {
+    if (warning == null || typeof warning !== "object") {
+      continue;
+    }
+    const text =
+      warning.text ?? warning.message ?? warning.body ?? warning.title;
+    if (typeof text !== "string" || text.trim() === "") {
+      continue;
+    }
+    const issuedRaw =
+      warning.issuedAt ??
+      warning.issued ??
+      warning.issueDate ??
+      warning.created;
+    const issued = typeof issuedRaw === "string" ? new Date(issuedRaw) : null;
+    const rawCoords =
+      [
+        warning.coordinates,
+        warning.positions,
+        warning.geometry?.coordinates,
+      ].find(Array.isArray) ?? [];
+    out.push({
+      text: text.trim(),
+      issuedAt:
+        issued && !Number.isNaN(issued.getTime()) ? issued.toISOString() : null,
+      coordinates: rawCoords
+        .filter(
+          (point) =>
+            Array.isArray(point) &&
+            point.length >= 2 &&
+            point.every(Number.isFinite),
+        )
+        .map(([lat, lon]) => [lon, lat]),
+    });
+  }
+  return out;
+}
+
 module.exports = {
   SOURCE_LADDER,
   loadZones,
   navtexStation,
   resolveZones,
+  parseUkhoWarnings,
   romanNumeral,
   gmdssBulletinUrl,
   ukhoWarningsUrl,

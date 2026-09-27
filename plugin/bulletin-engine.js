@@ -613,6 +613,65 @@ async function resolveBulletinSource(
   return { text, source: "api" };
 }
 
+/**
+ * Filters structured UKHO MSI warnings against the track (work doc
+ * #9: coordinates feed the intersection directly, bypassing the regex
+ * engine). Output blocks match the `filterBulletin` block shape so
+ * both ingestion paths merge into one console.
+ *
+ * @param {Array<{text: string, issuedAt: string|null,
+ *   coordinates: number[][]}>} warnings - `parseUkhoWarnings` output
+ * @param {number[][]} track - Track points [[lon, lat], …]
+ * @param {object} [options]
+ * @param {string} [options.source] - Block source label
+ * @returns {Array<{text: string, subject: null, geometryType: string|null,
+ *   source: string}>}
+ */
+function ukhoBlocksFromWarnings(warnings, track, { source = "ukho" } = {}) {
+  const blocks = [];
+  for (const warning of warnings ?? []) {
+    if (!warning?.text) {
+      continue;
+    }
+    const geometry = ukhoGeometry(warning);
+    if (!intersectsTrack(geometry, track)) {
+      continue; // Same discard rule as the text pipeline
+    }
+    blocks.push({
+      text: warning.text,
+      subject: null,
+      geometryType: geometry ? geometry.type : null,
+      source,
+    });
+  }
+  return blocks;
+}
+
+/**
+ * Geometry for one normalized UKHO warning: a ring of three or more
+ * coordinate pairs becomes a polygon, a single point a small bbox so
+ * it still intersects by containment.
+ *
+ * @param {object} warning
+ * @returns {object|null} `extractGeometry`-compatible shape
+ */
+function ukhoGeometry(warning) {
+  const points = warning?.coordinates ?? [];
+  if (points.length >= 3) {
+    return { type: "polygon", coordinates: points };
+  }
+  if (points.length === 1) {
+    const [lon, lat] = points[0];
+    // ~3 nm point-hazard box so single coordinates intersect by
+    // containment like a tiny area would
+    return {
+      type: "bbox",
+      coordinates: [lon - 0.05, lat - 0.05, lon + 0.05, lat + 0.05],
+    };
+  }
+  return null;
+}
+
 module.exports = {
   RETAINED_SUBJECTS,
   SEVERE_KEYWORDS,
@@ -621,6 +680,7 @@ module.exports = {
   navtexSubject,
   shouldRetainSubject,
   segmentBlocks,
+  ukhoBlocksFromWarnings,
   hemisphereDegrees,
   parseCoordinateChain,
   parseCardinalBounds,

@@ -116,6 +116,7 @@ async function refreshBulletins({
       text: entry.text,
       source: entry.source,
       zone: entry.zone,
+      ...(entry.format ? { format: entry.format } : {}),
     });
     fetched.push(entry.url);
   }

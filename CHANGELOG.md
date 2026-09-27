@@ -4,6 +4,21 @@
 
 ### Added
 
+- Zone-targeted bulletin sources wired end to end (work doc #9): the
+  NOAA TGFTP fast path now activates through a configurable
+  station→zone table (`bulletin_stations`, seeded with the doc's
+  FQPS01/NFFN for NAVAREA XIV) fetched before the GMDSS portal
+  fallback; the UKHO Admiralty MSI JSON is fetched per resolved zone
+  (`msi.admiralty.co.uk/api/Warnings/Area/{zone}`), stored raw and
+  parsed tolerantly (`parseUkhoWarnings` — canonical shape
+  fixture-tested, response shape and `[lat, lon]` coordinate order
+  need one on-board verification) into structured blocks that skip
+  the regex pipeline entirely. `/api/bulletin` and the payload
+  `metareaBulletin` now merge track-filtered blocks from the newest
+  cached entries across ingestion paths (text and structured),
+  deduped by text. `/api/bulletin/refresh` performs the zone-targeted
+  pull against the vessel position before the configured extra feeds.
+
 - Plotter-extension brief tile (work doc #8): the plugin registers a
   read-only `plotterExtensions` resource provider (API v1 manifest,
   1x1 iframe widget, `whileEnabled`) and serves the widget assets

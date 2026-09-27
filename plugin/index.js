@@ -29,9 +29,18 @@ const {
   readLogbookSailEvents,
 } = require("./logbook-source.js");
 const { readSailsConfiguration } = require("./sails-configuration.js");
-const { filterBulletin } = require("./bulletin-engine.js");
+const {
+  filterBulletin,
+  resolveBulletinSource,
+  ukhoBlocksFromWarnings,
+} = require("./bulletin-engine.js");
 const { loadBulletinCache, refreshBulletins } = require("./bulletin-source.js");
-const { fetchZoneBulletins, resolveZones } = require("./zone-source.js");
+const {
+  fetchZoneBulletins,
+  parseUkhoWarnings,
+  resolveZones,
+  ukhoWarningsUrl,
+} = require("./zone-source.js");
 const { fetchSpaceEvents } = require("./celestial-source.js");
 const { registerPlotterExtension } = require("./brief-ext.js");
 const {
@@ -114,6 +123,10 @@ const DEFAULTS = {
     "https://api.weather.gov/products/types/HSF/locations/EP1",
     "https://api.weather.gov/products/types/HSF/locations/EP2",
   ],
+  /** TGFTP station→zone fast path (work doc #9 §sources 3): the
+   * doc's XIV example (Fiji radio re-broadcasting NAVAREA XIV) as the
+   * seed; extend via configuration. */
+  bulletin_stations: [{ zone: 14, header: "FQPS01", station: "NFFN" }],
 };
 
 /**
@@ -130,6 +143,8 @@ module.exports = (app) => {
   let db = null;
   /** Bulletin source URLs (from configuration). */
   let bulletinUrls = DEFAULTS.bulletin_urls;
+  /** TGFTP station→zone table (from configuration). */
+  let bulletinStations = DEFAULTS.bulletin_stations;
 
   /** Simulation-relevant config subset served to the webapp worker. */
   let simulationConfig = {
@@ -192,9 +207,75 @@ module.exports = (app) => {
     return match ? decodeURIComponent(match[1]) : null;
   }
 
+  /** Cache entries merged into one serve-time console (work doc #9:
+   * UKHO structured warnings and portal text from several zones ride
+   * the same cache). */
+  const MERGE_BULLETINS = 4;
+
+  /** Filtered blocks for one cache entry against a track: structured
+   * UKHO JSON entries skip the text pipeline entirely. */
+  function blocksForEntry(entry, track) {
+    if (entry.format === "ukho-json") {
+      try {
+        return ukhoBlocksFromWarnings(
+          parseUkhoWarnings(JSON.parse(entry.text)),
+          track,
+        );
+      } catch {
+        return []; // Corrupted entry: skip, other entries still serve
+      }
+    }
+    const bulletin = filterBulletin({
+      rawText: entry.text,
+      source: entry.source ?? "api",
+      track,
+      issuedAt: entry.fetchedAt,
+    });
+    return bulletin?.blocks ?? [];
+  }
+
+  /** Bulletin-level metadata (header/issuedAt/source/raw text) for
+   * one cache entry, shape-compatible across both ingestion paths. */
+  function bulletinMetaForEntry(entry) {
+    if (entry.format === "ukho-json") {
+      let warnings = [];
+      try {
+        warnings = parseUkhoWarnings(JSON.parse(entry.text));
+      } catch {
+        warnings = [];
+      }
+      return {
+        header:
+          warnings[0]?.text.split(/\r?\n/, 1)[0]?.trim() ?? "UKHO warnings",
+        issuedAt:
+          warnings.find((warning) => warning.issuedAt)?.issuedAt ??
+          entry.fetchedAt ??
+          new Date(0).toISOString(),
+        bulletinText: entry.text,
+        source: entry.source ?? "ukho",
+      };
+    }
+    const bulletin = filterBulletin({
+      rawText: entry.text,
+      source: entry.source ?? "api",
+      track: [],
+      issuedAt: entry.fetchedAt,
+    });
+    return bulletin
+      ? {
+          header: bulletin.header,
+          issuedAt: bulletin.issuedAt,
+          bulletinText: bulletin.bulletinText,
+          source: bulletin.source,
+        }
+      : null;
+  }
+
   /**
-   * Filters the newest cached bulletin against a track (work doc #4
-   * §4). Returns null when nothing is cached.
+   * Filters the newest cached bulletins against a track (work docs
+   * #4 and #9). Blocks from the newest few entries — text pipeline
+   * and structured UKHO JSON alike — merge into one console, deduped
+   * by text. Returns null when nothing is cached.
    *
    * @param {Array<{lat: number, lon: number}>} waypoints - Sampled
    *   route waypoints
@@ -207,12 +288,24 @@ module.exports = (app) => {
     }
     const track = waypoints.map((w) => [w.lon, w.lat]);
     const newest = cached[0];
-    return filterBulletin({
-      rawText: newest.text,
+    const meta = bulletinMetaForEntry(newest) ?? {
+      header: "",
+      issuedAt: newest.fetchedAt ?? new Date(0).toISOString(),
+      bulletinText: newest.text,
       source: newest.source ?? "api",
-      track,
-      issuedAt: newest.fetchedAt,
-    });
+    };
+    const blocks = [];
+    const seen = new Set();
+    for (const entry of cached.slice(0, MERGE_BULLETINS)) {
+      for (const block of blocksForEntry(entry, track)) {
+        if (seen.has(block.text)) {
+          continue;
+        }
+        seen.add(block.text);
+        blocks.push(block);
+      }
+    }
+    return { ...meta, blocks };
   }
 
   /**
@@ -228,12 +321,35 @@ module.exports = (app) => {
     if (!isOnline()) {
       return;
     }
-    // Zone-targeted pulls (work doc #9 fetch strategy)
-    const zones = resolveZones(waypoints.map((w) => [w.lon, w.lat]));
+    // Zone-targeted pulls (work doc #9 fetch strategy): TGFTP fast
+    // path for configured stations, GMDSS portal fallback, then the
+    // UKHO MSI JSON for the same zones (structured navigational
+    // warnings stored raw and filtered at serve time)
+    const track = waypoints.map((w) => [w.lon, w.lat]);
+    const zones = resolveZones(track);
+    const zoneBulletins = await fetchZoneBulletins({
+      zones,
+      tgftpStations: bulletinStations,
+    });
+    for (const zone of zones) {
+      const url = ukhoWarningsUrl(zone);
+      try {
+        const { text } = await resolveBulletinSource(url, {});
+        zoneBulletins.push({
+          url,
+          text,
+          source: "ukho",
+          zone,
+          format: "ukho-json",
+        });
+      } catch {
+        // UKHO unavailable this cycle: portal text still covers the zone
+      }
+    }
     const result = await refreshBulletins({
       dataDir: app.getDataDirPath(),
       urls: [],
-      zoneBulletins: await fetchZoneBulletins({ zones }),
+      zoneBulletins,
     });
     // Custom extra feeds (source-agnostic escape hatch)
     if (bulletinUrls.length > 0) {
@@ -645,6 +761,28 @@ module.exports = (app) => {
           items: { type: "string" },
           default: DEFAULTS.bulletin_urls,
         },
+        bulletin_stations: {
+          type: "array",
+          title: "TGFTP Bulletin Stations (zone fast path)",
+          description:
+            "Station→zone table for the NOAA TGFTP raw-text fast path " +
+            "(work doc #9), fetched before the GMDSS portal fallback.",
+          items: {
+            type: "object",
+            properties: {
+              zone: { type: "number", title: "GMDSS zone number" },
+              header: {
+                type: "string",
+                title: "WMO header (e.g. FQPS01)",
+              },
+              station: {
+                type: "string",
+                title: "Station id (e.g. NFFN)",
+              },
+            },
+          },
+          default: DEFAULTS.bulletin_stations,
+        },
       },
     },
 
@@ -655,6 +793,15 @@ module.exports = (app) => {
       const config = { ...DEFAULTS, ...(options || {}) };
       bulletinUrls = Array.isArray(config.bulletin_urls)
         ? config.bulletin_urls
+        : [];
+      bulletinStations = Array.isArray(config.bulletin_stations)
+        ? config.bulletin_stations.filter(
+            (station) =>
+              station &&
+              Number.isFinite(station.zone) &&
+              typeof station.header === "string" &&
+              typeof station.station === "string",
+          )
         : [];
       simulationConfig = {
         motoring_tws_threshold: config.motoring_tws_threshold,
@@ -900,6 +1047,13 @@ module.exports = (app) => {
           });
           return;
         }
+        // Zone-targeted pull against the vessel position when known
+        // (work doc #9), then the configured extra feeds
+        const position = vesselPosition();
+        await refreshBulletinsOnline(
+          "manual",
+          position ? [{ lat: position.lat, lon: position.lon }] : [],
+        );
         const result = await refreshBulletins({
           dataDir: app.getDataDirPath(),
           urls: bulletinUrls,

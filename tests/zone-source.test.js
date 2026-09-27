@@ -15,11 +15,48 @@ const {
   fetchZoneBulletins,
   gmdssBulletinUrl,
   navtexStation,
+  parseUkhoWarnings,
   resolveZones,
   romanNumeral,
   tgftpUrl,
   ukhoWarningsUrl,
 } = require("../plugin/zone-source.js");
+
+test("parseUkhoWarnings: canonical keys, tolerant fallbacks, unknown payload", () => {
+  const parsed = parseUkhoWarnings({
+    warnings: [
+      {
+        text: "CHART DAMAGE",
+        issuedAt: "2026-09-27T10:00:00Z",
+        coordinates: [
+          [-21.1, 175.2],
+          [-21.5, 175.8],
+          [-21.2, 176.1],
+        ],
+      },
+      {
+        message: "DRIFTING CONTAINER",
+        created: "not-a-date",
+        positions: [[10, 20]],
+      },
+      { text: "" },
+      null,
+    ],
+  });
+  assert.equal(parsed.length, 2);
+  assert.equal(parsed[0].text, "CHART DAMAGE");
+  assert.equal(parsed[0].issuedAt, "2026-09-27T10:00:00.000Z");
+  assert.deepEqual(parsed[0].coordinates, [
+    [175.2, -21.1],
+    [175.8, -21.5],
+    [176.1, -21.2],
+  ]);
+  assert.equal(parsed[1].text, "DRIFTING CONTAINER");
+  assert.equal(parsed[1].issuedAt, null);
+  assert.deepEqual(parsed[1].coordinates, [[20, 10]]);
+  assert.deepEqual(parseUkhoWarnings({ nope: true }), []);
+  assert.deepEqual(parseUkhoWarnings(null), []);
+});
 
 test("zone resolution: Tonga position resolves to XIV", () => {
   assert.deepEqual(resolveZones([[-175.2, -21.1]]), [14]);
@@ -122,7 +159,7 @@ test("fetch ladder: TGFTP preferred when configured, portal fallback", async () 
   // Station configured: TGFTP answers, portal never called
   let entries = await fetchZoneBulletins({
     zones: [14],
-    tgftpStations: [{ zone: 14, wmoId: "fqps01", station: "NFFN" }],
+    tgftpStations: [{ zone: 14, header: "fqps01", station: "NFFN" }],
     fetchImpl: mockFetch({
       "tgftp.nws.noaa.gov": tgftpResponse,
       "weather.gmdss.org": (url) => {
@@ -147,7 +184,7 @@ test("fetch ladder: TGFTP preferred when configured, portal fallback", async () 
   calls.length = 0;
   entries = await fetchZoneBulletins({
     zones: [14],
-    tgftpStations: [{ zone: 14, wmoId: "fqps01", station: "NFFN" }],
+    tgftpStations: [{ zone: 14, header: "fqps01", station: "NFFN" }],
     fetchImpl: mockFetch({
       "tgftp.nws.noaa.gov": new Error("connection refused"),
       "weather.gmdss.org": (url) => {
