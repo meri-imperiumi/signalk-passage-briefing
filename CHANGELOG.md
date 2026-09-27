@@ -46,6 +46,12 @@
 
 ### Added
 
+- An ℹ️ next to the comfort tier (tactical dashboard and
+  conditions-here) expanding an explainer for the Sereno comfort
+  scale — what each tier means and the apparent-wind / vertical-motion
+  lines that drop it — with the current tier highlighted. The scale
+  data (`COMFORT_SCALE_INFO`) lives in the shared physics module.
+
 - Logbook backfill controls in the webapp root (collapsed by
   default, available in every mode including conditions-here): runs
   `POST /api/backfill` (optional from/to date range) from the

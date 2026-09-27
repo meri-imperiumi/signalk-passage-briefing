@@ -48,6 +48,7 @@ class TacticalDashboard extends HTMLElement {
         <div class="now">
           <span class="value" id="aws">—</span>
           <span class="tier" id="tier">no data</span>
+          <comfort-info id="cinfo"></comfort-info>
         </div>
         <horizon-sparkline id="spark"></horizon-sparkline>
         <div id="actions"></div>
@@ -58,6 +59,7 @@ class TacticalDashboard extends HTMLElement {
     `;
     this._awsEl = this.shadowRoot.getElementById("aws");
     this._tierEl = this.shadowRoot.getElementById("tier");
+    this._cinfo = this.shadowRoot.getElementById("cinfo");
     this._spark = this.shadowRoot.getElementById("spark");
     this._actionsEl = this.shadowRoot.getElementById("actions");
     this._energyEl = this.shadowRoot.getElementById("energy");
@@ -85,6 +87,7 @@ class TacticalDashboard extends HTMLElement {
       now.awsKnots != null ? `${now.awsKnots.toFixed(1)}` : "—";
     this._tierEl.textContent = now.comfortLevel ?? "no data";
     this._tierEl.style.color = now.color;
+    this._cinfo?.setAttribute("tier", now.comfortLevel ?? "");
 
     this._spark.setColumns(exceptions?.next24h?.comfortBlocks ?? []);
 

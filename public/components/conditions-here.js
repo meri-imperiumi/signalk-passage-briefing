@@ -96,6 +96,7 @@ class ConditionsHere extends HTMLElement {
         <div class="now">
           <span class="value" id="pos">—</span>
           <span class="tier" id="tier">no data</span>
+          <comfort-info id="cinfo"></comfort-info>
         </div>
         <dl>
           <dt>Wind</dt><dd id="wind">—</dd>
@@ -116,6 +117,7 @@ class ConditionsHere extends HTMLElement {
     `;
     this._posEl = this.shadowRoot.getElementById("pos");
     this._tierEl = this.shadowRoot.getElementById("tier");
+    this._cinfo = this.shadowRoot.getElementById("cinfo");
     this._windEl = this.shadowRoot.getElementById("wind");
     this._seaEl = this.shadowRoot.getElementById("sea");
     this._currentEl = this.shadowRoot.getElementById("current");
@@ -152,6 +154,7 @@ class ConditionsHere extends HTMLElement {
     const now = hereNow(payload, rows);
     this._tierEl.textContent = now.comfortLevel ?? "no data";
     this._tierEl.style.color = now.color;
+    this._cinfo?.setAttribute("tier", now.comfortLevel ?? "");
 
     const wind = [
       now.twsKnots != null

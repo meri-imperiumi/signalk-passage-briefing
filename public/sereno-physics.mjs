@@ -54,6 +54,44 @@ export const KN_TO_MS = 0.514444;
 export const COMFORT_TIERS = ["champagne", "easy", "coffee", "rough", "sick"];
 
 /**
+ * One-line meaning per comfort tier, display order best first, with
+ * the band lines that drop the tier (mirrors AWS_BANDS_KNOTS and
+ * AZ_BANDS_MS2). For the webapp explainer.
+ */
+export const COMFORT_SCALE_INFO = [
+  {
+    tier: "champagne",
+    maxAws: 12,
+    maxAz: 0.15,
+    text: "Barely any motion — champagne stays in the glass.",
+  },
+  {
+    tier: "easy",
+    maxAws: 18,
+    maxAz: 0.315,
+    text: "Comfortable: moving around below is easy.",
+  },
+  {
+    tier: "coffee",
+    maxAws: 23,
+    maxAz: 0.63,
+    text: "You can still hold a hot coffee without wearing it.",
+  },
+  {
+    tier: "rough",
+    maxAws: 33,
+    maxAz: 1.25,
+    text: "One hand for the boat — loose objects go flying.",
+  },
+  {
+    tier: "sick",
+    maxAws: null,
+    maxAz: null,
+    text: "Beyond rough: seasickness very likely — think shelter or a course change.",
+  },
+];
+
+/**
  * Apparent wind speed (knots) at or above which each tier is lost
  * (Champagne, Easy, Coffee, Rough). SPEC §5.2 vector 1.
  */
