@@ -46,6 +46,19 @@
 
 ### Added
 
+- The plotter tile shows the current comfort tier:
+  `navigation.briefing.comfort` is published alongside the other tile
+  paths, computed at compile time from the payload's first forecast
+  step through the Sereno comfort model at SOG 0 (same math as the
+  conditions-here view), seeded from the cache after a restart.
+- Bulletin blocks now carry the extracted `geometry` (bbox
+  coordinates, polygon/axis-line rings with the WITHIN-nm buffer)
+  alongside the geometry type, and `BETWEEN 165W AND 135W` longitude
+  pairs parse as area bounds — the NFFN swell statement east of a
+  vessel at 174W is now correctly discarded.
+- The tile's tap opens the brief webapp by probing the SK v2 app
+  mount (`/@<scope>/<name>/`) before the v1 `/plugins/` mount.
+
 - Synoptic surface-analysis chart in the strategic screen (work doc
   #11): a bundled `synoptic-map.json` maps GMDSS zone integers to
   per-agency chart URLs (NOAA TGFTP backbone, BoM radiofax for the

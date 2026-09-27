@@ -90,6 +90,7 @@ const BRIEF_GENERATED_AT_PATH = "navigation.briefing.generatedAt";
 const BRIEF_ROUTE_PATH = "navigation.briefing.route";
 const BRIEF_HAS_NEW_PATH = "navigation.briefing.hasNew";
 const BRIEF_ACK_PATH = "navigation.briefing.acknowledgedAt";
+const BRIEF_COMFORT_PATH = "navigation.briefing.comfort";
 
 /**
  * How often the cron ticker checks whether a publication window is due.
@@ -484,8 +485,50 @@ module.exports = (app) => {
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "here.json"), JSON.stringify(payload));
     // Tile freshness; the route field stays empty in here mode
-    recordBriefCompile(payload.metadata.fetchedAt, "");
+    payload.comfortTier = await currentComfortTier(payload);
+    recordBriefCompile(payload.metadata.fetchedAt, "", payload.comfortTier);
     return { cachedAt: payload.metadata.fetchedAt };
+  }
+
+  let physicsPromise = null;
+
+  /**
+   * Current comfort tier for the tile (work doc #8): the payload's
+   * first forecast step through the Sereno comfort model at SOG 0 —
+   * the same math the conditions-here view runs client-side.
+   *
+   * @param {object} payload
+   * @returns {Promise<string|null>}
+   */
+  async function currentComfortTier(payload) {
+    try {
+      const step = payload?.waypoints?.[0]?.forecasts?.[0];
+      if (!step) {
+        return null;
+      }
+      physicsPromise ??= import("../public/sereno-physics.mjs");
+      const { serenoComfort, travelDirection } = await physicsPromise;
+      const comfort = serenoComfort(
+        {
+          hsMeters: step.marine?.hsCombined ?? 0,
+          tpSeconds: step.marine?.tpCombined ?? 0,
+          waveTravelDirectionRad: travelDirection(
+            (step.marine?.dirCombined ?? 0) * (Math.PI / 180),
+          ),
+        },
+        {
+          sogKnots: 0,
+          headingRad: 0,
+          waterlineLengthM: simulationConfig.waterline_length_m,
+          kHeel: simulationConfig.k_heel,
+          kPitch: simulationConfig.k_pitch,
+        },
+        { twsKnots: step.surface?.tws ?? 0, twaRad: 0 },
+      );
+      return comfort.comfort ?? null;
+    } catch (_error) {
+      return null;
+    }
   }
 
   /** Single-flight refresh chain: the online-transition refresh and
@@ -562,7 +605,12 @@ module.exports = (app) => {
     } catch (_error) {
       // Offline or missing resources API: the id still identifies it
     }
-    recordBriefCompile(payload.metadata.fetchedAt, routeName);
+    payload.comfortTier = await currentComfortTier(payload);
+    recordBriefCompile(
+      payload.metadata.fetchedAt,
+      routeName,
+      payload.comfortTier,
+    );
     return {
       routeId,
       cached: true,
@@ -642,6 +690,7 @@ module.exports = (app) => {
           values: [
             { path: BRIEF_GENERATED_AT_PATH, value: briefMeta.generatedAt },
             { path: BRIEF_ROUTE_PATH, value: briefMeta.route },
+            { path: BRIEF_COMFORT_PATH, value: briefMeta.comfort },
             { path: BRIEF_HAS_NEW_PATH, value: hasNew },
           ],
         },
@@ -656,9 +705,10 @@ module.exports = (app) => {
    * @param {string|null} generatedAt
    * @param {string|null} route - Route name; empty string in here mode
    */
-  function recordBriefCompile(generatedAt, route) {
+  function recordBriefCompile(generatedAt, route, comfort = null) {
     briefMeta.generatedAt = generatedAt;
     briefMeta.route = route;
+    briefMeta.comfort = comfort;
     publishBriefMeta();
   }
 
@@ -697,7 +747,11 @@ module.exports = (app) => {
         } catch (_error) {
           // Offline or missing resources API: the id still identifies it
         }
-        recordBriefCompile(cached.payload.metadata.fetchedAt, name);
+        recordBriefCompile(
+          cached.payload.metadata.fetchedAt,
+          name,
+          cached.payload.comfortTier ?? null,
+        );
         return;
       }
     } catch (_error) {
@@ -706,7 +760,11 @@ module.exports = (app) => {
     try {
       const here = await loadHere();
       if (here?.payload?.metadata?.fetchedAt) {
-        recordBriefCompile(here.payload.metadata.fetchedAt, "");
+        recordBriefCompile(
+          here.payload.metadata.fetchedAt,
+          "",
+          here.payload.comfortTier ?? null,
+        );
       }
     } catch (_error) {
       // Nothing cached at all: tile stays muted

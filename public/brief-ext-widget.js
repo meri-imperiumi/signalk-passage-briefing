@@ -26,10 +26,16 @@ const STREAM_PATHS = [
   "navigation.briefing.generatedAt",
   "navigation.briefing.route",
   "navigation.briefing.hasNew",
+  "navigation.briefing.comfort",
 ];
 
 /** The webapp served by the webapp keyword (fallback brief surface). */
-const BRIEF_URL = "/plugins/signalk-passage-briefing/";
+// SK v2 serves webapps under /@<npm-scope>/<name>/ (the package is
+// scoped); v1 uses /plugins/<name>/. Probe at tap time and fall back.
+const BRIEF_URLS = [
+  "/@meri-imperiumi/signalk-passage-briefing/",
+  "/plugins/signalk-passage-briefing/",
+];
 
 const template = document.createElement("template");
 template.innerHTML = /* html */ `
@@ -119,6 +125,7 @@ template.innerHTML = /* html */ `
       <span class="badge" id="badge">NEW</span>
     </div>
     <div class="route" id="route">No brief</div>
+    <div class="comfort" id="comfort"></div>
     <div class="age" id="age">not compiled yet</div>
   </div>
 `;
@@ -173,13 +180,24 @@ class BriefExtWidget extends HTMLElement {
   /**
    * Short tap: open the brief webapp in a new browser context.
    *
-   * @returns {void}
+   * @returns {Promise<void>}
    */
-  onTap() {
+  async onTap() {
     if (!this.connected || this.longPressed) {
       return;
     }
-    window.open(BRIEF_URL, "_blank");
+    for (const url of BRIEF_URLS) {
+      try {
+        const res = await fetch(url, { method: "GET" });
+        if (res.ok) {
+          window.open(url, "_blank");
+          return;
+        }
+      } catch (_error) {
+        // Try the next mount
+      }
+    }
+    window.open(BRIEF_URLS[0], "_blank");
   }
 
   /**
@@ -249,6 +267,9 @@ class BriefExtWidget extends HTMLElement {
     this.classList.remove("ok", "new", "muted");
     this.classList.add(model.severity);
     root.querySelector("#route").textContent = model.title;
+    const comfort = this.values["navigation.briefing.comfort"];
+    const comfortEl = root.querySelector("#comfort");
+    comfortEl.textContent = comfort ? String(comfort).toUpperCase() : "";
     root.querySelector("#age").textContent = model.detail;
     root.querySelector("#badge").classList.toggle("on", model.badge);
   }
