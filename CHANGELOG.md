@@ -4,6 +4,21 @@
 
 ### Added
 
+- Empty-state conditions view (work doc #7): with no active or
+  explicitly requested route, `/api/briefing` serves a **here
+  payload** — the UnifiedWeatherPayload shape with a single waypoint
+  at the vessel's position and 24 forward hourly steps, cached as
+  `weather/here.json` with a 3 h staleness flag. The cron/oneshot
+  fetch keeps it fresh while moored or anchored (`POST
+  /api/briefing/refresh` without a route re-fetches it), and
+  bulletin filtering runs against the position alone. The webapp
+  derives the mode from the served payload: an explicit "Conditions
+  here" entry in the route picker leads it whenever no route is
+  being sailed, rendering the new `<conditions-here>` view (no
+  tabs): position, conditions now (wind/gust/sea/current/pressure
+  trend), the 24 h comfort sparkline evaluated at SOG 0 (Sereno
+  apparent wind ≈ true wind at anchor), filtered warnings, and —
+  once work doc #3 lands — celestial/space events.
 - Plugin skeleton: Signal K lifecycle (`plugin/index.js`) with the SPEC
   §2.1 configuration schema, delta subscriptions for
   `network.internet.state`, `navigation.state` and house state of

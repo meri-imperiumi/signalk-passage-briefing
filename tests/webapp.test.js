@@ -21,6 +21,8 @@ test("webapp view models", async (t) => {
     sparklineColumns,
     splitSevere,
     tacticalNow,
+    hereHourly,
+    hereNow,
   } = await import("../public/components/models.mjs");
 
   await t.test("fmtUtc renders MM-DD HH:MMZ in UTC", () => {
@@ -147,6 +149,56 @@ test("webapp view models", async (t) => {
       { text: "plain text only", severe: false },
     ]);
     assert.deepEqual(splitSevere(null), []);
+  });
+
+  await t.test("hereHourly evaluates comfort at SOG 0 over 24h", () => {
+    const payload = {
+      metadata: { fetchedAt: "2026-09-27T10:00:00.000Z", mode: "here" },
+      waypoints: [
+        {
+          lat: -21.1,
+          lon: -175.2,
+          forecasts: Array.from({ length: 40 }, (_, i) => ({
+            timestamp: new Date(
+              new Date("2026-09-27T00:00:00.000Z").getTime() + i * 3600000,
+            ).toISOString(),
+            surface: { tws: 12, twd: 45, mslp: 1013, gust: 18 },
+            marine: {
+              hsCombined: 1.2,
+              tpCombined: 7,
+              dirCombined: 160,
+            },
+            current: { drift: 1, set: 45 },
+          })),
+        },
+      ],
+    };
+    const rows = hereHourly(payload, { waterline_length_m: 9.4 });
+    assert.equal(rows.length, 24, "24 hourly rows from fetchedAt");
+    assert.equal(rows[0].hoursFromNow, 0);
+    assert.equal(rows[0].sogKnots, 0);
+    // At SOG 0 AWS equals TWS
+    assert.equal(rows[0].awsKnots, 12);
+    assert.ok(typeof rows[0].azMs2 === "number");
+    assert.ok(typeof rows[0].comfortLevel === "string");
+    assert.ok(typeof rows[0].night === "boolean");
+
+    const now = hereNow(payload, rows);
+    assert.equal(now.twsKnots, 12);
+    assert.equal(now.gustKnots, 18);
+    assert.equal(now.hsMeters, 1.2);
+    assert.equal(now.currentDriftKnots, 1);
+    assert.equal(now.mslpHpa, 1013);
+    assert.equal(now.mslpTrend, 0);
+    assert.equal(now.comfortLevel, rows[0].comfortLevel);
+  });
+
+  await t.test("hereNow and hereHourly handle empty payloads", () => {
+    assert.deepEqual(hereHourly(null), []);
+    const now = hereNow(null);
+    assert.equal(now.comfortLevel, null);
+    assert.equal(now.twsKnots, null);
+    assert.equal(now.stamp, "");
   });
 
   await t.test("etaTable builds percentile rows and motor totals", () => {

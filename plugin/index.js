@@ -20,7 +20,7 @@
 
 const { join } = require("node:path");
 const { homedir } = require("node:os");
-const { readFile, writeFile } = require("node:fs/promises");
+const { mkdir, readFile, writeFile } = require("node:fs/promises");
 
 const { PassageStateMachine } = require("./state-machine.js");
 const { PassageDatabase } = require("./sqlite-db.js");
@@ -39,6 +39,7 @@ const {
 } = require("./history-backfill.js");
 const {
   DEFAULT_FORECAST_DAYS,
+  distanceNm: distanceNmLatLon,
   fetchWeatherAlongTrack,
   listCachedRoutes,
   loadPayload,
@@ -76,6 +77,13 @@ const WATCHED_PATHS = [
  * How often the cron ticker checks whether a publication window is due.
  */
 const CRON_TICK_INTERVAL_MS = 60 * 1000;
+
+/**
+ * Age at which a here payload is flagged stale to the webapp
+ * (work doc #7): the vessel position moves, so conditions at "here"
+ * go stale faster than a route briefing.
+ */
+const HERE_TTL_MS = 3 * 60 * 60 * 1000;
 
 /**
  * Plugin configuration defaults (SPEC §2.1). The spool directory
@@ -232,6 +240,83 @@ module.exports = (app) => {
   }
 
   /**
+   * Vessel position from the Signal K self path (work doc #7 here
+   * mode). Both wrapped and plain value shapes are unwrapped.
+   *
+   * @returns {{lat: number, lon: number}|null}
+   */
+  function vesselPosition() {
+    if (typeof app.getSelfPath !== "function") {
+      return null;
+    }
+    const raw = app.getSelfPath("navigation.position");
+    const unwrap = (v) =>
+      v && typeof v === "object" && v.value !== undefined ? v.value : v;
+    const position = unwrap(raw);
+    const lat = position?.latitude;
+    const lon = position?.longitude;
+    return typeof lat === "number" && typeof lon === "number"
+      ? { lat, lon }
+      : null;
+  }
+
+  /**
+   * Loads the cached here payload (`weather/here.json`), null when
+   * nothing is cached.
+   *
+   * @returns {Promise<{payload: object, cachedAt: string|null, stale: boolean}|null>}
+   */
+  async function loadHere() {
+    try {
+      const file = join(app.getDataDirPath(), "weather", "here.json");
+      const payload = JSON.parse(await readFile(file, "utf8"));
+      const cachedAt = payload?.metadata?.fetchedAt ?? null;
+      const age = cachedAt
+        ? Date.now() - new Date(cachedAt).getTime()
+        : Infinity;
+      return { payload, cachedAt, stale: age > HERE_TTL_MS };
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  /**
+   * Fetches the here payload: conditions at the vessel's current
+   * position for the next 24 hours (work doc #7). Same Unified
+   * Weather Payload shape with a single waypoint, so the webapp's
+   * rendering machinery works unchanged; bulletin filtering runs
+   * against the position alone.
+   *
+   * @returns {Promise<{cachedAt: string}>}
+   */
+  async function refreshHere() {
+    const position = vesselPosition();
+    if (!position) {
+      throw new Error("No vessel position available");
+    }
+    const waypoints = [
+      { lat: position.lat, lon: position.lon, distanceFromStartNm: 0 },
+    ];
+    // Bulletins ride the same online window, filtered to the position
+    await refreshBulletinsOnline("here", waypoints);
+    // forecast_days=2: Open-Meteo's first day starts at 00Z, so two
+    // days guarantee 24 forward hours from any fetch time
+    const payload = await fetchWeatherAlongTrack({
+      waypoints,
+      forecastDays: 2,
+    });
+    payload.metadata.mode = "here";
+    const bulletin = await bulletinForTrack(waypoints);
+    if (bulletin) {
+      payload.metareaBulletin = bulletin;
+    }
+    const dir = join(app.getDataDirPath(), "weather");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "here.json"), JSON.stringify(payload));
+    return { cachedAt: payload.metadata.fetchedAt };
+  }
+
+  /**
    * Fetches and caches the briefing payload for a route. Internet
    * weather is only fetched while the link is up; everything served
    * afterwards comes from the cache (on passage the boat is online
@@ -292,7 +377,8 @@ module.exports = (app) => {
       setStatus(`Fetch skipped while offline (${trigger})`);
       return;
     }
-    // The route being sailed wins; otherwise re-brief the last one
+    // The route being sailed wins; otherwise re-brief the last one;
+    // with no route at all keep conditions-here fresh (work doc #7)
     let routeId = activeRouteId(observations[ACTIVE_ROUTE_PATH]);
     if (!routeId) {
       try {
@@ -303,9 +389,18 @@ module.exports = (app) => {
           )
         ).trim();
       } catch (_error) {
-        setStatus("No route briefed yet: pick a route in the webapp");
-        return;
+        routeId = null;
       }
+    }
+    if (!routeId) {
+      try {
+        const here = await refreshHere();
+        setStatus(`Conditions here cached at ${here.cachedAt} (${trigger})`);
+      } catch (error) {
+        app.error(`Here refresh failed (${trigger}): ${error.message}`);
+        setStatus(`Here refresh failed: ${error.message}`);
+      }
+      return;
     }
     try {
       const result = await refreshBriefing(routeId);
@@ -539,10 +634,6 @@ module.exports = (app) => {
       router.post("/api/briefing/refresh", async (req, res) => {
         const routeId =
           typeof req.query.route === "string" ? req.query.route : "";
-        if (!routeId) {
-          res.status(400).json({ error: "route query parameter required" });
-          return;
-        }
         if (!isOnline()) {
           res
             .status(503)
@@ -550,6 +641,13 @@ module.exports = (app) => {
           return;
         }
         try {
+          // No route requested: refresh conditions at the vessel
+          // (work doc #7 here mode)
+          if (!routeId) {
+            const here = await refreshHere();
+            res.json({ mode: "here", cached: true, cachedAt: here.cachedAt });
+            return;
+          }
           const days =
             typeof req.query.days === "string" && Number(req.query.days) > 0
               ? Number(req.query.days)
@@ -561,14 +659,36 @@ module.exports = (app) => {
         }
       });
 
+      /**
+       * Serves a briefing payload with a top-level `mode` the webapp
+       * routes on: `"route"` for the two-screen passage view,
+       * `"here"` for the single conditions view (work doc #7). Mode
+       * is derived from state: an explicit or active route wins,
+       * everything else is here mode.
+       */
       router.get("/api/briefing", async (req, res) => {
         const routeId =
           typeof req.query.route === "string" ? req.query.route : "";
-        if (!routeId) {
-          res.status(400).json({ error: "route query parameter required" });
+        const activeId = activeRouteId(observations[ACTIVE_ROUTE_PATH]);
+        const effectiveRoute = routeId || activeId;
+        if (!effectiveRoute) {
+          const here = await loadHere();
+          if (!here) {
+            res.status(404).json({
+              error: "No cached briefing: refresh while online",
+            });
+            return;
+          }
+          res.json({
+            mode: "here",
+            payload: here.payload,
+            cachedAt: here.cachedAt,
+            stale: here.stale,
+            online: isOnline(),
+          });
           return;
         }
-        const cached = await loadPayload(app.getDataDirPath(), routeId);
+        const cached = await loadPayload(app.getDataDirPath(), effectiveRoute);
         if (!cached) {
           res.status(404).json({ error: "No cached briefing for this route" });
           return;
@@ -583,7 +703,12 @@ module.exports = (app) => {
             cached.payload.metareaBulletin = bulletin;
           }
         }
-        res.json({ ...cached, online: isOnline() });
+        res.json({
+          mode: "route",
+          routeId: effectiveRoute,
+          ...cached,
+          online: isOnline(),
+        });
       });
 
       router.get("/api/bulletin", async (req, res) => {

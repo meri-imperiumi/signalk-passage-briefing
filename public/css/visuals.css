@@ -216,6 +216,10 @@ select:focus {
   gap: 0;
 }
 
+.tab-bar[hidden] {
+  display: none;
+}
+
 .tab-bar button {
   flex: 1;
   border-right: none;

@@ -54,7 +54,7 @@ class PassageOutlook extends HTMLElement {
         <select id="route" aria-label="Route" style="max-width: 16rem"></select>
         <span class="pill" id="online">OFFLINE</span>
       </header>
-      <div class="tab-bar" role="tablist">
+      <div class="tab-bar" role="tablist" id="tab-bar">
         <button id="tab-tactical" role="tab" aria-selected="true">Tactical</button>
         <button id="tab-strategic" role="tab" aria-selected="false">Strategic</button>
       </div>
@@ -63,6 +63,7 @@ class PassageOutlook extends HTMLElement {
 
     this._routeSelect = this.shadowRoot.getElementById("route");
     this._onlinePill = this.shadowRoot.getElementById("online");
+    this._tabBar = this.shadowRoot.getElementById("tab-bar");
     this._tabTactical = this.shadowRoot.getElementById("tab-tactical");
     this._tabStrategic = this.shadowRoot.getElementById("tab-strategic");
     this._view = this.shadowRoot.getElementById("view");
@@ -129,20 +130,27 @@ class PassageOutlook extends HTMLElement {
       const select = this._routeSelect;
       select.innerHTML = "";
       const routesList = routes ?? [];
-      // Preselect the route being sailed, else the first cached route
-      const preferred =
-        routesList.find((r) => r.active && r.id === status.activeRouteId) ??
-        routesList.find((r) => r.active) ??
-        routesList[0];
+      // The empty-state option always leads the picker (work doc #7)
+      const hereOption = document.createElement("option");
+      hereOption.value = "";
+      hereOption.textContent = "Conditions here";
+      select.appendChild(hereOption);
       for (const route of routesList) {
         const option = document.createElement("option");
         option.value = route.id;
         option.textContent = `${route.active ? "▶ " : ""}${route.name} (${route.distanceNm ?? "?"} nm)`;
         select.appendChild(option);
       }
+      // Preselect the route being sailed; everything else is here mode
+      const preferred = routesList.find(
+        (r) => r.active && r.id === status.activeRouteId,
+      );
       if (preferred) {
         select.value = preferred.id;
         this.loadBriefing(preferred.id);
+      } else {
+        select.value = "";
+        this.loadBriefing("");
       }
     } catch (error) {
       this.showError(`Server unreachable: ${error.message}`);
@@ -150,21 +158,22 @@ class PassageOutlook extends HTMLElement {
   }
 
   /**
-   * Fetches the cached briefing for a route and simulates it; when
-   * nothing is cached offers a refresh (online only).
+   * Fetches the briefing for a route, or conditions-here when the
+   * route id is empty (work doc #7): the served mode drives the
+   * view. When nothing is cached offers a refresh (online only).
    *
-   * @param {string} routeId
+   * @param {string} routeId - Route resource id, or "" for here mode
    */
   async loadBriefing(routeId) {
-    if (!routeId) {
-      return;
-    }
+    const query = routeId ? `?route=${encodeURIComponent(routeId)}` : "";
     try {
-      this._briefing = await fetchJson(
-        `${PLUGIN_API}/briefing?route=${encodeURIComponent(routeId)}`,
-      );
+      this._briefing = await fetchJson(`${PLUGIN_API}/briefing${query}`);
       this.renderStale(false);
-      this.simulate();
+      if (this._briefing.mode === "here") {
+        this.renderHere();
+      } else {
+        this.simulate();
+      }
     } catch (error) {
       if (String(error.message).startsWith("404")) {
         this._briefing = null;
@@ -178,14 +187,9 @@ class PassageOutlook extends HTMLElement {
   /** Refreshes the selected route's briefing while online. */
   async refreshBriefing() {
     const routeId = this._routeSelect.value;
-    if (!routeId) {
-      return;
-    }
+    const query = routeId ? `?route=${encodeURIComponent(routeId)}` : "";
     try {
-      await fetchJson(
-        `${PLUGIN_API}/briefing/refresh?route=${encodeURIComponent(routeId)}`,
-        120000,
-      );
+      await fetchJson(`${PLUGIN_API}/briefing/refresh${query}`, 120000);
       await this.loadBriefing(routeId);
     } catch (error) {
       this.showError(`Refresh failed: ${error.message}`);
@@ -252,6 +256,11 @@ class PassageOutlook extends HTMLElement {
 
   /** Routes to the current hash tab and paints cached data. */
   renderRoute() {
+    if (this._briefing?.mode === "here") {
+      this.renderHere();
+      return;
+    }
+    this._tabBar.hidden = false;
     const strategic = location.hash === "#/strategic";
     this._tabTactical.setAttribute("aria-selected", String(!strategic));
     this._tabStrategic.setAttribute("aria-selected", String(strategic));
@@ -260,6 +269,20 @@ class PassageOutlook extends HTMLElement {
       : "<tactical-dashboard></tactical-dashboard>";
     if (this._exceptions) {
       this.renderData();
+    }
+  }
+
+  /**
+   * Here mode (work doc #7): single view, no tabs — the empty state
+   * reads as intentional. No passage simulation runs; the view
+   * computes its rows client-side at SOG 0.
+   */
+  renderHere() {
+    this._tabBar.hidden = true;
+    this._view.innerHTML = "<conditions-here></conditions-here>";
+    const here = this._view.querySelector("conditions-here");
+    if (here && this._briefing?.payload) {
+      here.setHere(this._briefing.payload, this._config ?? {});
     }
   }
 

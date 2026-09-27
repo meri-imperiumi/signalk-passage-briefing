@@ -96,8 +96,13 @@ describe("plugin", () => {
     ]);
   });
 
-  test("internet transition triggers a oneshot fetch via plugin status", async () => {
+  test("internet transition with no route briefs conditions here", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
     const app = createMockApp();
+    app.getSelfPath = (path) =>
+      path === "navigation.position"
+        ? { latitude: -21.1, longitude: -175.2 }
+        : null;
     const plugin = pluginFactory(app);
     plugin.start({});
 
@@ -107,23 +112,174 @@ describe("plugin", () => {
         {
           values: [
             { path: "network.internet.state", value: "online" },
-            { path: "navigation.state", value: "sailing" },
+            { path: "navigation.state", value: "moored" },
           ],
         },
       ],
     });
     const tick = () => new Promise((resolve) => setTimeout(resolve, 60));
-    await tick();
-    assert.match(app.getStatus(), /No route briefed yet/);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockOpenMeteo();
+    try {
+      await tick();
+      assert.match(app.getStatus(), /Conditions here cached at/);
+      assert.ok(
+        existsSync(join(app.dataDir, "weather", "here.json")),
+        "here payload cached",
+      );
 
-    // Stable repeat: no new fetch.
+      // Stable repeat: re-briefs rather than dead-ending.
+      feed({
+        updates: [
+          { values: [{ path: "network.internet.state", value: "online" }] },
+        ],
+      });
+      await tick();
+      assert.match(app.getStatus(), /Conditions here cached at/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    // No position: the here refresh degrades to a status note
+    const app2 = createMockApp();
+    const plugin2 = pluginFactory(app2);
+    plugin2.start({});
+    app2.getDeltaHandlers()[0]({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "online" }] },
+      ],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.match(app2.getStatus(), /Here refresh failed/);
+    plugin2.stop();
+
+    plugin.stop();
+  });
+
+  test("here mode: served from cache with mode marker and refreshed online", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const app = createMockApp();
+    app.getSelfPath = (path) =>
+      path === "navigation.position"
+        ? { latitude: -21.1, longitude: -175.2 }
+        : null;
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const call = async (path, req = { query: {} }) => {
+      const route = app.getRoutes().find((r) => r.path === path);
+      const res = {
+        code: null,
+        payload: null,
+        status(code) {
+          this.code = code;
+          return this;
+        },
+        json(payload) {
+          this.payload = payload;
+        },
+      };
+      await route.handler(req, res);
+      return res;
+    };
+
     feed({
       updates: [
         { values: [{ path: "network.internet.state", value: "online" }] },
       ],
     });
-    await tick();
-    assert.match(app.getStatus(), /No route briefed yet/);
+
+    // Nothing cached yet
+    let res = await call("/api/briefing");
+    assert.equal(res.code, 404);
+
+    const originalFetch = globalThis.fetch;
+    let forecastCalls = 0;
+    globalThis.fetch = async (url, opts) => {
+      if (String(url).includes("/v1/forecast")) {
+        forecastCalls += 1;
+      }
+      return mockOpenMeteo()(url, opts);
+    };
+    try {
+      // Refresh without a route targets here mode
+      res = await call("/api/briefing/refresh");
+      assert.equal(res.code, null);
+      assert.equal(res.payload.mode, "here");
+      assert.ok(res.payload.cachedAt);
+      assert.ok(forecastCalls >= 1, "forecast fetched for here mode");
+
+      // Served with the here marker, one waypoint at the vessel
+      res = await call("/api/briefing");
+      assert.equal(res.code, null);
+      assert.equal(res.payload.mode, "here");
+      assert.equal(res.payload.stale, false);
+      assert.equal(res.payload.payload.waypoints.length, 1);
+      assert.equal(res.payload.payload.waypoints[0].lat, -21.1);
+      assert.equal(res.payload.payload.waypoints[0].lon, -175.2);
+      assert.equal(res.payload.payload.metadata.mode, "here");
+
+      // Offline: the cache still serves
+      feed({
+        updates: [
+          { values: [{ path: "network.internet.state", value: "offline" }] },
+        ],
+      });
+      res = await call("/api/briefing");
+      assert.equal(res.code, null);
+      assert.equal(res.payload.online, false);
+      assert.equal(res.payload.mode, "here");
+      feed({
+        updates: [
+          { values: [{ path: "network.internet.state", value: "online" }] },
+        ],
+      });
+
+      // Route briefing still wins when requested explicitly
+      app.resourcesApi = {
+        async getResource(resType, resId) {
+          if (resType === "routes" && resId === "r1") {
+            return {
+              name: "Test",
+              feature: {
+                geometry: {
+                  coordinates: [
+                    [0, 0],
+                    [0, 1.5],
+                  ],
+                },
+              },
+            };
+          }
+          throw new Error("not found");
+        },
+      };
+      res = await call("/api/briefing/refresh", { query: { route: "r1" } });
+      assert.equal(res.code, null);
+      res = await call("/api/briefing", { query: { route: "r1" } });
+      assert.equal(res.payload.mode, "route");
+      assert.equal(res.payload.routeId, "r1");
+
+      // The active route wins over here mode without an explicit one
+      feed({
+        updates: [
+          {
+            values: [
+              {
+                path: "navigation.course.activeRoute",
+                value: { href: "/resources/routes/r1" },
+              },
+            ],
+          },
+        ],
+      });
+      res = await call("/api/briefing");
+      assert.equal(res.payload.mode, "route");
+      assert.equal(res.payload.routeId, "r1");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
 
     plugin.stop();
   });

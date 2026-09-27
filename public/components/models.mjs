@@ -7,6 +7,10 @@
  * @module models
  */
 
+import { isNight, serenoComfort, travelDirection } from "../sereno-physics.mjs";
+
+const DEG = Math.PI / 180;
+
 /**
  * Comfort tier order (SPEC §5.2) with the CSS custom property that
  * carries the tier color (see css/visuals.css).
@@ -166,6 +170,117 @@ export function splitSevere(text) {
     tokens.push({ text: text.slice(last), severe: false });
   }
   return tokens;
+}
+
+/**
+ * Hourly comfort rows for the conditions-here view (work doc #7):
+ * the here payload's single waypoint evaluated at SOG 0, where the
+ * Sereno apparent wind is effectively the true wind, so the comfort
+ * mapping stays honest for life at anchor. Rows share the passage
+ * simulation's hourly shape so the sparkline machinery is reused.
+ *
+ * @param {object|null} payload - Here payload (UnifiedWeatherPayload
+ *   with one waypoint, `metadata.mode === "here"`)
+ * @param {object} [config] - Simulation config subset
+ *   (waterline_length_m, k_heel, k_pitch)
+ * @param {number} [hours=24]
+ * @returns {Array<{hoursFromNow: number, timestamp: string, awsKnots: number, azMs2: number, comfortLevel: string, twsKnots: number|null, sogKnots: number, night: boolean}>}
+ */
+export function hereHourly(payload, config = {}, hours = 24) {
+  const waypoint = payload?.waypoints?.[0];
+  const steps = waypoint?.forecasts ?? [];
+  if (steps.length === 0) {
+    return [];
+  }
+  const start = payload?.metadata?.fetchedAt
+    ? new Date(payload.metadata.fetchedAt)
+    : new Date(steps[0].timestamp);
+  const rows = [];
+  for (const step of steps) {
+    const t = new Date(step.timestamp);
+    const hoursFromNow = (t.getTime() - start.getTime()) / 3600000;
+    if (hoursFromNow < 0 || hoursFromNow >= hours) {
+      continue;
+    }
+    const tws = step.surface?.tws;
+    const comfort = serenoComfort(
+      {
+        hsMeters: step.marine?.hsCombined ?? 0,
+        tpSeconds: step.marine?.tpCombined ?? 0,
+        waveTravelDirectionRad: travelDirection(
+          (step.marine?.dirCombined ?? 0) * DEG,
+        ),
+      },
+      {
+        sogKnots: 0,
+        headingRad: 0,
+        waterlineLengthM: config.waterline_length_m ?? 9.4,
+        kHeel: config.k_heel ?? 0.35,
+        kPitch: config.k_pitch ?? 0.4,
+      },
+      { twsKnots: tws ?? 0, twaRad: 0 },
+    );
+    rows.push({
+      hoursFromNow: Math.round(hoursFromNow * 10) / 10,
+      timestamp: step.timestamp,
+      awsKnots: comfort.awsKnots,
+      azMs2: comfort.acceleration.value,
+      comfortLevel: comfort.comfort,
+      twsKnots: tws,
+      sogKnots: 0,
+      night: isNight(t, waypoint.lat, waypoint.lon),
+    });
+  }
+  return rows;
+}
+
+/**
+ * Conditions-now summary for the conditions-here view (work doc #7):
+ * the first forecast step, plus the 3-hour pressure trend.
+ *
+ * @param {object|null} payload - Here payload
+ * @param {Array<object>} [rows] - {@link hereHourly} rows for comfort
+ * @returns {{comfortLevel: string|null, color: string, twsKnots: number|null, twdDeg: number|null, gustKnots: number|null, hsMeters: number|null, tpSeconds: number|null, currentDriftKnots: number|null, currentSetDeg: number|null, mslpHpa: number|null, mslpTrend: number|null, stamp: string}}
+ */
+export function hereNow(payload, rows = []) {
+  const step = payload?.waypoints?.[0]?.forecasts?.[0];
+  if (!step) {
+    return {
+      comfortLevel: null,
+      color: comfortColor(null),
+      twsKnots: null,
+      twdDeg: null,
+      gustKnots: null,
+      hsMeters: null,
+      tpSeconds: null,
+      currentDriftKnots: null,
+      currentSetDeg: null,
+      mslpHpa: null,
+      mslpTrend: null,
+      stamp: "",
+    };
+  }
+  const forecasts = payload.waypoints[0].forecasts;
+  const mslpNow = step.surface?.mslp ?? null;
+  const mslp3h = forecasts[3]?.surface?.mslp;
+  const mslpTrend =
+    mslpNow != null && typeof mslp3h === "number"
+      ? Math.round((mslp3h - mslpNow) * 10) / 10
+      : null;
+  return {
+    comfortLevel: rows[0]?.comfortLevel ?? null,
+    color: comfortColor(rows[0]?.comfortLevel),
+    twsKnots: step.surface?.tws ?? null,
+    twdDeg: step.surface?.twd ?? null,
+    gustKnots: step.surface?.gust ?? null,
+    hsMeters: step.marine?.hsCombined ?? null,
+    tpSeconds: step.marine?.tpCombined ?? null,
+    currentDriftKnots: step.current?.drift ?? null,
+    currentSetDeg: step.current?.set ?? null,
+    mslpHpa: mslpNow,
+    mslpTrend,
+    stamp: fmtUtc(step.timestamp),
+  };
 }
 
 /**
