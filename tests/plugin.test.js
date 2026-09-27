@@ -20,6 +20,10 @@ function createMockApp() {
   const errors = [];
   const subscriptions = [];
   const deltaHandlers = [];
+  const putHandlers = {};
+  const publishedDeltas = [];
+  const resourceProviders = [];
+  const mounts = [];
   const routes = [];
   const dataDir = mkdtempSync(join(tmpdir(), "passage-plugin-"));
   return {
@@ -37,6 +41,12 @@ function createMockApp() {
         deltaHandlers.push(onDelta);
       },
     },
+    handleMessage: (_source, delta) => publishedDeltas.push(delta),
+    registerResourceProvider: (provider) => resourceProviders.push(provider),
+    registerPutHandler: (context, path, handler) => {
+      putHandlers[path] = { context, handler };
+    },
+    use: (prefix, handler) => mounts.push({ prefix, handler }),
     router: {
       get(path, handler) {
         routes.push({ method: "get", path, handler });
@@ -51,6 +61,10 @@ function createMockApp() {
     getSubscriptions: () => subscriptions,
     getDeltaHandlers: () => deltaHandlers,
     getRoutes: () => routes,
+    getPutHandlers: () => putHandlers,
+    getPublishedDeltas: () => publishedDeltas,
+    getResourceProviders: () => resourceProviders,
+    getMounts: () => mounts,
   };
 }
 
@@ -804,6 +818,107 @@ describe("plugin", () => {
     }
 
     plugin.stop();
+  });
+
+  test("plotter tile: publishes brief meta, acknowledge clears hasNew", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const app = createMockApp();
+    app.resourcesApi = {
+      async getResource(resType, resId) {
+        if (resType === "routes" && resId === "r1") {
+          return {
+            name: "Sabado Crossing",
+            feature: {
+              geometry: {
+                coordinates: [
+                  [0, 0],
+                  [0, 1.5],
+                ],
+              },
+            },
+          };
+        }
+        throw new Error("not found");
+      },
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "online" }] },
+      ],
+    });
+
+    // Provider + asset mount registered
+    const providers = app.getResourceProviders();
+    assert.equal(providers.length, 1);
+    assert.equal(providers[0].type, "plotterExtensions");
+    assert.equal(
+      app.getMounts()[0].prefix,
+      "/plotterext/signalk-passage-briefing",
+    );
+
+    const values = (delta) =>
+      Object.fromEntries(delta.updates[0].values.map((v) => [v.path, v.value]));
+    const briefValues = () =>
+      app
+        .getPublishedDeltas()
+        .filter((d) =>
+          d.updates[0].values.some((v) =>
+            v.path.startsWith("navigation.briefing."),
+          ),
+        )
+        .map(values);
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockOpenMeteo();
+    try {
+      const call = async (path, req = { query: {} }) => {
+        const r = app.getRoutes().find((x) => x.path === path);
+        const res = {
+          code: null,
+          payload: null,
+          status(c) {
+            this.code = c;
+            return this;
+          },
+          json(p) {
+            this.payload = p;
+          },
+        };
+        await r.handler(req, res);
+        return res;
+      };
+      await call("/api/briefing/refresh", { query: { route: "r1" } });
+
+      const meta = briefValues().at(-1);
+      assert.equal(meta["navigation.briefing.route"], "Sabado Crossing");
+      assert.equal(meta["navigation.briefing.hasNew"], true);
+      assert.ok(meta["navigation.briefing.generatedAt"]);
+
+      // Acknowledge put clears the NEW badge
+      const ack = app.getPutHandlers()["navigation.briefing.acknowledgedAt"];
+      assert.ok(ack, "ack put handler registered");
+      await ack.handler(
+        "vessels.self",
+        "navigation.briefing.acknowledgedAt",
+        meta["navigation.briefing.generatedAt"],
+      );
+      const after = briefValues().at(-1);
+      assert.equal(after["navigation.briefing.hasNew"], false);
+      assert.ok(
+        existsSync(join(app.dataDir, "weather", "ack.json")),
+        "ack persisted",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    // Stop empties the provider so hosts tear the context down
+    plugin.stop();
+    assert.deepEqual(await providers[0].methods.listResources(), {});
   });
 
   test("oneshot fetch prefers the active route over the last briefed one", async () => {

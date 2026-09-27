@@ -33,6 +33,7 @@ const { filterBulletin } = require("./bulletin-engine.js");
 const { loadBulletinCache, refreshBulletins } = require("./bulletin-source.js");
 const { fetchZoneBulletins, resolveZones } = require("./zone-source.js");
 const { fetchSpaceEvents } = require("./celestial-source.js");
+const { registerPlotterExtension } = require("./brief-ext.js");
 const {
   backfillSailEvents,
   createHistoryWindStats,
@@ -73,6 +74,12 @@ const WATCHED_PATHS = [
   HOUSE_SOC_PATH,
   ACTIVE_ROUTE_PATH,
 ];
+
+/** Flat paths the plotter tile consumes (work doc #8). */
+const BRIEF_GENERATED_AT_PATH = "navigation.briefing.generatedAt";
+const BRIEF_ROUTE_PATH = "navigation.briefing.route";
+const BRIEF_HAS_NEW_PATH = "navigation.briefing.hasNew";
+const BRIEF_ACK_PATH = "navigation.briefing.acknowledgedAt";
 
 /**
  * How often the cron ticker checks whether a publication window is due.
@@ -140,6 +147,12 @@ module.exports = (app) => {
     [NAVIGATION_STATE_PATH]: null,
     [HOUSE_SOC_PATH]: null,
   };
+  /** Latest compiled-brief metadata for the plotter tile (doc #8). */
+  const briefMeta = { generatedAt: null, route: null };
+  /** Last acknowledged `generatedAt` (tile NEW badge reset point). */
+  let lastAckAt = null;
+  /** Plotter-extension provider teardown (registered at start). */
+  let teardownPlotterExt = null;
 
   /**
    * Whether the internet link currently allows fetching.
@@ -320,6 +333,8 @@ module.exports = (app) => {
     const dir = join(app.getDataDirPath(), "weather");
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "here.json"), JSON.stringify(payload));
+    // Tile freshness; the route field stays empty in here mode
+    recordBriefCompile(payload.metadata.fetchedAt, "");
     return { cachedAt: payload.metadata.fetchedAt };
   }
 
@@ -368,6 +383,15 @@ module.exports = (app) => {
       join(app.getDataDirPath(), "weather", "last-route"),
       routeId,
     );
+    // Tile freshness (work doc #8): route name when resolvable
+    let routeName = routeId;
+    try {
+      const route = await app.resourcesApi?.getResource?.("routes", routeId);
+      routeName = route?.name ?? routeId;
+    } catch (_error) {
+      // Offline or missing resources API: the id still identifies it
+    }
+    recordBriefCompile(payload.metadata.fetchedAt, routeName);
     return {
       routeId,
       cached: true,
@@ -424,6 +448,97 @@ module.exports = (app) => {
     } catch (error) {
       app.error(`Briefing refresh failed (${trigger}): ${error.message}`);
       setStatus(`Briefing refresh failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Publishes the tile's flat scalar paths over the Signal K stream
+   * (work doc #8: tile data flows over the host bus relay — the
+   * widget never calls REST).
+   */
+  function publishBriefMeta() {
+    if (typeof app.handleMessage !== "function") {
+      return;
+    }
+    const hasNew =
+      briefMeta.generatedAt != null &&
+      (lastAckAt == null || briefMeta.generatedAt > lastAckAt);
+    app.handleMessage(PLUGIN_ID, {
+      context: "vessels.self",
+      updates: [
+        {
+          timestamp: new Date().toISOString(),
+          values: [
+            { path: BRIEF_GENERATED_AT_PATH, value: briefMeta.generatedAt },
+            { path: BRIEF_ROUTE_PATH, value: briefMeta.route },
+            { path: BRIEF_HAS_NEW_PATH, value: hasNew },
+          ],
+        },
+      ],
+    });
+  }
+
+  /**
+   * Records the compiled-brief freshness (refresh paths) and pushes
+   * it to the tile.
+   *
+   * @param {string|null} generatedAt
+   * @param {string|null} route - Route name; empty string in here mode
+   */
+  function recordBriefCompile(generatedAt, route) {
+    briefMeta.generatedAt = generatedAt;
+    briefMeta.route = route;
+    publishBriefMeta();
+  }
+
+  /**
+   * Restores the acknowledged timestamp and seeds the tile with the
+   * freshest cached compile (route briefing or here payload) after a
+   * restart.
+   */
+  async function seedBriefMeta() {
+    try {
+      lastAckAt = JSON.parse(
+        await readFile(
+          join(app.getDataDirPath(), "weather", "ack.json"),
+          "utf8",
+        ),
+      ).acknowledgedAt;
+    } catch (_error) {
+      lastAckAt = null;
+    }
+    try {
+      const routeId = (
+        await readFile(
+          join(app.getDataDirPath(), "weather", "last-route"),
+          "utf8",
+        )
+      ).trim();
+      const cached = await loadPayload(app.getDataDirPath(), routeId);
+      if (cached?.payload?.metadata?.fetchedAt) {
+        let name = routeId;
+        try {
+          const route = await app.resourcesApi?.getResource?.(
+            "routes",
+            routeId,
+          );
+          name = route?.name ?? routeId;
+        } catch (_error) {
+          // Offline or missing resources API: the id still identifies it
+        }
+        recordBriefCompile(cached.payload.metadata.fetchedAt, name);
+        return;
+      }
+    } catch (_error) {
+      // No last-route: fall through to the here payload
+    }
+    try {
+      const here = await loadHere();
+      if (here?.payload?.metadata?.fetchedAt) {
+        recordBriefCompile(here.payload.metadata.fetchedAt, "");
+      }
+    } catch (_error) {
+      // Nothing cached at all: tile stays muted
     }
   }
 
@@ -569,6 +684,38 @@ module.exports = (app) => {
       }, CRON_TICK_INTERVAL_MS);
       cronTimer.unref?.();
 
+      // Plotter-extension tile (work doc #8): manifest provider plus
+      // the public asset mount; goes empty on stop
+      if (typeof app.registerResourceProvider === "function") {
+        teardownPlotterExt = registerPlotterExtension(app, { id: PLUGIN_ID });
+      }
+      // Acknowledge put clears the tile's NEW badge
+      if (typeof app.registerPutHandler === "function") {
+        app.registerPutHandler(
+          "vessels.self",
+          BRIEF_ACK_PATH,
+          async (_ctx, _path, value) => {
+            if (typeof value === "string" && value) {
+              lastAckAt = value;
+              try {
+                const dir = join(app.getDataDirPath(), "weather");
+                await mkdir(dir, { recursive: true });
+                await writeFile(
+                  join(dir, "ack.json"),
+                  JSON.stringify({ acknowledgedAt: value }),
+                );
+              } catch (_error) {
+                // Persistence is best-effort; the badge still clears
+              }
+              publishBriefMeta();
+            }
+            return { state: "COMPLETED" };
+          },
+        );
+      }
+      // Seed the tile from the cache after a restart
+      seedBriefMeta().catch(() => {});
+
       setStatus("Passage briefing started");
       return config;
     },
@@ -577,6 +724,10 @@ module.exports = (app) => {
       if (cronTimer) {
         clearInterval(cronTimer);
         cronTimer = null;
+      }
+      if (teardownPlotterExt) {
+        teardownPlotterExt();
+        teardownPlotterExt = null;
       }
       for (const unsubscribe of unsubscribes) {
         unsubscribe();

@@ -4,6 +4,25 @@
 
 ### Added
 
+- Plotter-extension brief tile (work doc #8): the plugin registers a
+  read-only `plotterExtensions` resource provider (API v1 manifest,
+  1x1 iframe widget, `whileEnabled`) and serves the widget assets
+  from a public, non-admin-gated `/plotterext/<id>/` prefix (minimal
+  static handler, traversal-guarded). The plugin publishes
+  `navigation.briefing.generatedAt` / `.route` / `.hasNew` flat
+  paths over the Signal K stream — the tile is bus-only — seeded
+  from the cache after a restart; a `signalk.put` to
+  `navigation.briefing.acknowledgedAt` (persisted across restarts)
+  clears the NEW badge. The widget state machine lives in the pure
+  `brief-ext-model.js` (muted / available / new with age string);
+  tap opens the brief webapp in a new browser context (documented
+  fallback until the v1 widget→host open-panel request is settled);
+  long-press asks the host for config/remove; night mode supported
+  when offered. `signalk-plotterext-bus` 0.11.0 dist is vendored
+  under `public/vendor/plotterext-bus/` (MIT), same policy as the
+  dead-reckoning plugin. The webapp gains an `?embed=1` compact
+  chrome (header hidden) for plotter dialogs.
+
 - Celestial & space weather, Phase 1 (work doc #3):
   `plugin/celestial-source.js` fetches the NOAA SWPC planetary
   K-index forecast and the JPL Small-Body Database comet query during

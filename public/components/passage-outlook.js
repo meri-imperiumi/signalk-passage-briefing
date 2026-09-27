@@ -68,6 +68,13 @@ class PassageOutlook extends HTMLElement {
     this._tabStrategic = this.shadowRoot.getElementById("tab-strategic");
     this._view = this.shadowRoot.getElementById("view");
 
+    // Embed mode (work doc #8): compact chrome for a plotter dialog —
+    // no app header, just the tactical/strategic switch and content
+    this.embedded = new URLSearchParams(location.search).get("embed") === "1";
+    if (this.embedded) {
+      this.shadowRoot.querySelector("header").hidden = true;
+    }
+
     this._tabTactical.addEventListener("click", () => {
       location.hash = "#/tactical";
     });
