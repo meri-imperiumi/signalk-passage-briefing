@@ -56,30 +56,17 @@ function geometryPosition(geometry, ref) {
 
   if (geometry.type === "bbox") {
     const [minLon, minLat, maxLon, maxLat] = geometry.coordinates;
-    let lon = minLon + (maxLon - minLon) / 2;
     let lat = (minLat + maxLat) / 2;
+    let lon = (minLon + maxLon) / 2;
     if (ref && Number.isFinite(ref[0]) && Number.isFinite(ref[1])) {
-      // Clamp the vessel position into the box: inside the area the
-      // note lands on the crew, outside it lands at the nearest edge
-      let clamped = null;
-      for (const shift of [0, 360, -360]) {
-        const candidate = ref[0] + shift;
-        if (candidate >= minLon && candidate <= maxLon) {
-          clamped = candidate;
-          break;
-        }
-      }
-      if (clamped == null) {
-        // Vessel outside the box entirely: nearest representation,
-        // clamped to the nearest edge
-        const mid = (minLon + maxLon) / 2;
-        const nearest = [ref[0], ref[0] + 360, ref[0] - 360].sort(
-          (a, b) => Math.abs(a - mid) - Math.abs(b - mid),
-        )[0];
-        clamped = Math.min(Math.max(nearest, minLon), maxLon);
-      }
-      lon = clamped;
-      lat = Math.min(Math.max(ref[1], minLat), maxLat);
+      // Quadrant nearest the vessel: wide warning areas span oceans,
+      // and their center can be a thousand miles from the crew. Halve
+      // each axis toward the vessel and place the note at that
+      // quadrant's center — regional, never on top of the boat.
+      const midLat = (minLat + maxLat) / 2;
+      const midLon = (minLon + maxLon) / 2;
+      lat = ref[1] <= midLat ? (minLat + midLat) / 2 : (midLat + maxLat) / 2;
+      lon = ref[0] <= midLon ? (minLon + midLon) / 2 : (midLon + maxLon) / 2;
     }
     return {
       latitude: Math.round(lat * 1e4) / 1e4,
