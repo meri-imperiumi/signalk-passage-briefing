@@ -7,6 +7,7 @@
  */
 
 import { etaTable, sailWorkTimeline, splitSevere } from "./models.mjs";
+import { SK_BASE_CSS } from "./sk-base-css.js";
 
 /**
  * The custom element (browser only).
@@ -18,6 +19,7 @@ class StrategicOutlook extends HTMLElement {
     }
     this.shadowRoot.innerHTML = `
       <style>
+        ${SK_BASE_CSS}
         :host { display: block; }
         .sk-card { margin-bottom: 12px; }
         pre.console { margin: 0; }

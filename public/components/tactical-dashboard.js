@@ -10,6 +10,7 @@
  */
 
 import { sailActionCards, tacticalNow } from "./models.mjs";
+import { SK_BASE_CSS } from "./sk-base-css.js";
 
 /**
  * The custom element (browser only).
@@ -21,6 +22,7 @@ class TacticalDashboard extends HTMLElement {
     }
     this.shadowRoot.innerHTML = `
       <style>
+        ${SK_BASE_CSS}
         :host { display: block; }
         .now { display: flex; align-items: baseline; gap: 12px; }
         .tier {

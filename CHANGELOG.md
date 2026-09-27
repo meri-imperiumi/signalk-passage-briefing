@@ -46,6 +46,15 @@
 
 ### Added
 
+- Styling pass per the house UI spec: shadow-DOM components carried
+  no panel styling (document-level visuals.css cannot pierce a
+  shadow root), so the webapp rendered as unstyled text. A shared
+  `sk-base-css.js` subset — panels with 2px corner brackets, theme
+  tints, tracked uppercase headings, hardware buttons/selects/inputs
+  with 48px touch targets, data tables, consoles — now precedes every
+  component's own styles. Palette custom properties still inherit
+  from the host page for day/night reactivity.
+
 - The plotter tile shows the current comfort tier:
   `navigation.briefing.comfort` is published alongside the other tile
   paths, computed at compile time from the payload's first forecast

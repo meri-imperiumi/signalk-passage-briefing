@@ -13,6 +13,7 @@
  */
 
 import { fmtKn, hereHourly, hereNow, splitSevere } from "./models.mjs";
+import { SK_BASE_CSS } from "./sk-base-css.js";
 
 /**
  * Formats a position as `21°06.0'S 175°12.0'W`.
@@ -76,6 +77,7 @@ class ConditionsHere extends HTMLElement {
     }
     this.shadowRoot.innerHTML = `
       <style>
+        ${SK_BASE_CSS}
         :host { display: block; }
         .now { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
         .tier {

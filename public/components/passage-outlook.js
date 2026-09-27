@@ -11,6 +11,7 @@
  */
 
 import { createStream, fetchJson, fetchNotes } from "./sk-api.js";
+import { SK_BASE_CSS } from "./sk-base-css.js";
 
 /**
  * Plugin API base. SK v2 serves the webapp itself under
@@ -33,6 +34,7 @@ class PassageOutlook extends HTMLElement {
     this.embedded = new URLSearchParams(location.search).get("embed") === "1";
     this.shadowRoot.innerHTML = `
       <style>
+        ${SK_BASE_CSS}
         :host { display: block; }
         header {
           display: flex; flex-wrap: wrap; gap: 8px;

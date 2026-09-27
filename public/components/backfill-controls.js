@@ -8,6 +8,7 @@
  */
 
 import { fetchJson } from "./sk-api.js";
+import { SK_BASE_CSS } from "./sk-base-css.js";
 
 const PLUGIN_API = "/plugins/signalk-passage-briefing/api";
 
@@ -18,6 +19,7 @@ class BackfillControls extends HTMLElement {
     }
     this.shadowRoot.innerHTML = `
       <style>
+        ${SK_BASE_CSS}
         :host { display: block; }
         details.sk-card { margin-bottom: 12px; }
         summary { cursor: pointer; font-weight: 700; }
