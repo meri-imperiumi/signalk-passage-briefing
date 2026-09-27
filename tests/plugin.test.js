@@ -164,7 +164,8 @@ describe("plugin", () => {
       ],
     });
     await new Promise((resolve) => setTimeout(resolve, 60));
-    assert.match(app2.getStatus(), /Here refresh failed/);
+    // Failures land in the plugin error state, not the status line
+    assert.match(app2.getErrors().join("\n"), /Here refresh failed/);
     plugin2.stop();
 
     plugin.stop();

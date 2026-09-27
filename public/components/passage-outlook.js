@@ -12,7 +12,13 @@
 
 import { createStream, fetchJson, fetchNotes } from "./sk-api.js";
 
-const PLUGIN_API = "api";
+/**
+ * Plugin API base. SK v2 serves the webapp itself under
+ * /@<scope>/<name>/, but registerWithRouter routes stay mounted at
+ * /plugins/<name>/ (unscoped) — same as the energy-predictor
+ * webapp's API_BASE on this server.
+ */
+const PLUGIN_API = "/plugins/signalk-passage-briefing/api";
 
 /**
  * The custom element (browser only).

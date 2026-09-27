@@ -135,6 +135,9 @@ const DEFAULTS = {
  */
 module.exports = (app) => {
   const setStatus = (app.setPluginStatus || app.setProviderStatus)?.bind(app);
+  // Failures belong in the plugin error state (SK surfaces it
+  // distinctly), not the status line
+  const setError = (app.setPluginError || app.error)?.bind(app);
   const unsubscribes = [];
 
   /** @type {PassageStateMachine|null} */
@@ -550,7 +553,7 @@ module.exports = (app) => {
         setStatus(`Conditions here cached at ${here.cachedAt} (${trigger})`);
       } catch (error) {
         app.error(`Here refresh failed (${trigger}): ${error.message}`);
-        setStatus(`Here refresh failed: ${error.message}`);
+        setError(`Here refresh failed (${trigger}): ${error.message}`);
       }
       return;
     }
@@ -563,7 +566,7 @@ module.exports = (app) => {
       );
     } catch (error) {
       app.error(`Briefing refresh failed (${trigger}): ${error.message}`);
-      setStatus(`Briefing refresh failed: ${error.message}`);
+      setError(`Briefing refresh failed (${trigger}): ${error.message}`);
     }
   }
 

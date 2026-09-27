@@ -321,15 +321,30 @@ function kIndex({ t850, t700, t500, rh850, rh700 }) {
  */
 async function fetchJson(url, fetchImpl, timeoutMs, tries = 3) {
   let lastError;
+  // Non-ok bodies often carry the actionable part (Open-Meteo 400s
+  // carry a `reason`); surface a snippet in the error so the plugin
+  // status says WHY, not just which URL
+  const describe = async (response) => {
+    let detail = "";
+    try {
+      const body = await response.text();
+      const parsed = JSON.parse(body);
+      detail = parsed.reason ?? parsed.message ?? body;
+    } catch {
+      detail = "";
+    }
+    detail = String(detail).slice(0, 200);
+    return `${url} returned ${response.status}${detail ? `: ${detail}` : ""}`;
+  };
   for (let attempt = 0; attempt < tries; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetchImpl(url, { signal: controller.signal });
       if (response.status === 429 || response.status >= 500) {
-        lastError = new Error(`${url} returned ${response.status}`);
+        lastError = new Error(await describe(response));
       } else if (!response.ok) {
-        throw new Error(`${url} returned ${response.status}`);
+        throw new Error(await describe(response));
       } else {
         return await response.json();
       }

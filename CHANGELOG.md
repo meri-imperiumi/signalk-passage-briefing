@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Fixed
+
+- On-board first-run issues: the webapp now fetches its REST API from
+  the absolute `/plugins/signalk-passage-briefing/api` mount (SK v2
+  serves the webapp itself under `/@<scope>/<name>/`, where the old
+  relative `api/…` base resolved against the wrong root and every
+  route 404ed — same mount as the energy-predictor webapp on this
+  server); refresh failures land in the plugin *error* state instead
+  of the status line; and failed internet fetches now include the
+  response body (e.g. Open-Meteo's `reason`) in the error so the
+  status says why, not just which URL returned which code.
+
 ### Added
 
 - Zone-targeted bulletin sources wired end to end (work doc #9): the
