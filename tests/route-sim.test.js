@@ -59,7 +59,6 @@ function buildPayload({
         upperAir: {
           cape: convective ? 1800 : cape,
           kIndex: convective ? 30 : kIndex,
-          precipitableWater: 22,
           rh700: 55,
           wind850kts: tws + 8,
         },

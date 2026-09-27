@@ -4,6 +4,17 @@
 
 ### Fixed
 
+- The forecast request listed `precipitable_water`, which Open-Meteo
+  rejects (`400 Cannot initialize ... Variable`) — every forecast
+  fetch failed with it, so nothing ever cached on board. Removed;
+  the upper-air fields (CAPE, K-index, RH/wind at pressure levels)
+  are unaffected. Doc #3 Phase 2's precipitable-water sky gate needs
+  a different source when Phase 2 lands.
+- `GET /api/briefing` returns `200` with an empty payload
+  (`{mode, payload: null, cached: false}`) when nothing is cached
+  instead of a 404, so the webapp renders its refresh strip rather
+  than logging a failed request.
+
 - The webapp's "Fetch now" button sent a GET to the POST-only
   `/api/briefing/refresh` route (fetchJson had no method option), so
   the button 404ed against a real server; it now issues a POST.

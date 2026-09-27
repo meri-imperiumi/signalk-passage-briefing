@@ -230,7 +230,6 @@ export function weatherAt(forecasts, timestamp) {
     upperAir: {
       cape: mix(ua.cape, ub.cape),
       kIndex: mix(ua.kIndex, ub.kIndex),
-      precipitableWater: mix(ua.precipitableWater, ub.precipitableWater),
       rh700: mix(ua.rh700, ub.rh700),
       wind850kts: mix(ua.wind850kts, ub.wind850kts),
     },

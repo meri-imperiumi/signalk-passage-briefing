@@ -181,6 +181,12 @@ class PassageOutlook extends HTMLElement {
     const query = routeId ? `?route=${encodeURIComponent(routeId)}` : "";
     try {
       this._briefing = await fetchJson(`${PLUGIN_API}/briefing${query}`);
+      if (!this._briefing.payload) {
+        // Nothing cached yet (200 with empty payload): refresh strip
+        this._briefing = null;
+        this.renderStale(true);
+        return;
+      }
       this.renderStale(false);
       if (this._briefing.mode === "here") {
         this.renderHere();
@@ -188,12 +194,7 @@ class PassageOutlook extends HTMLElement {
         this.simulate();
       }
     } catch (error) {
-      if (String(error.message).startsWith("404")) {
-        this._briefing = null;
-        this.renderStale(true);
-      } else {
-        this.showError(`Briefing unavailable: ${error.message}`);
-      }
+      this.showError(`Briefing unavailable: ${error.message}`);
     }
   }
 

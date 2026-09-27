@@ -205,9 +205,11 @@ describe("plugin", () => {
       ],
     });
 
-    // Nothing cached yet
+    // Nothing cached yet: empty payload, not an error
     let res = await call("/api/briefing");
-    assert.equal(res.code, 404);
+    assert.equal(res.code, null);
+    assert.equal(res.payload.mode, "here");
+    assert.equal(res.payload.payload, null);
 
     const originalFetch = globalThis.fetch;
     let forecastCalls = 0;
@@ -557,9 +559,10 @@ describe("plugin", () => {
       return res;
     };
 
-    // No cache yet
+    // No cache yet: empty payload, not an error
     let res = await call("/api/briefing", { query: { route: "r1" } });
-    assert.equal(res.code, 404);
+    assert.equal(res.code, null);
+    assert.equal(res.payload.payload, null);
 
     // Refresh refuses while offline
     feed({
@@ -603,9 +606,12 @@ describe("plugin", () => {
         res.payload[0].distanceNm > 89 && res.payload[0].distanceNm < 91,
       );
 
-      // Unknown route briefing: 404
+      // Unknown route briefing: empty payload, not an error
       res = await call("/api/briefing", { query: { route: "nope" } });
-      assert.equal(res.code, 404);
+      assert.equal(res.code, null);
+      assert.equal(res.payload.mode, "route");
+      assert.equal(res.payload.payload, null);
+      assert.equal(res.payload.cached, false);
     } finally {
       globalThis.fetch = originalFetch;
     }

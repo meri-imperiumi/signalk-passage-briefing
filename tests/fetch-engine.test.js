@@ -165,7 +165,6 @@ describe("fetchWeatherAlongTrack", () => {
     assert.equal(step.upperAir.kIndex, 29.4);
     assert.equal(step.upperAir.rh700, 60);
     assert.equal(step.upperAir.wind850kts, 20);
-    assert.equal(step.upperAir.precipitableWater, 22.3);
     // 1.852 km/h → 1 kn
     assert.equal(step.current.drift, 1);
     assert.equal(step.current.set, 45);

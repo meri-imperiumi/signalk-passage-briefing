@@ -987,8 +987,13 @@ module.exports = (app) => {
         if (!effectiveRoute) {
           const here = await loadHere();
           if (!here) {
-            res.status(404).json({
-              error: "No cached briefing: refresh while online",
+            // Empty, not 404: the webapp renders its refresh strip
+            // instead of logging a failed request
+            res.json({
+              mode: "here",
+              payload: null,
+              cached: false,
+              online: isOnline(),
             });
             return;
           }
@@ -1003,7 +1008,13 @@ module.exports = (app) => {
         }
         const cached = await loadPayload(app.getDataDirPath(), effectiveRoute);
         if (!cached) {
-          res.status(404).json({ error: "No cached briefing for this route" });
+          res.json({
+            mode: "route",
+            routeId: effectiveRoute,
+            payload: null,
+            cached: false,
+            online: isOnline(),
+          });
           return;
         }
         // Splice the freshest cached bulletin into older briefings so
