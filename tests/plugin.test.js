@@ -738,6 +738,13 @@ describe("plugin", () => {
       { time_tag: iso(-3), kp: 2, observed: "observed" },
       { time_tag: iso(3), kp: 9, observed: "predicted" },
     ]);
+    // A naked-eye comet: deterministic (no night gate), so the wiring
+    // assertion below holds at any wall-clock time; the aurora path
+    // (Kp x magnetic latitude x night) is covered by the unit tests
+    const SBDB = JSON.stringify({
+      fields: ["full_name", "M1", "K1", "r", "dist"],
+      rows: [["C/2026 A1 (Plugin Test)", 4.0, 10, 1.2, 0.5]],
+    });
     const app = createMockApp();
     app.getSelfPath = (path) => {
       if (path === "navigation.position") {
@@ -782,22 +789,29 @@ describe("plugin", () => {
         };
       }
       if (u.includes("ssd-api.jpl.nasa.gov")) {
-        throw new Error("network down");
+        return {
+          ok: true,
+          status: 200,
+          json: async () => JSON.parse(SBDB),
+        };
       }
       return mockOpenMeteo()(url, opts);
     };
     try {
-      // Cached space events are filtered against the position: here
-      // mode stores them on the payload; stale-cache splice keeps the
-      // freshest events through offline hours
+      // Space events attach to the here payload. The comet is
+      // wall-clock independent; the aurora depends on local night at
+      // the vessel and may or may not fire (unit-tested separately)
       await call("/api/briefing/refresh");
       const res = await call("/api/briefing");
       assert.equal(res.code, null);
       const events = res.payload.payload.spaceEvents ?? [];
-      assert.equal(events.length, 1);
-      assert.equal(events[0].kind, "aurora");
-      assert.equal(events[0].tactical, true);
-      assert.match(events[0].description, /Look south/);
+      const comet = events.find((e) => e.kind === "comet");
+      assert.ok(comet, "comet event attached");
+      assert.match(comet.description, /C\/2026 A1/);
+      for (const e of events.filter((x) => x.kind === "aurora")) {
+        assert.equal(e.tactical, true);
+        assert.match(e.description, /Look south/);
+      }
 
       // Endpoints down: refresh still succeeds, events degrade to none
       globalThis.fetch = async (url, opts) => {
