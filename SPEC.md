@@ -1,4 +1,4 @@
-# SPEC.md: Passage Outlook Signal K Plugin & Webapp
+# Passage Outlook Signal K Plugin & Webapp
 
 ## 1. System Overview & Module Architecture
 
