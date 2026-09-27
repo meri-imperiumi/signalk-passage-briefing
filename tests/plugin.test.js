@@ -992,23 +992,11 @@ describe("plugin", () => {
       "NNNN",
     ].join("\n");
 
-    const written = {};
     const app = createMockApp();
     app.getSelfPath = (path) =>
       path === "navigation.position"
         ? { latitude: -18.658, longitude: -173.982 }
         : null;
-    app.resourcesApi = {
-      async setResource(type, id, value) {
-        written[id] = value;
-      },
-      async deleteResource(type, id) {
-        delete written[id];
-      },
-      async listResources() {
-        return { ...written };
-      },
-    };
     const plugin = pluginFactory(app);
     plugin.start({});
     plugin.registerWithRouter(app.router);
@@ -1047,11 +1035,17 @@ describe("plugin", () => {
       const res = await call("/api/briefing/refresh");
       assert.equal(res.code, null);
 
-      const metareaIds = Object.keys(written).filter((id) =>
+      // The plugin serves its notes through the registered provider
+      const provider = app
+        .getResourceProviders()
+        .find((p) => p.type === "notes");
+      assert.ok(provider, "notes provider registered");
+      const listed = await provider.methods.listResources({});
+      const metareaIds = Object.keys(listed).filter((id) =>
         id.startsWith("metarea-"),
       );
       assert.equal(metareaIds.length, 1, "one metarea note written");
-      const note = written[metareaIds[0]];
+      const note = listed[metareaIds[0]];
       assert.match(note.description, /SOUTHEAST WINDS/);
       // Position clamps to the vessel inside the warning area
       assert.equal(note.position.latitude, -18.658);
@@ -1204,10 +1198,11 @@ describe("plugin", () => {
     });
 
     // Providers + asset mount registered: the plotter-extension
-    // manifest and the Status Tiles example set
+    // manifest, the Status Tiles example set, and the notes store
     const providers = app.getResourceProviders();
-    assert.equal(providers.length, 2);
+    assert.equal(providers.length, 3);
     assert.deepEqual(providers.map((p) => p.type).sort(), [
+      "notes",
       "plotterExtensions",
       "statusTileExamples",
     ]);

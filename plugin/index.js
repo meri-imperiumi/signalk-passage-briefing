@@ -49,11 +49,8 @@ const {
 const { fetchSpaceEvents } = require("./celestial-source.js");
 const { registerPlotterExtension } = require("./brief-ext.js");
 const { registerStatusTileExamples } = require("./statustilesexamples.js");
-const {
-  clearNotes,
-  publishNotes,
-  resyncNotes,
-} = require("./notes-publisher.js");
+const { createNotesStore, registerNotesProvider } = require("./notes-store.js");
+const { clearNotes, publishNotes } = require("./notes-publisher.js");
 const {
   backfillSailEvents,
   createHistoryWindStats,
@@ -190,6 +187,8 @@ module.exports = (app) => {
   /** Plotter-extension provider teardown (registered at start). */
   let teardownPlotterExt = null;
   let teardownStatusTiles = null;
+  let teardownNotesProvider = null;
+  let notesStore = null;
   /** Publish METAREA blocks as resources/notes (doc #12). */
   let publishNotesEnabled = true;
 
@@ -456,17 +455,16 @@ module.exports = (app) => {
       }
     }
     const result = await publishNotes({
-      app,
-      dataDir: app.getDataDirPath(),
+      store: notesStore,
       bulletin,
       zone,
       synopticChartFor: () => chart,
       ref: waypoints.length > 0 ? [waypoints[0].lon, waypoints[0].lat] : null,
     });
-    if (result.published.length > 0 || result.deleted.length > 0) {
+    if (result.published.length > 0 || result.pruned.length > 0) {
       app.debug?.(
         `Notes ${trigger}: ${result.published.length} published, ` +
-          `${result.deleted.length} expired`,
+          `${result.pruned.length} expired`,
       );
     }
   }
@@ -1048,12 +1046,10 @@ module.exports = (app) => {
       modelsPromise ??= import("../public/components/models.mjs");
       modelsPromise.catch(() => {});
 
-      // Notes lifecycle (work doc #12): crash recovery for deletions,
-      // or clear owned notes when publication is disabled
-      if (publishNotesEnabled) {
-        resyncNotes({ app, dataDir: app.getDataDirPath() }).catch(() => {});
-      } else {
-        clearNotes({ app, dataDir: app.getDataDirPath() }).catch(() => {});
+      // Notes lifecycle (work doc #12): when publication is disabled
+      // the store clears, so chart plotters stop seeing our warnings
+      if (!publishNotesEnabled) {
+        clearNotes(notesStore).catch(() => {});
       }
 
       app.subscriptionmanager.subscribe(
@@ -1093,6 +1089,15 @@ module.exports = (app) => {
       teardownStatusTiles = registerStatusTileExamples(app, {
         id: PLUGIN_ID,
       });
+
+      // The server has no built-in notes provider: the plugin
+      // registers as the notes resource provider (work doc #12) and
+      // serves the bulletin warnings plus any client-written notes
+      notesStore = createNotesStore(app.getDataDirPath());
+      teardownNotesProvider = registerNotesProvider(app, {
+        id: PLUGIN_ID,
+        store: notesStore,
+      });
       // Acknowledge put clears the tile's NEW badge
       if (typeof app.registerPutHandler === "function") {
         app.registerPutHandler(
@@ -1128,6 +1133,10 @@ module.exports = (app) => {
       if (cronTimer) {
         clearInterval(cronTimer);
         cronTimer = null;
+      }
+      if (teardownNotesProvider) {
+        teardownNotesProvider();
+        teardownNotesProvider = null;
       }
       if (teardownStatusTiles) {
         teardownStatusTiles();

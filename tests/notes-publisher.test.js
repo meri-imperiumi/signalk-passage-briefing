@@ -20,34 +20,18 @@ const {
   publishNotes,
   clearNotes,
 } = require("../plugin/notes-publisher.js");
-
-function stubResources() {
-  const notes = {};
-  const calls = { set: 0, deleted: [] };
-  return {
-    notes,
-    calls,
-    resourcesApi: {
-      async setResource(type, id, value) {
-        assert.equal(type, "notes");
-        notes[id] = value;
-        calls.set++;
-      },
-      async deleteResource(type, id) {
-        assert.equal(type, "notes");
-        delete notes[id];
-        calls.deleted.push(id);
-      },
-      async listResources(type) {
-        assert.equal(type, "notes");
-        return { ...notes };
-      },
-    },
-  };
-}
+const { createNotesStore } = require("../plugin/notes-store.js");
 
 function dataDir() {
   return mkdtempSync(join(tmpdir(), "notes-"));
+}
+
+function stubStore() {
+  return createNotesStore(dataDir());
+}
+
+async function notesIn(store) {
+  return store.list({});
 }
 
 const ISSUED = "2026-09-27T19:42:19.033Z";
@@ -121,11 +105,9 @@ test("noteTitle: first sentence, truncated on a word boundary", () => {
 });
 
 test("publishNotes: one note per placeable block, mapped fields", async () => {
-  const { resourcesApi, notes } = stubResources();
-  const app = { resourcesApi };
+  const store = stubStore();
   const result = await publishNotes({
-    app,
-    dataDir: dataDir(),
+    store,
     bulletin: BULLETIN,
     zone: 14,
     synopticChartFor: () => ({
@@ -134,7 +116,8 @@ test("publishNotes: one note per placeable block, mapped fields", async () => {
     }),
   });
   assert.equal(result.published.length, 2); // no-geometry block skipped
-  const [first] = result.published.map((id) => notes[id]);
+  const notes = await notesIn(store);
+  const [first] = Object.values(notes);
   assert.match(first.title, /SOUTH OF 10S AND WEST OF 169W/);
   assert.equal(first.description, BULLETIN.blocks[1].text);
   assert.equal(first.position.latitude, -50);
@@ -145,19 +128,17 @@ test("publishNotes: one note per placeable block, mapped fields", async () => {
   assert.equal(first.mimeType, "image/gif"); // chart linked when cached
 });
 
-test("re-publish updates in place; expiry deletes dropped blocks", async () => {
-  const stub = stubResources();
-  const app = { resourcesApi: stub.resourcesApi };
-  const dir = dataDir();
-  const params = { app, dataDir: dir };
+test("re-publish updates in place; expiry prunes dropped blocks", async () => {
+  const store = stubStore();
+  const params = { store };
 
   await publishNotes({ ...params, bulletin: BULLETIN, zone: 14 });
   const idBefore = noteId(BULLETIN.blocks[1].text, ISSUED);
-  assert.ok(stub.notes[idBefore]);
+  assert.ok((await notesIn(store))[idBefore]);
 
   // Same blocks again: same ids, still exactly two notes
   await publishNotes({ ...params, bulletin: BULLETIN, zone: 14 });
-  assert.equal(Object.keys(stub.notes).length, 2);
+  assert.equal(Object.keys(await notesIn(store)).length, 2);
 
   // Only one block survives the next filter pass: the others expire
   const partial = {
@@ -167,17 +148,14 @@ test("re-publish updates in place; expiry deletes dropped blocks", async () => {
   };
   const result = await publishNotes({ ...params, bulletin: partial, zone: 14 });
   assert.equal(result.published.length, 1);
-  assert.equal(result.deleted.length, 2);
-  assert.equal(Object.keys(stub.notes).length, 1);
-  assert.ok(stub.notes[noteId(BULLETIN.blocks[1].text, partial.issuedAt)]);
+  const remaining = await notesIn(store);
+  assert.equal(Object.keys(remaining).length, 1);
+  assert.ok(remaining[noteId(BULLETIN.blocks[1].text, partial.issuedAt)]);
 });
 
-test("clearNotes removes owned notes and empties the manifest", async () => {
-  const stub = stubResources();
-  const app = { resourcesApi: stub.resourcesApi };
-  const dir = dataDir();
-  await publishNotes({ app, dataDir: dir, bulletin: BULLETIN, zone: 14 });
-  const removed = await clearNotes({ app, dataDir: dir });
-  assert.equal(removed.length, 2);
-  assert.deepEqual(stub.notes, {});
+test("clearNotes empties the store", async () => {
+  const store = stubStore();
+  await publishNotes({ store, bulletin: BULLETIN, zone: 14 });
+  await clearNotes(store);
+  assert.deepEqual((await notesIn(store)) ?? {}, {});
 });

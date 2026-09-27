@@ -97,6 +97,14 @@
   widget pulls it on connect so the mini summary is populated right
   away instead of waiting for the next delta emission.
 
+- The plugin registers as the server's `notes` resource provider
+  (there is none by default on SK v2, so writes were failing and
+  queries returned nothing). The provider is read-only and serves
+  only the metarea warnings the bulletin pipeline publishes — other
+  clients' notes belong to their own future providers — with
+  position/distance/bbox/limit query filtering per the resources
+  query docs, durable in the plugin data dir. The publisher writes
+  into the store directly and prunes expired warnings.
 - METAREA warnings as Signal K Notes (work doc #12): after each
   bulletin filter pass the placeable blocks are published as
   georeferenced `resources/notes` — title from the first sentence,
