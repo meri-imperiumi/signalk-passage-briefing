@@ -53,6 +53,7 @@ class TacticalDashboard extends HTMLElement {
         <div id="actions"></div>
         <div id="energy"></div>
         <div id="hazards"></div>
+        <div id="space"></div>
       </section>
     `;
     this._awsEl = this.shadowRoot.getElementById("aws");
@@ -61,6 +62,7 @@ class TacticalDashboard extends HTMLElement {
     this._actionsEl = this.shadowRoot.getElementById("actions");
     this._energyEl = this.shadowRoot.getElementById("energy");
     this._hazardsEl = this.shadowRoot.getElementById("hazards");
+    this._spaceEl = this.shadowRoot.getElementById("space");
     if (this._exceptions) {
       this.setExceptions(this._exceptions);
     }
@@ -131,6 +133,29 @@ class TacticalDashboard extends HTMLElement {
       el.className = "banner";
       el.textContent = `⚠ ${h.description ?? h.noteId ?? "hazard"} +${h.hoursFromNow}h`;
       this._hazardsEl.appendChild(el);
+    }
+    if (this._spaceEvents) {
+      this.setSpaceEvents(this._spaceEvents);
+    }
+  }
+
+  /**
+   * Tactical space-weather banners (work doc #3): aurora-class
+   * alerts only; comet items belong to the strategic outlook.
+   *
+   * @param {Array<{description: string}>|null} events
+   */
+  setSpaceEvents(events) {
+    this._spaceEvents = events;
+    if (!this._spaceEl) {
+      return; // Not yet connected
+    }
+    this._spaceEl.innerHTML = "";
+    for (const e of events ?? []) {
+      const el = document.createElement("div");
+      el.className = "banner";
+      el.textContent = `✦ ${e.description}`;
+      this._spaceEl.appendChild(el);
     }
   }
 }

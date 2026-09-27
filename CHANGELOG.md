@@ -4,6 +4,20 @@
 
 ### Added
 
+- Celestial & space weather, Phase 1 (work doc #3):
+  `plugin/celestial-source.js` fetches the NOAA SWPC planetary
+  K-index forecast and the JPL Small-Body Database comet query during
+  the internet window and attaches coarse-gated `spaceEvents` to both
+  briefing payloads (route departure position and here). Aurora
+  alerts require a predicted Kp ≥ 5, a magnetic latitude equatorward
+  reach matching the Kp (dipole approximation, ~65° at Kp 5 down to
+  ~45° at Kp 9), and local night at the vessel — "Aurora possible:
+  Kp 7 predicted tonight. Look south." Naked-eye comets (apparent
+  magnitude from M1/K1/r/Δ brighter than 6.0) surface as strategic
+  sky notes. Each source degrades independently; blocked hosts cost
+  nothing. Tactical banners and a strategic "Sky Notes" block render
+  them; the conditions-here view lists them in its events block.
+
 - Planned tacks & gybes (work doc #5): the simulation records per-step
   heading, wind direction and distance made good, and a pure
   `tack-gybe.js` module classifies signed-TWA crossings between

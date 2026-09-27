@@ -32,6 +32,7 @@ const { readSailsConfiguration } = require("./sails-configuration.js");
 const { filterBulletin } = require("./bulletin-engine.js");
 const { loadBulletinCache, refreshBulletins } = require("./bulletin-source.js");
 const { fetchZoneBulletins, resolveZones } = require("./zone-source.js");
+const { fetchSpaceEvents } = require("./celestial-source.js");
 const {
   backfillSailEvents,
   createHistoryWindStats,
@@ -310,6 +311,12 @@ module.exports = (app) => {
     if (bulletin) {
       payload.metareaBulletin = bulletin;
     }
+    // Space weather rides the same online window (work doc #3);
+    // degrades to an absent field when the endpoints fail
+    payload.spaceEvents = await fetchSpaceEvents({
+      lat: position.lat,
+      lon: position.lon,
+    });
     const dir = join(app.getDataDirPath(), "weather");
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "here.json"), JSON.stringify(payload));
@@ -351,6 +358,11 @@ module.exports = (app) => {
     if (bulletin) {
       payload.metareaBulletin = bulletin;
     }
+    // Space weather for the departure position (work doc #3 Phase 1)
+    payload.spaceEvents = await fetchSpaceEvents({
+      lat: waypoints[0].lat,
+      lon: waypoints[0].lon,
+    });
     await savePayload(app.getDataDirPath(), routeId, payload);
     await writeFile(
       join(app.getDataDirPath(), "weather", "last-route"),

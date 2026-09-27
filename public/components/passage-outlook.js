@@ -300,6 +300,20 @@ class PassageOutlook extends HTMLElement {
       if (strategicView && this._briefing?.payload) {
         target.setBulletin(this._briefing.payload.metareaBulletin ?? null);
       }
+      this.pushSpaceEvents(target);
+    }
+  }
+
+  /**
+   * Space events (work doc #3): aurora-class alerts to whichever
+   * screen is active, comet items ride the strategic Sky Notes.
+   *
+   * @param {HTMLElement} target - Active screen element
+   */
+  pushSpaceEvents(target) {
+    const events = this._briefing?.payload?.spaceEvents ?? [];
+    if (typeof target.setSpaceEvents === "function") {
+      target.setSpaceEvents(events);
     }
   }
 

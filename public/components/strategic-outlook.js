@@ -59,6 +59,10 @@ class StrategicOutlook extends HTMLElement {
         <h2>Sail Work</h2>
         <div id="sailwork"><span class="none">No sail changes planned</span></div>
       </section>
+      <section class="sk-card" id="sky-card" hidden>
+        <h2>Sky Notes</h2>
+        <div id="sky"></div>
+      </section>
       <section class="sk-card theme-teal">
         <h2>METAREA Bulletin</h2>
         <pre class="console" id="bulletin">No bulletin cached</pre>
@@ -74,12 +78,38 @@ class StrategicOutlook extends HTMLElement {
     this._seaEl = this.shadowRoot.getElementById("sea");
     this._convEl = this.shadowRoot.getElementById("conv");
     this._sailWorkEl = this.shadowRoot.getElementById("sailwork");
+    this._skyCard = this.shadowRoot.getElementById("sky-card");
+    this._skyEl = this.shadowRoot.getElementById("sky");
     this._bulletinEl = this.shadowRoot.getElementById("bulletin");
     if (this._exceptions) {
       this.setExceptions(this._exceptions);
     }
     if (this._bulletin !== undefined) {
       this.setBulletin(this._bulletin);
+    }
+    if (this._spaceEvents !== undefined) {
+      this.setSpaceEvents(this._spaceEvents);
+    }
+  }
+
+  /**
+   * Sky notes (work doc #3): comets and any other non-urgent space
+   * events for the passage summary. Hidden when there are none.
+   *
+   * @param {Array<{description: string, tactical: boolean}>|null} events
+   */
+  setSpaceEvents(events) {
+    this._spaceEvents = events;
+    if (!this._skyEl) {
+      return; // Not yet connected
+    }
+    const list = (events ?? []).filter((e) => !e.tactical);
+    this._skyCard.hidden = list.length === 0;
+    this._skyEl.innerHTML = "";
+    for (const e of list) {
+      const el = document.createElement("div");
+      el.textContent = `✦ ${e.description}`;
+      this._skyEl.appendChild(el);
     }
   }
 

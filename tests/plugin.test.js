@@ -713,6 +713,99 @@ describe("plugin", () => {
     plugin.stop();
   });
 
+  test("space events: attached to here briefings, degraded when endpoints fail", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    // Forecast rows inside the 24h forward window relative to now
+    const iso = (offsetHours) =>
+      new Date(Date.now() + offsetHours * 3600000)
+        .toISOString()
+        .replace(/\.\d{3}Z$/, "");
+    const KP = JSON.stringify([
+      { time_tag: iso(-3), kp: 2, observed: "observed" },
+      { time_tag: iso(3), kp: 9, observed: "predicted" },
+    ]);
+    const app = createMockApp();
+    app.getSelfPath = (path) => {
+      if (path === "navigation.position") {
+        return { latitude: -50, longitude: 170 };
+      }
+      return null;
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const call = async (path, req = { query: {} }) => {
+      const route = app.getRoutes().find((r) => r.path === path);
+      const res = {
+        code: null,
+        payload: null,
+        status(code) {
+          this.code = code;
+          return this;
+        },
+        json(payload) {
+          this.payload = payload;
+        },
+      };
+      await route.handler(req, res);
+      return res;
+    };
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "online" }] },
+      ],
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      if (u.includes("swpc.noaa.gov")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => JSON.parse(KP),
+        };
+      }
+      if (u.includes("ssd-api.jpl.nasa.gov")) {
+        throw new Error("network down");
+      }
+      return mockOpenMeteo()(url, opts);
+    };
+    try {
+      // Cached space events are filtered against the position: here
+      // mode stores them on the payload; stale-cache splice keeps the
+      // freshest events through offline hours
+      await call("/api/briefing/refresh");
+      const res = await call("/api/briefing");
+      assert.equal(res.code, null);
+      const events = res.payload.payload.spaceEvents ?? [];
+      assert.equal(events.length, 1);
+      assert.equal(events[0].kind, "aurora");
+      assert.equal(events[0].tactical, true);
+      assert.match(events[0].description, /Look south/);
+
+      // Endpoints down: refresh still succeeds, events degrade to none
+      globalThis.fetch = async (url, opts) => {
+        if (
+          String(url).includes("swpc.noaa.gov") ||
+          String(url).includes("ssd-api.jpl.nasa.gov")
+        ) {
+          throw new Error("network down");
+        }
+        return mockOpenMeteo()(url, opts);
+      };
+      const res2 = await call("/api/briefing/refresh");
+      assert.equal(res2.code, null);
+      const res3 = await call("/api/briefing");
+      assert.deepEqual(res3.payload.payload.spaceEvents, []);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    plugin.stop();
+  });
+
   test("oneshot fetch prefers the active route over the last briefed one", async () => {
     const { mockOpenMeteo } = require("./openmeteo-mock.js");
     const app = createMockApp();
