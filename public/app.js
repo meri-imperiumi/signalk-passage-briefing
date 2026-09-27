@@ -13,5 +13,6 @@ import "./components/backfill-controls.js";
 import "./components/conditions-here.js";
 import "./components/horizon-sparkline.js";
 import "./components/comfort-info.js";
+import "./components/synoptic-chart.js";
 
 document.documentElement.dataset.mode ??= "night";

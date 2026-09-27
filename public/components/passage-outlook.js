@@ -114,9 +114,7 @@ class PassageOutlook extends HTMLElement {
       onMode: (mode) => {
         document.documentElement.dataset.mode =
           mode === "day" ? "day" : "night";
-        this._view
-          ?.querySelector("strategic-outlook, tactical-dashboard")
-          ?.setAttribute("data-mode", mode);
+        this._view?.firstElementChild?.setAttribute("data-mode", mode);
       },
       onConnection: (connected) => {
         this._onlinePill.classList.toggle("online", connected);
@@ -276,6 +274,13 @@ class PassageOutlook extends HTMLElement {
   }
 
   /** Routes to the current hash tab and paints cached data. */
+  _applyModeToView() {
+    this._view?.firstElementChild?.setAttribute(
+      "data-mode",
+      document.documentElement.dataset.mode ?? "night",
+    );
+  }
+
   renderRoute() {
     if (this._briefing?.mode === "here") {
       this.renderHere();
@@ -288,12 +293,7 @@ class PassageOutlook extends HTMLElement {
     this._view.innerHTML = strategic
       ? "<strategic-outlook></strategic-outlook>"
       : "<tactical-dashboard></tactical-dashboard>";
-    this._view
-      .querySelector("strategic-outlook, tactical-dashboard")
-      ?.setAttribute(
-        "data-mode",
-        document.documentElement.dataset.mode ?? "night",
-      );
+    this._applyModeToView();
     if (this._exceptions) {
       this.renderData();
     }
@@ -307,6 +307,7 @@ class PassageOutlook extends HTMLElement {
   renderHere() {
     this._tabBar.hidden = true;
     this._view.innerHTML = "<conditions-here></conditions-here>";
+    this._applyModeToView();
     const here = this._view.querySelector("conditions-here");
     if (here && this._briefing?.payload) {
       here.setHere(this._briefing.payload, this._config ?? {});

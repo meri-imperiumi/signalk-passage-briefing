@@ -109,6 +109,7 @@ class ConditionsHere extends HTMLElement {
           <h3>Warnings for these waters</h3>
           <div class="console" id="warnings"></div>
         </section>
+        <synoptic-chart hidden></synoptic-chart>
         <section class="sk-card" id="events-card" hidden>
           <h3>Celestial &amp; space events</h3>
           <div id="events"></div>

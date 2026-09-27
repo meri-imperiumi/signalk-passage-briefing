@@ -238,12 +238,26 @@ function parseCardinalBounds(text) {
   // when y < x). Only one: half a world against the fixed bound.
   const eastOf = text.match(/EAST OF\s+(\d+(?:\.\d+)?)\s*([EW])/i);
   const westOf = text.match(/WEST OF\s+(\d+(?:\.\d+)?)\s*([EW])/i);
+  // NFFN phrasing: "BETWEEN 165W AND 135W" — a longitude pair
+  const between = text.match(
+    /BETWEEN\s+(\d+(?:\.\d+)?)\s*([EW])\s+AND\s+(\d+(?:\.\d+)?)\s*([EW])/i,
+  );
   const eastBound = eastOf
     ? hemisphereDegrees(eastOf[1], eastOf[2].toUpperCase())
-    : null;
+    : between
+      ? Math.min(
+          hemisphereDegrees(between[1], between[2].toUpperCase()),
+          hemisphereDegrees(between[3], between[4].toUpperCase()),
+        )
+      : null;
   const westBound = westOf
     ? hemisphereDegrees(westOf[1], westOf[2].toUpperCase())
-    : null;
+    : between
+      ? Math.max(
+          hemisphereDegrees(between[1], between[2].toUpperCase()),
+          hemisphereDegrees(between[3], between[4].toUpperCase()),
+        )
+      : null;
 
   let minLon;
   let maxLon;
@@ -529,6 +543,7 @@ function filterBulletin({
         text: blockText,
         subject: subject ?? null,
         geometryType: geometry ? geometry.type : null,
+        geometry: geometry ?? null,
         source,
       };
     })
@@ -675,6 +690,7 @@ function ukhoBlocksFromWarnings(warnings, track, { source = "ukho" } = {}) {
       text: warning.text,
       subject: null,
       geometryType: geometry ? geometry.type : null,
+      geometry: geometry ?? null,
       source,
     });
   }
