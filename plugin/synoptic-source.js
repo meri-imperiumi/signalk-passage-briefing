@@ -18,7 +18,9 @@ const { convertToPng } = require("./raster-convert.js");
 
 function loadSynopticMap() {
   // eslint-disable-next-line import/no-unresolved -- bundled asset
-  return require("./synoptic-map.json");
+  const { _unverified, ...active } = require("./synoptic-map.json");
+  void _unverified; // parked entries: unreachable/unverified hosts
+  return active;
 }
 
 /**

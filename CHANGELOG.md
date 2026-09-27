@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- The BoM radiofax hosts stall connections from the boat outright
+  (no response, fetch abort): zones 10 and 14 are parked under an
+  `_unverified` map section so refreshes no longer stall on doomed
+  fetches — zone 14 rides chartless until a reachable South Pacific
+  product is verified against
+  [otherfax.txt](https://tgftp.nws.noaa.gov/fax/otherfax.txt).
+- Synoptic fetch timeout capped at 8s per candidate mirror.
+
 - A half-migrated synoptic-source candidate-list change shipped a
   `pick.urls is not iterable` error that failed every here refresh on
   board. Consistent again, with per-candidate mirrors and loud

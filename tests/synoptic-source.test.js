@@ -44,18 +44,33 @@ describe("chart URL selection", () => {
   const map = loadSynopticMap();
 
   test("hour boundaries pick 00Z before noon, 12Z from noon", () => {
-    const before = chartUrlForZone(map, 14, new Date("2026-09-27T11:59:00Z"));
-    const at = chartUrlForZone(map, 14, new Date("2026-09-27T12:00:00Z"));
-    assert.match(before.urls[0], /IDX0032\.TIF$/);
-    assert.equal(before.urls.length, 2); // candidate mirrors
+    const map2 = {
+      "14": {
+        name: "x",
+        source: "t",
+        hours: {
+          "00": "http://a/00.TIF",
+          "12": "http://a/12.TIF",
+        },
+      },
+    };
+    const before = chartUrlForZone(map2, 14, new Date("2026-09-27T11:59:00Z"));
+    const at = chartUrlForZone(map2, 14, new Date("2026-09-27T12:00:00Z"));
+    assert.equal(before.url ?? before.urls[0], "http://a/00.TIF");
     assert.equal(before.validHour, "00");
-    assert.match(at.urls[0], /IDX0532\.TIF$/);
+    assert.equal(at.urls[0], "http://a/12.TIF");
     assert.equal(at.validHour, "12");
   });
 
+  test("parked unverified zones resolve to nothing", () => {
+    // The BoM hosts stall connections from the boat: zone 14 rides
+    // chartless until a reachable product is verified
+    assert.equal(chartUrlForZone(map, 14), null);
+  });
+
   test("static filenames skip the hour logic", () => {
-    const pick = chartUrlForZone(map, 10, new Date("2026-09-27T18:00:00Z"));
-    assert.match(pick.urls[0], /IDX0102\.TIF$/);
+    const pick = chartUrlForZone(map, 11, new Date("2026-09-27T18:00:00Z"));
+    assert.match(pick.urls[0], /PJAA99\.TIF$/);
     assert.equal(pick.validHour, "static");
   });
 
@@ -96,16 +111,16 @@ describe("conversion and cache", () => {
         arrayBuffer: async () => fixtureTif(16, 8),
       };
     };
-    const zones = [10]; // static URL entry
+    const zones = [11]; // static URL entry
     const first = await refreshSynoptics({
       dataDir: dir,
       zones,
       fetchImpl,
     });
-    assert.deepEqual(first.fetched, [10]);
+    assert.deepEqual(first.fetched, [11]);
     assert.equal(fetches, 1);
-    assert.ok(existsSync(join(dir, "synoptic-10.png")));
-    const cached = await loadSynoptic(dir, 10);
+    assert.ok(existsSync(join(dir, "synoptic-11.png")));
+    const cached = await loadSynoptic(dir, 11);
     assert.equal(detectFormat(cached.png), "png");
     assert.ok(cached.fetchedAt);
 
@@ -114,30 +129,31 @@ describe("conversion and cache", () => {
       zones,
       fetchImpl,
     });
-    assert.deepEqual(second.skipped, [10]);
+    assert.deepEqual(second.skipped, [11]);
     assert.equal(fetches, 1);
   });
 
   test("failed charts are isolated and the cache survives", async () => {
     const dir = dataDir();
     const fetchImpl = async (url) => {
-      if (String(url).includes("IDX0102")) {
+      // Zone 1: both hour variants serve; zone 11: 404s
+      if (/PPV[AE]89/.test(String(url))) {
         return { ok: true, status: 200, arrayBuffer: async () => fixtureTif() };
       }
       return { ok: false, status: 404, statusText: "Not Found" };
     };
     const result = await refreshSynoptics({
       dataDir: dir,
-      zones: [10, 11], // 11 fails
+      zones: [1, 11], // 11 fails
       fetchImpl,
     });
-    assert.deepEqual(result.fetched, [10]);
+    assert.deepEqual(result.fetched, [1]);
     assert.deepEqual(
       result.failed.map((f) => f.zone),
       [11],
     );
     assert.match(result.failed[0].error, /404/);
-    assert.ok(await loadSynoptic(dir, 10));
+    assert.ok(await loadSynoptic(dir, 1));
     assert.equal(await loadSynoptic(dir, 11), null);
   });
 });

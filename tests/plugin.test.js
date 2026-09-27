@@ -897,10 +897,10 @@ describe("plugin", () => {
     const tif = Buffer.from(UTIF.encodeImage(rgba, 8, 4));
 
     const app = createMockApp();
-    // Vessel at anchor in zone XIV (Tonga)
+    // Vessel in zone I waters (English Channel)
     app.getSelfPath = (path) =>
       path === "navigation.position"
-        ? { latitude: -18.658, longitude: -173.982 }
+        ? { latitude: 50.0, longitude: -5.0 }
         : null;
     const plugin = pluginFactory(app);
     plugin.start({});
@@ -945,7 +945,7 @@ describe("plugin", () => {
     const openMeteoFetch = mockOpenMeteo();
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async (url) => {
-      if (String(url).includes("bom.gov.au")) {
+      if (String(url).includes("/fax/")) {
         return {
           ok: true,
           status: 200,
@@ -964,8 +964,8 @@ describe("plugin", () => {
       assert.ok(res.body.length > 8);
 
       // Explicit zone override and the no-chart case
-      const z14 = await call("/api/synoptic?zone=14");
-      assert.equal(z14.body[0], 0x89);
+      const z1 = await call("/api/synoptic?zone=1");
+      assert.equal(z1.body[0], 0x89);
       const missing = await call("/api/synoptic?zone=15");
       assert.equal(missing.code, 404);
     } finally {
