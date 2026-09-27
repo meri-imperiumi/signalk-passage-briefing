@@ -4,6 +4,18 @@
 
 ### Fixed
 
+- Warning notes are placed at the point of the warning area nearest
+  the vessel (clamped into the bounding box, nearest vertex for
+  axis lines) instead of the box center — a quarter-ocean area's
+  center sits a thousand miles from the crew, outside any useful
+  near-me query radius on resources/notes.
+- Notes are schema-conservative (title/description/position/url/
+  mimeType/properties/timestamp only) — unknown top-level fields are
+  the classic resources write rejection — and provenance rides in
+  `properties.sourcePlugin`. Notes write failures are logged with
+  the server's reason and retried against the signalk-resources
+  provider id.
+
 - The plotter tile is now a mini summary: prominent colored comfort
   tier, route, age with a STALE marker when the briefing is past its
   window, and an `Open ↗` link (`target="_top"`) to the full webapp —

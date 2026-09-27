@@ -140,7 +140,10 @@ test("publishNotes: one note per placeable block, mapped fields", async () => {
   assert.equal(first.position.latitude, -50);
   assert.equal(first.properties.category, "meteorological-warning");
   assert.equal(first.properties.zone, 14);
-  assert.equal(first.$source, "signalk-passage-briefing");
+  assert.equal(
+    first.properties.sourcePlugin,
+    "signalk-passage-briefing",
+  );
   assert.equal(first.timestamp, ISSUED);
   assert.equal(first.mimeType, "image/gif"); // chart linked when cached
 });

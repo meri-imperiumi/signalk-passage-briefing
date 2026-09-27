@@ -153,11 +153,16 @@ function noteCategory(block) {
   return "meteorological-warning";
 }
 
-function buildNote(block, { issuedAt, zone, chart }) {
-  const position = geometryPosition(block.geometry);
+function buildNote(block, { issuedAt, zone, chart, ref }) {
+  const position = geometryPosition(block.geometry, ref);
   if (!position) {
     return null;
   }
+  // Schema-conservative note: only fields the resources/notes schema
+  // knows (title, description, position, url, mimeType, properties,
+  // timestamp). Provenance rides inside properties — a rejected note
+  // publishes nothing, and unknown top-level fields are the classic
+  // rejection cause.
   const note = {
     title: noteTitle(block.text),
     description: block.text,
@@ -168,9 +173,9 @@ function buildNote(block, { issuedAt, zone, chart }) {
       geometryType: block.geometryType ?? null,
       source: block.source ?? null,
       zone,
+      sourcePlugin: "signalk-passage-briefing",
     },
     timestamp: issuedAt,
-    $source: "signalk-passage-briefing",
   };
   if (chart) {
     note.url = chart.url;
@@ -308,7 +313,7 @@ async function resyncNotes({ app, dataDir }) {
   const removed = [];
   for (const [id, note] of Object.entries(all ?? {})) {
     if (
-      note?.$source === "signalk-passage-briefing" &&
+      note?.properties?.sourcePlugin === "signalk-passage-briefing" &&
       !manifest.owned.includes(id)
     ) {
       try {
