@@ -1,0 +1,288 @@
+/*
+ * Passage Briefing — design system tokens & base styles.
+ *
+ * Dark canvas in both modes ("no white mode"): day mode raises
+ * brightness and saturation to fight glare, night mode dims to
+ * protect rhodopsin. Host pages (or this app when standalone) set
+ * `data-mode="day" | "night"` on the root <html> element.
+ *
+ * @file css/visuals.css
+ */
+
+:root {
+  /* Base canvas (constant) */
+  --bg-base: #080a0c;
+  --bg-panel: #111414;
+  --bg-panel-muted: #0a0c0c;
+
+  /* Comfort tiers (Sereno physics, SPEC §5.2) — night-lean defaults */
+  --comfort-champagne: #33616b;
+  --comfort-easy: #4a7555;
+  --comfort-coffee: #8a5318;
+  --comfort-rough: #a05218;
+  --comfort-sick: #8f3333;
+  --comfort-unknown: #333333;
+
+  --color-green: #4a7555;
+  --color-teal: #33616b;
+  --color-orange: #8a5318;
+  --color-red: #8f3333;
+  --color-grey: #333333;
+
+  --text-main: #c4c4c4;
+  --text-muted: #666677;
+
+  --font-ui: system-ui, -apple-system, sans-serif;
+  --font-data: ui-monospace, "Fira Code", monospace;
+}
+
+:root[data-mode="day"] {
+  --comfort-champagne: #66c6db;
+  --comfort-easy: #8dfcbb;
+  --comfort-coffee: #fca847;
+  --comfort-rough: #ff8847;
+  --comfort-sick: #ff5e5e;
+  --comfort-unknown: #666666;
+
+  --color-green: #8dfcbb;
+  --color-teal: #66c6db;
+  --color-orange: #fca847;
+  --color-red: #ff5e5e;
+  --color-grey: #666666;
+
+  --text-main: #ffffff;
+  --text-muted: #a0a0b5;
+}
+
+* {
+  box-sizing: border-box;
+  border-radius: 0;
+}
+
+body {
+  background-color: var(--bg-base);
+  color: var(--text-main);
+  font-family: var(--font-ui);
+  margin: 0;
+  padding: 8px;
+}
+
+/* --- Panels: faint inner borders + 2px corner brackets ------------- */
+
+.sk-card {
+  position: relative;
+  background-color: var(--bg-panel);
+  border: 1px solid rgba(102, 198, 219, 0.3);
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.sk-card::before,
+.sk-card::after {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  pointer-events: none;
+}
+
+.sk-card::before {
+  top: -2px;
+  left: -2px;
+  border-top: 2px solid var(--theme-color, var(--color-teal));
+  border-left: 2px solid var(--theme-color, var(--color-teal));
+}
+
+.sk-card::after {
+  bottom: -2px;
+  right: -2px;
+  border-bottom: 2px solid var(--theme-color, var(--color-teal));
+  border-right: 2px solid var(--theme-color, var(--color-teal));
+}
+
+.theme-green {
+  --theme-color: var(--color-green);
+}
+.theme-teal {
+  --theme-color: var(--color-teal);
+}
+.theme-orange {
+  --theme-color: var(--color-orange);
+}
+.theme-red {
+  --theme-color: var(--color-red);
+}
+.theme-offline {
+  --theme-color: var(--color-grey);
+}
+
+/* --- Headers & labels ---------------------------------------------- */
+
+h1,
+h2,
+h3 {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--theme-color, var(--color-teal));
+  margin: 0 0 8px 0;
+}
+
+.label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* --- Data values ---------------------------------------------------- */
+
+.value {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: var(--text-main);
+  line-height: 1.1;
+}
+
+.value-small {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.muted {
+  color: var(--text-muted);
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Buttons (hardware style) --------------------------------------- */
+
+button {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--theme-color, var(--color-teal));
+  color: var(--theme-color, var(--color-teal));
+  font-family: var(--font-data);
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 12px 16px;
+  min-height: 48px;
+  cursor: pointer;
+}
+
+button:hover,
+button:active {
+  background-color: var(--theme-color, var(--color-teal));
+  color: var(--bg-base);
+}
+
+button:disabled {
+  border-color: var(--color-grey);
+  color: var(--color-grey);
+  cursor: not-allowed;
+  background: transparent;
+}
+
+select {
+  appearance: none;
+  background-color: var(--bg-panel-muted);
+  border: 1px solid var(--color-grey);
+  border-bottom: 2px solid var(--color-grey);
+  color: var(--text-main);
+  font-family: var(--font-data);
+  font-size: 0.9rem;
+  padding: 12px;
+  min-height: 48px;
+}
+
+select:focus {
+  outline: none;
+  border-bottom-color: var(--theme-color, var(--color-teal));
+}
+
+/* --- Tab bar --------------------------------------------------------- */
+
+.tab-bar {
+  display: flex;
+  gap: 0;
+}
+
+.tab-bar button {
+  flex: 1;
+  border-right: none;
+}
+
+.tab-bar button:last-child {
+  border-right: 1px solid var(--theme-color, var(--color-teal));
+}
+
+.tab-bar button[aria-selected="true"] {
+  background-color: var(--theme-color, var(--color-teal));
+  color: var(--bg-base);
+}
+
+/* --- Data table ------------------------------------------------------- */
+
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+table.data th {
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(102, 198, 219, 0.3);
+}
+
+table.data td {
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(102, 198, 219, 0.15);
+  color: var(--text-main);
+}
+
+/* --- Pseudo-console (METAREA bulletins, logs) ------------------------- */
+
+.console {
+  font-family: var(--font-data);
+  font-size: 0.85rem;
+  background-color: var(--bg-panel-muted);
+  border: 1px solid rgba(102, 198, 219, 0.3);
+  padding: 8px;
+  max-height: 40vh;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.console .ts {
+  color: var(--text-muted);
+}
+
+/* --- Layout ------------------------------------------------------------ */
+
+.grid-auto {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+@media (min-width: 700px) {
+  body {
+    padding: 16px;
+  }
+}

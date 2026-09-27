@@ -101,6 +101,14 @@ module.exports = (app) => {
   let stateMachine = null;
   /** @type {PassageDatabase|null} */
   let db = null;
+  /** Simulation-relevant config subset served to the webapp worker. */
+  let simulationConfig = {
+    motoring_tws_threshold: DEFAULTS.motoring_tws_threshold,
+    drift_mode_enabled: DEFAULTS.drift_mode_enabled,
+    waterline_length_m: DEFAULTS.waterline_length_m,
+    k_heel: DEFAULTS.k_heel,
+    k_pitch: DEFAULTS.k_pitch,
+  };
   /** @type {NodeJS.Timeout|null} */
   let cronTimer = null;
   /** Last known values of the watched paths. */
@@ -329,7 +337,13 @@ module.exports = (app) => {
      */
     start: (options) => {
       const config = { ...DEFAULTS, ...(options || {}) };
-
+      simulationConfig = {
+        motoring_tws_threshold: config.motoring_tws_threshold,
+        drift_mode_enabled: config.drift_mode_enabled,
+        waterline_length_m: config.waterline_length_m,
+        k_heel: config.k_heel,
+        k_pitch: config.k_pitch,
+      };
       stateMachine = new PassageStateMachine();
       db = new PassageDatabase(app.getDataDirPath());
 
@@ -389,6 +403,10 @@ module.exports = (app) => {
      * @param {object} router - Express router mounted at the plugin root
      */
     registerWithRouter: (router) => {
+      router.get("/api/config", (_req, res) => {
+        res.json(simulationConfig);
+      });
+
       router.get("/api/status", (_req, res) => {
         res.json({
           state: stateMachine ? stateMachine.state : null,

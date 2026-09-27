@@ -85,6 +85,20 @@
 - Simulation web worker (`public/worker.js`): runs the passage
   simulation off the main thread and replies with the result plus its
   pre-filtered exception views (next-24h blocks, passage summary).
+- Two-screen webapp (SPEC §6): root `<passage-outlook>` shell with
+  hash-based tabs (tactical 24h / strategic passage), route picker
+  preselecting the active route, offline pill from the Signal K
+  stream, and a stale-briefing strip offering a refresh when the
+  link is up. `<tactical-dashboard>` shows the current comfort tier,
+  the 24h `<horizon-sparkline>` (comfort-tier colors, AWS heights)
+  and exception-only sail/energy/hazard alerts;
+  `<strategic-outlook>` the ETA percentile table, motor plan,
+  macro sea-state and convective warnings plus the METAREA bulletin
+  console. Day/night reactive per `environment.mode` (throttled
+  delta subscription), exponential-backoff reconnects, granular DOM
+  updates only, zero dependencies. Pure view models
+  (`public/components/models.mjs`) are Node-tested; `GET /api/config`
+  serves the simulation-relevant plugin settings to the worker.
 - README with credits; the `yaml` runtime dependency for reading the
   logbook store.
 - Smoketests for the physics, the logbook source, the backfill, the
