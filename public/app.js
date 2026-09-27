@@ -9,6 +9,7 @@
 import "./components/passage-outlook.js";
 import "./components/tactical-dashboard.js";
 import "./components/strategic-outlook.js";
+import "./components/backfill-controls.js";
 import "./components/conditions-here.js";
 import "./components/horizon-sparkline.js";
 

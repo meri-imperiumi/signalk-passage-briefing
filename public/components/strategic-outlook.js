@@ -71,6 +71,7 @@ class StrategicOutlook extends HTMLElement {
         <h2>Warnings On Your Waters</h2>
         <div class="console" id="blocks"></div>
       </section>
+      <backfill-controls></backfill-controls>
     `;
     this._etaBody = this.shadowRoot.getElementById("eta-body");
     this._motorEl = this.shadowRoot.getElementById("motor");
