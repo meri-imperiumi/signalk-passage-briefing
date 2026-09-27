@@ -27,6 +27,9 @@
   "signalk": {
     "displayName": "Passage Briefing",
     "appIcon": "./icon.png",
+    "screenshots": [
+      "doc/here-brief.png"
+    ],
     "requires": [
       "@meri-imperiumi/signalk-energy-predictor",
       "@meri-imperiumi/signalk-internet",
