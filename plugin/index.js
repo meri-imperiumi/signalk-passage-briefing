@@ -29,6 +29,9 @@ const {
   readLogbookSailEvents,
 } = require("./logbook-source.js");
 const { readSailsConfiguration } = require("./sails-configuration.js");
+const { filterBulletin } = require("./bulletin-engine.js");
+const { loadBulletinCache, refreshBulletins } = require("./bulletin-source.js");
+const { fetchZoneBulletins, resolveZones } = require("./zone-source.js");
 const {
   backfillSailEvents,
   createHistoryWindStats,
@@ -87,6 +90,14 @@ const DEFAULTS = {
   spool_directory: join(homedir(), ".signalk", "spool", "passage-outlook"),
   k_heel: 0.35,
   k_pitch: 0.4,
+  /** Verified NWS High Seas Forecast feeds (METAREA XII/XV). The
+   * METAREA XIV issuer (MetService) gets added as a URL once a
+   * working endpoint is confirmed on board. */
+  bulletin_urls: [
+    "https://api.weather.gov/products/types/HSF/locations/NP",
+    "https://api.weather.gov/products/types/HSF/locations/EP1",
+    "https://api.weather.gov/products/types/HSF/locations/EP2",
+  ],
 };
 
 /**
@@ -101,6 +112,9 @@ module.exports = (app) => {
   let stateMachine = null;
   /** @type {PassageDatabase|null} */
   let db = null;
+  /** Bulletin source URLs (from configuration). */
+  let bulletinUrls = DEFAULTS.bulletin_urls;
+
   /** Simulation-relevant config subset served to the webapp worker. */
   let simulationConfig = {
     motoring_tws_threshold: DEFAULTS.motoring_tws_threshold,
@@ -157,6 +171,67 @@ module.exports = (app) => {
   }
 
   /**
+   * Filters the newest cached bulletin against a track (work doc #4
+   * §4). Returns null when nothing is cached.
+   *
+   * @param {Array<{lat: number, lon: number}>} waypoints - Sampled
+   *   route waypoints
+   * @returns {Promise<object|null>} `metareaBulletin` shape with `blocks`
+   */
+  async function bulletinForTrack(waypoints) {
+    const cached = await loadBulletinCache(app.getDataDirPath());
+    if (cached.length === 0) {
+      return null;
+    }
+    const track = waypoints.map((w) => [w.lon, w.lat]);
+    const newest = cached[0];
+    return filterBulletin({
+      rawText: newest.text,
+      source: newest.source ?? "api",
+      track,
+      issuedAt: newest.fetchedAt,
+    });
+  }
+
+  /**
+   * Pulls bulletins while online (work doc #9): resolves the active
+   * GMDSS zones from the route track and fetches only those, then
+   * any configured extra feeds. Merges into the disk cache.
+   *
+   * @param {"oneshot"|"cron"|"briefing"|"manual"} trigger
+   * @param {Array<{lat: number, lon: number}>} [waypoints] - Track
+   *   for zone resolution (position-only when omitted)
+   */
+  async function refreshBulletinsOnline(trigger, waypoints = []) {
+    if (!isOnline()) {
+      return;
+    }
+    // Zone-targeted pulls (work doc #9 fetch strategy)
+    const zones = resolveZones(waypoints.map((w) => [w.lon, w.lat]));
+    const result = await refreshBulletins({
+      dataDir: app.getDataDirPath(),
+      urls: [],
+      zoneBulletins: await fetchZoneBulletins({ zones }),
+    });
+    // Custom extra feeds (source-agnostic escape hatch)
+    if (bulletinUrls.length > 0) {
+      const extra = await refreshBulletins({
+        dataDir: app.getDataDirPath(),
+        urls: bulletinUrls,
+      });
+      result.fetched.push(...extra.fetched);
+      result.failed.push(...extra.failed);
+    }
+    if (result.fetched.length > 0) {
+      app.debug?.(
+        `Bulletins refreshed (${trigger}) zones ${zones.join(",") || "none"}: ` +
+          `${result.fetched.length} fetched` +
+          (result.failed.length ? `, ${result.failed.length} failed` : ""),
+      );
+    }
+  }
+
+  /**
    * Fetches and caches the briefing payload for a route. Internet
    * weather is only fetched while the link is up; everything served
    * afterwards comes from the cache (on passage the boat is online
@@ -183,7 +258,14 @@ module.exports = (app) => {
       throw new Error(`Route ${routeId} has no track`);
     }
     const waypoints = sampleRoutePoints(coordinates);
+    // Bulletins ride the same online window as the weather (SPEC §3.1
+    // metareaBulletin): pulled first so this briefing carries them
+    await refreshBulletinsOnline("briefing", waypoints);
     const payload = await fetchWeatherAlongTrack({ waypoints, forecastDays });
+    const bulletin = await bulletinForTrack(waypoints);
+    if (bulletin) {
+      payload.metareaBulletin = bulletin;
+    }
     await savePayload(app.getDataDirPath(), routeId, payload);
     await writeFile(
       join(app.getDataDirPath(), "weather", "last-route"),
@@ -194,6 +276,7 @@ module.exports = (app) => {
       cached: true,
       cachedAt: payload.metadata.fetchedAt,
       fetchedAt: payload.metadata.fetchedAt,
+      waypoints,
     };
   }
 
@@ -226,6 +309,8 @@ module.exports = (app) => {
     }
     try {
       const result = await refreshBriefing(routeId);
+      // Bulletins ride the same online window (work doc #4 §1)
+      await refreshBulletinsOnline(trigger, result.waypoints);
       setStatus(
         `Briefing for ${routeId} cached at ${result.fetchedAt} (${trigger})`,
       );
@@ -329,6 +414,15 @@ module.exports = (app) => {
           title: "Pitching Acceleration Multiplier Constant",
           default: DEFAULTS.k_pitch,
         },
+        bulletin_urls: {
+          type: "array",
+          title: "High Seas Bulletin Sources (NAVAREA / HSF text)",
+          description:
+            "Plain-text or api.weather.gov product URLs, filtered per " +
+            "route and cached. Add the METAREA XIV source when verified.",
+          items: { type: "string" },
+          default: DEFAULTS.bulletin_urls,
+        },
       },
     },
 
@@ -337,6 +431,9 @@ module.exports = (app) => {
      */
     start: (options) => {
       const config = { ...DEFAULTS, ...(options || {}) };
+      bulletinUrls = Array.isArray(config.bulletin_urls)
+        ? config.bulletin_urls
+        : [];
       simulationConfig = {
         motoring_tws_threshold: config.motoring_tws_threshold,
         drift_mode_enabled: config.drift_mode_enabled,
@@ -476,7 +573,50 @@ module.exports = (app) => {
           res.status(404).json({ error: "No cached briefing for this route" });
           return;
         }
+        // Splice the freshest cached bulletin into older briefings so
+        // the warning panel stays current through the offline hours
+        if (!cached.payload?.metareaBulletin) {
+          const bulletin = await bulletinForTrack(
+            cached.payload?.waypoints ?? [],
+          );
+          if (bulletin) {
+            cached.payload.metareaBulletin = bulletin;
+          }
+        }
         res.json({ ...cached, online: isOnline() });
+      });
+
+      router.get("/api/bulletin", async (req, res) => {
+        // Filtered against the queried route's track, else unfiltered
+        let waypoints = [];
+        if (typeof req.query.route === "string") {
+          try {
+            const route = await app.resourcesApi.getResource(
+              "routes",
+              req.query.route,
+            );
+            waypoints = sampleRoutePoints(
+              route?.feature?.geometry?.coordinates ?? [],
+            );
+          } catch {
+            // Unknown route: serve the unfiltered bulletin
+          }
+        }
+        res.json(await bulletinForTrack(waypoints));
+      });
+
+      router.post("/api/bulletin/refresh", async (_req, res) => {
+        if (!isOnline()) {
+          res.status(503).json({
+            error: "Offline: bulletins are only fetched while online",
+          });
+          return;
+        }
+        const result = await refreshBulletins({
+          dataDir: app.getDataDirPath(),
+          urls: bulletinUrls,
+        });
+        res.json(result);
       });
 
       router.get("/api/cached", async (_req, res) => {

@@ -110,6 +110,39 @@
   Sea state falls back to a Pierson-Moskowitz wind-sea
   approximation when no wave history is recorded; the report JSON
   records resolution, sample and window counts.
+- GMDSS bulletin filtering engine (`plugin/bulletin-engine.js`,
+  work doc #4): strips ZCZC/NNNN and routing headers, filters on the
+  NAVTEX B_2 subject indicator (B_1 station letter vs B_2 subject
+  distinguished - `ZCZC GA14` is subject A), segments on GMDSS
+  section anchors including NWS `.WARNINGS.` style, extracts
+  coordinate chains and cardinal bounds into geometry (antimeridian-
+  safe: seam-spanning polygons and unwrapped cardinal boxes), and
+  drops blocks whose warning area does not intersect the route
+  track. Axis-line warnings ("WITHIN 120NM EAST OF AXIS") expand by
+  the declared band before the test.
+- Zone resolution & sources (`plugin/zone-source.js` +
+  `public/gmdss-zones-min.json`, work doc #9): bundled low-res
+  GeoJSON zone polygons resolve the active NAVAREA/METAREA zones
+  from the route (smallest-containing-polygon wins on overlap,
+  routes straddling a boundary activate both zones), and only those
+  zones are fetched - NOAA TGFTP raw text when the station is
+  configured (NFFN for XIV), WMO GMDSS portal as fallback, UKHO MSI
+  JSON URL available for NAVAREA warnings. Antimeridian routes
+  (Tonga to Opua) verified end to end in tests.
+- Bulletin ingestion & cache (`plugin/bulletin-source.js`): online-
+  gated like the weather fetches, raw texts cached on disk
+  (`weather/bulletins.json`, newest 20 kept) so warnings stay
+  available through the offline hours; per-source failures skip
+  without losing the rest. Extra custom feeds configurable via
+  `bulletin_urls`.
+- Briefing integration: the freshest cached bulletin is filtered
+  against the route track and attached to the payload as
+  `metareaBulletin` (with segmented `blocks`), spliced into older
+  cached briefings at serve time; REST routes `GET /api/bulletin`
+  and `POST /api/bulletin/refresh`.
+- Strategic screen rendering: filtered warning blocks in a
+  scrolling console with severe-keyword highlighting (GALE, STORM,
+  SQUALL, ROUGH SEAS, ...), raw bulletin text as fallback.
 - README with credits; the `yaml` runtime dependency for reading the
   logbook store.
 - Smoketests for the physics, the logbook source, the backfill, the

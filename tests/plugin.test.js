@@ -112,7 +112,7 @@ describe("plugin", () => {
         },
       ],
     });
-    const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 60));
     await tick();
     assert.match(app.getStatus(), /No route briefed yet/);
 
@@ -438,6 +438,121 @@ describe("plugin", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+
+    plugin.stop();
+  });
+
+  test("bulletins: fetched online, filtered per route, served and spliced", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const NAVAREA = [
+      "FQPS01 NFFN 011200Z AUG 26",
+      "ZCZC GA14",
+      "011200Z AUG 26",
+      "NAVAREA XIV 114/26",
+      "GALE WARNING",
+      "PART 1 WARNING",
+      "DEVELOPING TROUGH T1 WITH SQUALLS AND GALES WITHIN 120NM",
+      "EAST OF AXIS 16S 170E TO 20S 178W TO 25S 175W.",
+      "EXPECT WINDS 35 KNOTS. ROUGH SEAS.",
+      "PARTS 2 AND 3 SYNOPSIS AND FORECAST",
+      "SITUATION IS MODERATE OVER REMAINDER WATERS.",
+      "NNNN",
+    ].join("\n");
+
+    const app = createMockApp();
+    // Tonga → Opua: crosses the antimeridian
+    const route = {
+      name: "Tonga to Opua",
+      feature: {
+        geometry: {
+          coordinates: [
+            [-175.2, -21.1],
+            [174.3, -35.3],
+          ],
+        },
+      },
+    };
+    app.resourcesApi = {
+      async getResource(resType, resId) {
+        if (resType === "routes" && resId === "r1") {
+          return route;
+        }
+        throw new Error("not found");
+      },
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({ bulletin_urls: ["https://met.test/navarea.txt"] });
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const call = async (path) => {
+      const r = app.getRoutes().find((x) => x.path === path);
+      const res = {
+        code: null,
+        payload: null,
+        status(c) {
+          this.code = c;
+          return this;
+        },
+        json(p) {
+          this.payload = p;
+        },
+      };
+      await r.handler({ query: { route: "r1" } }, res);
+      return res;
+    };
+
+    // Offline: bulletin refresh refuses, briefing refresh refuses
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "offline" }] },
+      ],
+    });
+    let res = await call("/api/bulletin/refresh");
+    assert.equal(res.code, 503);
+
+    // Online: the combined fetch serves Open-Meteo + the bulletin
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "online" }] },
+      ],
+    });
+    const openMeteoFetch = mockOpenMeteo();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      if (String(url).includes("met.test")) {
+        return {
+          ok: true,
+          text: async () => NAVAREA,
+          json: async () => ({}),
+        };
+      }
+      return openMeteoFetch(url, opts);
+    };
+    try {
+      res = await call("/api/bulletin/refresh");
+      assert.equal(res.code, null);
+      assert.deepEqual(res.payload.fetched, ["https://met.test/navarea.txt"]);
+
+      // Briefing refresh attaches the filtered bulletin to the payload
+      res = await call("/api/briefing/refresh");
+      assert.equal(res.code, null);
+
+      res = await call("/api/briefing");
+      const bulletin = res.payload.payload.metareaBulletin;
+      assert.ok(bulletin, "bulletin attached");
+      assert.equal(bulletin.source, "api");
+      assert.equal(bulletin.blocks.length > 0, true);
+      const trough = bulletin.blocks.find((b) => b.text.includes("TROUGH"));
+      assert.ok(trough, "trough block intersects the Tonga track");
+      assert.equal(trough.geometryType, "polygon");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    // Standalone bulletin route serves the filtered view too
+    res = await call("/api/bulletin");
+    assert.ok(res.payload, "bulletin served");
+    assert.ok(res.payload.blocks.some((b) => b.text.includes("TROUGH")));
 
     plugin.stop();
   });

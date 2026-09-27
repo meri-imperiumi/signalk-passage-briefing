@@ -123,6 +123,52 @@ export function sparklineColumns(hourlyComfort, hours = 24) {
 }
 
 /**
+ * Severe weather keywords highlighted in the strategic outlook
+ * (work doc #4 §5).
+ */
+export const SEVERE_KEYWORDS = [
+  "GALE",
+  "STORM",
+  "HURRICANE FORCE",
+  "VIOLENT STORM",
+  "SQUALL",
+  "ROUGH SEAS",
+  "VERY ROUGH SEAS",
+  "HIGH SEAS",
+  "PHENOMENAL SEAS",
+];
+
+/**
+ * Splits bulletin text into tokens for severe-keyword highlighting:
+ * consecutive non-severe words are grouped into one token each, so
+ * the renderer builds a handful of DOM nodes instead of one per
+ * word. Case-insensitive match, original casing preserved.
+ *
+ * @param {string|null|undefined} text
+ * @returns {Array<{text: string, severe: boolean}>}
+ */
+export function splitSevere(text) {
+  if (!text) {
+    return [];
+  }
+  const pattern =
+    /\b(HURRICANE FORCE|VIOLENT STORM|VERY ROUGH SEAS|ROUGH SEAS|HIGH SEAS|PHENOMENAL SEAS|GALE|STORM|SQUALL)\b/gi;
+  const tokens = [];
+  let last = 0;
+  for (const match of text.matchAll(pattern)) {
+    if (match.index > last) {
+      tokens.push({ text: text.slice(last, match.index), severe: false });
+    }
+    tokens.push({ text: match[0], severe: true });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) {
+    tokens.push({ text: text.slice(last), severe: false });
+  }
+  return tokens;
+}
+
+/**
  * Current-hour summary for the tactical dashboard's big readout.
  *
  * @param {object|null} exceptions - Worker exception view

@@ -402,3 +402,69 @@ describe("polar lookup", () => {
     approx(east, Math.PI / 2, 1e-9);
   });
 });
+
+describe("antimeridian", () => {
+  // Tonga → Opua crosses 180°; the geometry must take the short arc
+  const TONGA_TO_OPUA = [
+    [-175.2, -21.1],
+    [-179.0, -25.0],
+    [179.0, -30.0],
+    [174.3, -35.3],
+  ];
+
+  test("distanceNm takes the short way across 180", async () => {
+    const { distanceNm } = await simPromise;
+    // 2° of longitude at 18.5S ≈ 113.3 nm, not ~20400 nm
+    const nm = distanceNm(-18.5, -179, -18.5, 179);
+    assert.ok(nm > 110 && nm < 117, `nm ${nm}`);
+  });
+
+  test("route distance and sampling stay on the short arc", async () => {
+    const { routeDistanceNm } = require("../plugin/fetch-engine.js");
+    const { sampleRoutePoints } = require("../plugin/fetch-engine.js");
+    const total = routeDistanceNm(TONGA_TO_OPUA);
+    // Real passage ≈ 1100 nm; the long way would be ~23000
+    assert.ok(total > 950 && total < 1250, `total ${total}`);
+
+    const track = sampleRoutePoints(TONGA_TO_OPUA, 60);
+    assert.ok(track.length > 15, `waypoints ${track.length}`);
+    // Strict: every sampled lon stays on the Pacific side of the
+    // seam — none swept the long way through the 0±140°E band
+    for (const w of track) {
+      const inWrongHalf = w.lon > -35 && w.lon < 165;
+      assert.equal(inWrongHalf, false, `lon ${w.lon} swept the long way`);
+    }
+  });
+
+  test("simulation crosses 180 without teleporting", async () => {
+    const { simulateRun } = await simPromise;
+    // Route leg across the seam: 1° lon apart across 180 at −20 lat
+    const payload = {
+      metadata: {},
+      waypoints: [
+        { lat: -20, lon: 179, distanceFromStartNm: 0 },
+        { lat: -20.5, lon: -179, distanceFromStartNm: 60 },
+      ],
+      forecasts: undefined,
+    };
+    payload.waypoints = payload.waypoints.map((w) => ({
+      ...w,
+      forecasts: Array.from({ length: 24 }, (_, h) => ({
+        timestamp: new Date(Date.UTC(2026, 5, 21, h)).toISOString(),
+        surface: { tws: 10, twd: 90, mslp: 1013, gust: 15 },
+        marine: { hsCombined: 1.5, tpCombined: 8, dirCombined: 45 },
+        upperAir: { cape: 100, kIndex: 20 },
+        current: { drift: 0, set: 0 },
+      })),
+    }));
+    const run = simulateRun({
+      payload,
+      startTime: new Date("2026-06-21T06:00:00Z"),
+      config: {},
+    });
+    assert.ok(run.etaHours < 14 * 24, `eta ${run.etaHours}`);
+    const lastLon = run.hourly[run.hourly.length - 1].lon;
+    // Arrival on the −180 side of the seam
+    assert.ok(lastLon < 0, `last lon ${lastLon}`);
+  });
+});

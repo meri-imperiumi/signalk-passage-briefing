@@ -6,7 +6,7 @@
  * @file components/strategic-outlook.js
  */
 
-import { etaTable } from "./models.mjs";
+import { etaTable, splitSevere } from "./models.mjs";
 
 /**
  * The custom element (browser only).
@@ -29,6 +29,10 @@ class StrategicOutlook extends HTMLElement {
         }
         .warn.severe { color: var(--color-red); }
         .none { color: var(--text-muted); font-size: 0.85rem; }
+        strong.sev {
+          color: var(--color-orange);
+          text-transform: uppercase;
+        }
       </style>
       <section class="sk-card theme-teal">
         <h2>ETA &amp; Motor Plan</h2>
@@ -55,6 +59,10 @@ class StrategicOutlook extends HTMLElement {
         <h2>METAREA Bulletin</h2>
         <pre class="console" id="bulletin">No bulletin cached</pre>
       </section>
+      <section class="sk-card theme-red" id="blocks-card" hidden>
+        <h2>Warnings On Your Waters</h2>
+        <div class="console" id="blocks"></div>
+      </section>
     `;
     this._etaBody = this.shadowRoot.getElementById("eta-body");
     this._motorEl = this.shadowRoot.getElementById("motor");
@@ -65,7 +73,7 @@ class StrategicOutlook extends HTMLElement {
     if (this._exceptions) {
       this.setExceptions(this._exceptions);
     }
-    if (this._bulletin) {
+    if (this._bulletin !== undefined) {
       this.setBulletin(this._bulletin);
     }
   }
@@ -136,14 +144,42 @@ class StrategicOutlook extends HTMLElement {
   }
 
   /**
-   * Raw METAREA bulletin text (spool-sourced when available).
+   * Raw METAREA bulletin (spool-sourced when available).
    *
-   * @param {string|null} text
+   * @param {string|{bulletinText: string, blocks: Array<{text: string}>}|null}
+   *   bulletin - The payload's metareaBulletin, or raw text
    */
-  setBulletin(text) {
-    this._bulletin = text;
-    if (this._bulletinEl) {
-      this._bulletinEl.textContent = text || "No bulletin cached";
+  setBulletin(bulletin) {
+    this._bulletin = bulletin;
+    if (!this._bulletinEl) {
+      return; // Not yet connected
+    }
+    const normalized =
+      typeof bulletin === "string" ? { bulletinText: bulletin } : bulletin;
+    this._bulletinEl.textContent =
+      normalized?.bulletinText || "No bulletin cached";
+
+    // Filtered blocks replace the raw wall of text (work doc #4 §5):
+    // only geographically relevant paragraphs, severe keywords lit
+    const blocksCard = this.shadowRoot.getElementById("blocks-card");
+    const blocksEl = this.shadowRoot.getElementById("blocks");
+    const blocks = normalized?.blocks ?? [];
+    blocksCard.hidden = blocks.length === 0;
+    blocksEl.innerHTML = "";
+    for (const block of blocks) {
+      const pre = document.createElement("div");
+      pre.style.marginBottom = "8px";
+      for (const token of splitSevere(block.text)) {
+        if (token.severe) {
+          const strong = document.createElement("strong");
+          strong.className = "sev";
+          strong.textContent = token.text;
+          pre.appendChild(strong);
+        } else {
+          pre.appendChild(document.createTextNode(token.text));
+        }
+      }
+      blocksEl.appendChild(pre);
     }
   }
 }

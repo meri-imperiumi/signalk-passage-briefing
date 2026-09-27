@@ -274,6 +274,9 @@ class PassageOutlook extends HTMLElement {
     );
     if (target) {
       target.setExceptions(this._exceptions);
+      if (strategicView && this._briefing?.payload) {
+        target.setBulletin(this._briefing.payload.metareaBulletin ?? null);
+      }
     }
   }
 

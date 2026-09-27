@@ -19,6 +19,7 @@ test("webapp view models", async (t) => {
     fmtUtc,
     sailActionCards,
     sparklineColumns,
+    splitSevere,
     tacticalNow,
   } = await import("../public/components/models.mjs");
 
@@ -123,6 +124,29 @@ test("webapp view models", async (t) => {
     assert.equal(cards[1].night, true);
     assert.equal(cards[1].sailState, "STAYSAIL_MAIN_1_REEF");
     assert.deepEqual(sailActionCards(null), []);
+  });
+
+  await t.test("splitSevere tokenizes severe keywords", () => {
+    const tokens = splitSevere(
+      "EXPECT WINDS 35 KNOTS. Rough seas with heavy GALE warnings.",
+    );
+    const severeWords = tokens
+      .filter((t) => t.severe)
+      .map((t) => t.text.toUpperCase());
+    assert.deepEqual(severeWords, ["ROUGH SEAS", "GALE"]);
+    assert.ok(tokens.some((t) => !t.severe && t.text.includes("EXPECT")));
+    // Reconstructing the tokens reproduces the input exactly
+    const input = "EXPECT WINDS 35 KNOTS. Rough seas with heavy GALE warnings.";
+    assert.equal(
+      splitSevere(input)
+        .map((t) => t.text)
+        .join(""),
+      input,
+    );
+    assert.deepEqual(splitSevere("plain text only"), [
+      { text: "plain text only", severe: false },
+    ]);
+    assert.deepEqual(splitSevere(null), []);
   });
 
   await t.test("etaTable builds percentile rows and motor totals", () => {
