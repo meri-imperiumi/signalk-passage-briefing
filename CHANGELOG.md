@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- The webapp's "Fetch now" button sent a GET to the POST-only
+  `/api/briefing/refresh` route (fetchJson had no method option), so
+  the button 404ed against a real server; it now issues a POST.
+
 - On-board first-run issues: the webapp now fetches its REST API from
   the absolute `/plugins/signalk-passage-briefing/api` mount (SK v2
   serves the webapp itself under `/@<scope>/<name>/`, where the old

@@ -202,7 +202,9 @@ class PassageOutlook extends HTMLElement {
     const routeId = this._routeSelect.value;
     const query = routeId ? `?route=${encodeURIComponent(routeId)}` : "";
     try {
-      await fetchJson(`${PLUGIN_API}/briefing/refresh${query}`, 120000);
+      await fetchJson(`${PLUGIN_API}/briefing/refresh${query}`, 120000, {
+        method: "POST",
+      });
       await this.loadBriefing(routeId);
     } catch (error) {
       this.showError(`Refresh failed: ${error.message}`);

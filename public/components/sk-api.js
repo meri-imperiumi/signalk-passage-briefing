@@ -16,11 +16,11 @@ const BASE = "/signalk/v1";
  * @param {number} [timeoutMs=8000]
  * @returns {Promise<any>} Parsed body
  */
-export async function fetchJson(url, timeoutMs = 8000) {
+export async function fetchJson(url, timeoutMs = 8000, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await fetch(url, { signal: controller.signal, ...options });
     if (!res.ok) {
       throw new Error(`${res.status} ${res.statusText}`);
     }
