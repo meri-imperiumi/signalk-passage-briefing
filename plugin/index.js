@@ -50,6 +50,11 @@ const { fetchSpaceEvents } = require("./celestial-source.js");
 const { registerPlotterExtension } = require("./brief-ext.js");
 const { registerStatusTileExamples } = require("./statustilesexamples.js");
 const {
+  clearNotes,
+  publishNotes,
+  resyncNotes,
+} = require("./notes-publisher.js");
+const {
   backfillSailEvents,
   createHistoryWindStats,
   createLogbookWindStats,
@@ -139,6 +144,7 @@ const DEFAULTS = {
    * doc's XIV example (Fiji radio re-broadcasting NAVAREA XIV) as the
    * seed; extend via configuration. */
   bulletin_stations: [{ zone: 14, header: "FQPS01", station: "NFFN" }],
+  publish_metarea_notes: true,
 };
 
 /**
@@ -184,6 +190,8 @@ module.exports = (app) => {
   /** Plotter-extension provider teardown (registered at start). */
   let teardownPlotterExt = null;
   let teardownStatusTiles = null;
+  /** Publish METAREA blocks as resources/notes (doc #12). */
+  let publishNotesEnabled = true;
 
   /**
    * Whether the internet link currently allows fetching.
@@ -424,6 +432,45 @@ module.exports = (app) => {
   }
 
   /**
+   * Publishes the filtered bulletin blocks as georeferenced server
+   * notes (work doc #12). Local-only: not gated on the internet
+   * state, so spool-sourced warnings publish the same way.
+   *
+   * @param {"here"|"route"} trigger
+   * @param {object|null} bulletin - metareaBulletin with blocks
+   * @param {Array<{lat: number, lon: number}>} waypoints
+   */
+  async function publishNotesFor(trigger, bulletin, waypoints) {
+    if (!publishNotesEnabled || !bulletin) {
+      return;
+    }
+    const zone = resolveZones(waypoints.map((w) => [w.lon, w.lat]))[0] ?? null;
+    let chart = null;
+    if (zone != null) {
+      const cached = await loadSynoptic(app.getDataDirPath(), zone);
+      if (cached) {
+        chart = {
+          url: `/plugins/signalk-passage-briefing/api/synoptic?zone=${zone}`,
+          mimeType: cached.format === "gif" ? "image/gif" : "image/png",
+        };
+      }
+    }
+    const result = await publishNotes({
+      app,
+      dataDir: app.getDataDirPath(),
+      bulletin,
+      zone,
+      synopticChartFor: () => chart,
+    });
+    if (result.published.length > 0 || result.deleted.length > 0) {
+      app.debug?.(
+        `Notes ${trigger}: ${result.published.length} published, ` +
+          `${result.deleted.length} expired`,
+      );
+    }
+  }
+
+  /**
    * Vessel position from the Signal K self path (work doc #7 here
    * mode). Both wrapped and plain value shapes are unwrapped.
    *
@@ -495,6 +542,7 @@ module.exports = (app) => {
     if (bulletin) {
       payload.metareaBulletin = bulletin;
     }
+    await publishNotesFor("here", bulletin, waypoints);
     // Space weather rides the same online window (work doc #3);
     // degrades to an absent field when the endpoints fail
     payload.spaceEvents = await fetchSpaceEvents({
@@ -600,6 +648,7 @@ module.exports = (app) => {
     if (bulletin) {
       payload.metareaBulletin = bulletin;
     }
+    await publishNotesFor("route", bulletin, waypoints);
     // Space weather for the departure position (work doc #3 Phase 1)
     payload.spaceEvents = await fetchSpaceEvents({
       lat: waypoints[0].lat,
@@ -931,6 +980,14 @@ module.exports = (app) => {
           },
           default: DEFAULTS.bulletin_stations,
         },
+        publish_metarea_notes: {
+          type: "boolean",
+          title: "Publish METAREA warnings as chart notes",
+          description:
+            "Write the geographically filtered warning blocks to the " +
+            "server's resources/notes so chart plotters show them.",
+          default: DEFAULTS.publish_metarea_notes,
+        },
       },
     },
 
@@ -942,6 +999,7 @@ module.exports = (app) => {
       bulletinUrls = Array.isArray(config.bulletin_urls)
         ? config.bulletin_urls
         : [];
+      publishNotesEnabled = config.publish_metarea_notes !== false;
       bulletinStations = Array.isArray(config.bulletin_stations)
         ? config.bulletin_stations.filter(
             (station) =>
@@ -965,6 +1023,14 @@ module.exports = (app) => {
       // pay the dynamic-import cost mid-refresh
       modelsPromise ??= import("../public/components/models.mjs");
       modelsPromise.catch(() => {});
+
+      // Notes lifecycle (work doc #12): crash recovery for deletions,
+      // or clear owned notes when publication is disabled
+      if (publishNotesEnabled) {
+        resyncNotes({ app, dataDir: app.getDataDirPath() }).catch(() => {});
+      } else {
+        clearNotes({ app, dataDir: app.getDataDirPath() }).catch(() => {});
+      }
 
       app.subscriptionmanager.subscribe(
         {

@@ -1117,10 +1117,10 @@ describe("plugin", () => {
     // manifest and the Status Tiles example set
     const providers = app.getResourceProviders();
     assert.equal(providers.length, 2);
-    assert.deepEqual(
-      providers.map((p) => p.type).sort(),
-      ["plotterExtensions", "statusTileExamples"],
-    );
+    assert.deepEqual(providers.map((p) => p.type).sort(), [
+      "plotterExtensions",
+      "statusTileExamples",
+    ]);
     assert.equal(
       app.getMounts()[0].prefix,
       "/plotterext/signalk-passage-briefing",

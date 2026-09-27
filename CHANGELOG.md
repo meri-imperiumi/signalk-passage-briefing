@@ -66,6 +66,18 @@
 
 ### Added
 
+- METAREA warnings as Signal K Notes (work doc #12): after each
+  bulletin filter pass the placeable blocks are published as
+  georeferenced `resources/notes` — title from the first sentence,
+  verbatim description, representative position (antimeridian-safe),
+  category/subject/zone/source properties, timestamp from the
+  bulletin. Notes link the cached synoptic chart when one exists for
+  the zone. Ids are content-addressed (republish updates in place),
+  blocks that drop out of the filtered set have their notes deleted,
+  start re-syncs manifest vs server, and a
+  `publish_metarea_notes` toggle (default on) clears owned notes
+  when disabled. Publishing is local-only, never internet-gated.
+
 - Status Tiles integration (work doc #13): the tile paths gain
   `navigation.briefing.stale` (boolean freshness verdict — 3h here,
   26h for route briefings — recomputed on every emission) and
