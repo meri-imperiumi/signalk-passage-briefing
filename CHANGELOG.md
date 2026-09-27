@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- The plotter tile drops its tap-to-open attempts entirely: the host
+  sandbox blocks pop-ups AND top-frame navigation (even
+  user-activated — verified on board, `allow-top-navigation-by-user-
+  activation` is not set), so the only "escape" was crushing the
+  webapp into the 1×1 frame. The tile is a pure mini summary; the
+  full briefing opens from the host app list or a host panel, and
+  the v1 open-panel request remains the spec-level fix.
+
 - Warning notes are placed at the point of the warning area nearest
   the vessel (clamped into the bounding box, nearest vertex for
   axis lines) instead of the box center — a quarter-ocean area's

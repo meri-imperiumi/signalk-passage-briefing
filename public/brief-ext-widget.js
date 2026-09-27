@@ -31,13 +31,12 @@ const STREAM_PATHS = [
   "navigation.briefing.ageHours",
 ];
 
-/** The webapp served by the webapp keyword (fallback brief surface). */
-// SK v2 serves webapps under /@<npm-scope>/<name>/ (the package is
-// scoped); v1 uses /plugins/<name>/. Probe at tap time and fall back.
-const BRIEF_URLS = [
-  "/@meri-imperiumi/signalk-passage-briefing/",
-  "/plugins/signalk-passage-briefing/",
-];
+// Tap-to-open the full webapp is not possible from this iframe: the
+// host sandbox blocks pop-ups and all top-frame navigation (verified
+// on board), so the tile is a pure mini summary — the crew opens the
+// briefing from the host app list or a host panel. The meta endpoint
+// still runs on the same server, so the summary fetches directly.
+const BRIEF_META_URL = "/plugins/signalk-passage-briefing/api/brief-meta";
 
 const template = document.createElement("template");
 template.innerHTML = /* html */ `
@@ -129,16 +128,6 @@ template.innerHTML = /* html */ `
       letter-spacing: 0.1em;
       line-height: 1.1;
     }
-    .open {
-      align-self: flex-end;
-      font-size: 0.6rem;
-      font-weight: 700;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: #66c6db;
-      text-decoration: none;
-    }
-    .open:hover { text-decoration: underline; }
   </style>
   <div class="tile">
     <div class="head">
@@ -148,7 +137,6 @@ template.innerHTML = /* html */ `
     <div class="route" id="route">No brief</div>
     <div class="comfort" id="comfort"></div>
     <div class="age" id="age">not compiled yet</div>
-    <a class="open" id="open" target="_top" href="/">Open ↗</a>
   </div>
 `;
 
@@ -159,7 +147,6 @@ class BriefExtWidget extends HTMLElement {
     root.append(template.content.cloneNode(true));
     // target="_top" lets the anchor escape this iframe when the host
     // sandbox allows top navigation at all
-    root.getElementById("open").href = BRIEF_URLS[0];
 
     /** @type {Record<string, unknown>} latest per-path bus values */
     this.values = {};
@@ -221,9 +208,7 @@ class BriefExtWidget extends HTMLElement {
     // Current values right away: deltas only travel on change, so
     // without this the tile would wait for the next ticker emission
     try {
-      const meta = await fetch(`${BRIEF_URLS[0]}api/brief-meta`).then((r) =>
-        r.json(),
-      );
+      const meta = await fetch(BRIEF_META_URL).then((r) => r.json());
       Object.assign(this.values, {
         "navigation.briefing.generatedAt": meta.generatedAt,
         "navigation.briefing.route": meta.route,
