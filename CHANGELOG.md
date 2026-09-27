@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- The plotter tile is now a mini summary: prominent colored comfort
+  tier, route, age with a STALE marker when the briefing is past its
+  window, and an `Open ↗` link (`target="_top"`) to the full webapp —
+  replacing tap handling that could only ever navigate the widget's
+  own 1×1 frame inside the host sandbox (pop-ups and top navigation
+  are both blocked there, verified on board).
+
 - The plotter tile received no values when its iframe connected
   after the last compile: the tile paths are now re-emitted on every
   60s cron tick (delta cost is five small values), the widget

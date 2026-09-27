@@ -120,6 +120,25 @@ template.innerHTML = /* html */ `
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .age.stale { color: #fca847; }
+    .comfort {
+      align-self: center;
+      font-family: var(--font-data, ui-monospace, monospace);
+      font-size: clamp(0.9rem, 4vh, 1.4rem);
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      line-height: 1.1;
+    }
+    .open {
+      align-self: flex-end;
+      font-size: 0.6rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #66c6db;
+      text-decoration: none;
+    }
+    .open:hover { text-decoration: underline; }
   </style>
   <div class="tile">
     <div class="head">
@@ -129,6 +148,7 @@ template.innerHTML = /* html */ `
     <div class="route" id="route">No brief</div>
     <div class="comfort" id="comfort"></div>
     <div class="age" id="age">not compiled yet</div>
+    <a class="open" id="open" target="_top" href="/">Open ↗</a>
   </div>
 `;
 
@@ -137,6 +157,9 @@ class BriefExtWidget extends HTMLElement {
     super();
     const root = this.attachShadow({ mode: "open" });
     root.append(template.content.cloneNode(true));
+    // target="_top" lets the anchor escape this iframe when the host
+    // sandbox allows top navigation at all
+    root.getElementById("open").href = BRIEF_URLS[0];
 
     /** @type {Record<string, unknown>} latest per-path bus values */
     this.values = {};
@@ -148,7 +171,6 @@ class BriefExtWidget extends HTMLElement {
     this.pressTimer = null;
     /** @type {boolean} */
     this.longPressed = false;
-    this.addEventListener("click", this.onTap);
     this.addEventListener("pointerdown", this.onPointerDown);
     this.addEventListener("pointerup", this.onPointerUp);
     this.addEventListener("pointercancel", this.onPointerUp);
@@ -177,35 +199,6 @@ class BriefExtWidget extends HTMLElement {
       clearTimeout(this.pressTimer);
       this.pressTimer = null;
     }
-  }
-
-  /**
-   * Short tap: open the brief webapp in a new browser context.
-   *
-   * @returns {Promise<void>}
-   */
-  async onTap() {
-    if (!this.connected || this.longPressed) {
-      return;
-    }
-    // The host sandbox decides what is allowed: pop-up → parent
-    // window → this frame, in that order, each falling through on a
-    // sandbox block
-    try {
-      const win = window.open(BRIEF_URLS[0], "_blank");
-      if (win) {
-        return;
-      }
-    } catch (_error) {
-      // Pop-ups blocked: fall through
-    }
-    try {
-      window.top.location.href = BRIEF_URLS[0];
-      return;
-    } catch (_error) {
-      // Top navigation blocked: take over this frame
-    }
-    location.assign(BRIEF_URLS[0]);
   }
 
   /**
@@ -278,7 +271,18 @@ class BriefExtWidget extends HTMLElement {
     const comfort = this.values["navigation.briefing.comfort"];
     const comfortEl = root.querySelector("#comfort");
     comfortEl.textContent = comfort ? String(comfort).toUpperCase() : "";
-    root.querySelector("#age").textContent = model.detail;
+    comfortEl.style.color =
+      {
+        champagne: "#8dfcbb",
+        easy: "#8dfcbb",
+        coffee: "#fca847",
+        rough: "#fca847",
+        sick: "#ff5e5e",
+      }[String(comfort).toLowerCase()] ?? "var(--text-main, #c4c4c4)";
+    const stale = this.values["navigation.briefing.stale"] === true;
+    const ageEl = root.querySelector("#age");
+    ageEl.textContent = model.detail + (stale ? " · STALE" : "");
+    ageEl.classList.toggle("stale", stale);
     root.querySelector("#badge").classList.toggle("on", model.badge);
   }
 }
