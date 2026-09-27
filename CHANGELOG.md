@@ -4,6 +4,17 @@
 
 ### Added
 
+- Planned tacks & gybes (work doc #5): the simulation records per-step
+  heading, wind direction and distance made good, and a pure
+  `tack-gybe.js` module classifies signed-TWA crossings between
+  established wind sides — through the bow as tacks, through the
+  stern as gybes — with a 25° wobble guard and interpolated crossing
+  position, distance and ETA. Maneuvers merge into the sail-event
+  queue (time-sorted), ride the tactical sail-action cards ("Tack to
+  starboard ~14:20, 12 kt"), and surface as a whole-route "Sail
+  Work" timeline in the strategic outlook. Motoring and drift legs
+  are never maneuvers.
+
 - Empty-state conditions view (work doc #7): with no active or
   explicitly requested route, `/api/briefing` serves a **here
   payload** — the UnifiedWeatherPayload shape with a single waypoint

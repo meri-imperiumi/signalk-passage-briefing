@@ -6,7 +6,7 @@
  * @file components/strategic-outlook.js
  */
 
-import { etaTable, splitSevere } from "./models.mjs";
+import { etaTable, sailWorkTimeline, splitSevere } from "./models.mjs";
 
 /**
  * The custom element (browser only).
@@ -55,6 +55,10 @@ class StrategicOutlook extends HTMLElement {
         <h2>Convective Risk</h2>
         <div id="conv"><span class="none">No warnings</span></div>
       </section>
+      <section class="sk-card theme-orange">
+        <h2>Sail Work</h2>
+        <div id="sailwork"><span class="none">No sail changes planned</span></div>
+      </section>
       <section class="sk-card theme-teal">
         <h2>METAREA Bulletin</h2>
         <pre class="console" id="bulletin">No bulletin cached</pre>
@@ -69,6 +73,7 @@ class StrategicOutlook extends HTMLElement {
     this._fuelEl = this.shadowRoot.getElementById("fuel");
     this._seaEl = this.shadowRoot.getElementById("sea");
     this._convEl = this.shadowRoot.getElementById("conv");
+    this._sailWorkEl = this.shadowRoot.getElementById("sailwork");
     this._bulletinEl = this.shadowRoot.getElementById("bulletin");
     if (this._exceptions) {
       this.setExceptions(this._exceptions);
@@ -117,6 +122,25 @@ class StrategicOutlook extends HTMLElement {
       el.className = "none";
       el.textContent = "No anomalies";
       this._seaEl.appendChild(el);
+    }
+
+    // Sail work: recommendations plus the planned tacks/gybes (doc #5)
+    this._sailWorkEl.innerHTML = "";
+    const sailWork = sailWorkTimeline(exceptions);
+    for (const item of sailWork) {
+      const el = document.createElement("div");
+      el.className =
+        item.label.startsWith("Tack") || item.label.startsWith("Gybe")
+          ? "warn"
+          : "";
+      el.textContent = `+${item.hoursFromNow}h ${item.stamp} · ${item.label}${item.detail ? ` · ${item.detail}` : ""}`;
+      this._sailWorkEl.appendChild(el);
+    }
+    if (sailWork.length === 0) {
+      const el = document.createElement("span");
+      el.className = "none";
+      el.textContent = "No sail changes planned";
+      this._sailWorkEl.appendChild(el);
     }
 
     // Convective warnings

@@ -23,6 +23,7 @@ test("webapp view models", async (t) => {
     tacticalNow,
     hereHourly,
     hereNow,
+    sailWorkTimeline,
   } = await import("../public/components/models.mjs");
 
   await t.test("fmtUtc renders MM-DD HH:MMZ in UTC", () => {
@@ -220,4 +221,37 @@ test("webapp view models", async (t) => {
     assert.equal(table.fuel, "32.0 gal");
     assert.equal(etaTable(null).motorHours, "");
   });
+
+  await t.test(
+    "sailWorkTimeline labels maneuvers and keeps changes plain",
+    () => {
+      const timeline = sailWorkTimeline({
+        passageSummary: {
+          sailChanges: [
+            {
+              hoursFromNow: 2,
+              timestamp: "2026-06-21T08:00:00.000Z",
+              sailState: "MAIN_REEF_1",
+            },
+            {
+              hoursFromNow: 4,
+              timestamp: "2026-06-21T10:00:00.000Z",
+              sailState: "MAIN_FULL@port",
+              maneuver: "tack",
+              toTack: "port",
+              distanceFromStartNm: 32.4,
+              twsAtManeuver: 12.2,
+            },
+          ],
+        },
+      });
+      assert.equal(timeline.length, 2);
+      assert.equal(timeline[0].label, "MAIN_REEF_1");
+      assert.equal(timeline[0].detail, "");
+      assert.equal(timeline[1].label, "Tack to port");
+      assert.equal(timeline[1].detail, "32 nm · 12.2 kn");
+      assert.equal(timeline[1].stamp, "06-21 10:00Z");
+      assert.deepEqual(sailWorkTimeline(null), []);
+    },
+  );
 });

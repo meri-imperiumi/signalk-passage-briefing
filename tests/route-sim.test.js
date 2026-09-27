@@ -353,6 +353,70 @@ describe("simulatePassage", () => {
     assert.ok(exceptions.passageSummary.convectiveWarnings.length >= 1);
     assert.equal(exceptions.passageSummary.convectiveWarnings[0].cape, 1800);
   });
+
+  test("planned tack merges into sailEvents, sorted, and reaches the summary (doc #5)", async () => {
+    const { filterExceptions, simulatePassage } = await simPromise;
+    // Steady beat north on starboard tack (TWA +45); at hour 12 the
+    // wind veers to −45 and the plan's tack side flips between
+    // adjacent hours — the tack the crew has to do.
+    const track = sampleRoutePoints([
+      [0, 0],
+      [0, 3],
+    ]);
+    const payload = {
+      metadata: {
+        fetchedAt: new Date(Date.UTC(2026, 5, 21, 0)).toISOString(),
+        source: "api",
+      },
+      waypoints: track.map((w) => ({
+        ...w,
+        forecasts: Array.from({ length: 72 }, (_, h) => ({
+          timestamp: new Date(Date.UTC(2026, 5, 21, h)).toISOString(),
+          surface: { tws: 10, twd: h < 12 ? 45 : -45, mslp: 1013, gust: 15 },
+          marine: {
+            hsCombined: 1.5,
+            tpCombined: 8,
+            dirCombined: 45,
+            hsSwell: 1,
+            tpSwell: 9,
+            dirSwell: 50,
+            hsWindSea: 0.5,
+            tpWindSea: 5,
+            dirWindSea: 40,
+          },
+          upperAir: { cape: 100, kIndex: 20 },
+          current: { drift: 0, set: 0 },
+        })),
+      })),
+    };
+    const result = simulatePassage({
+      payload,
+      startTime: new Date("2026-06-21T06:00:00Z"),
+    });
+    const maneuvers = result.sailEvents.filter((e) => e.maneuver);
+    assert.ok(maneuvers.length >= 1, "at least one maneuver detected");
+    const tack = maneuvers.find((e) => e.maneuver === "tack");
+    assert.ok(tack, "a tack is detected at the wind shift");
+    assert.equal(tack.fromTack, "starboard");
+    assert.equal(tack.toTack, "port");
+    assert.ok(tack.sailState.endsWith("@port"), tack.sailState);
+    assert.ok(tack.lat != null && tack.lon != null);
+    assert.ok(tack.distanceFromStartNm > 0);
+    assert.ok(tack.twsAtManeuver != null);
+
+    // Merged queue stays time-sorted
+    const hours = result.sailEvents.map((e) => e.hoursFromNow);
+    for (let i = 1; i < hours.length; i++) {
+      assert.ok(hours[i - 1] <= hours[i], "sailEvents sorted");
+    }
+
+    const exceptions = filterExceptions(result);
+    assert.ok(exceptions.passageSummary.sailChanges.length >= 1);
+    assert.ok(
+      exceptions.passageSummary.sailChanges.some((e) => e.maneuver === "tack"),
+      "maneuvers reach the strategic summary",
+    );
+  });
 });
 
 describe("polar lookup", () => {

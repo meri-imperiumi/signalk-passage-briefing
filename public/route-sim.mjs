@@ -34,6 +34,7 @@ import {
   suggestSailState,
   travelDirection,
 } from "./sereno-physics.mjs";
+import { detectManeuvers } from "./tack-gybe.js";
 
 /**
  * Simulation time step (hours).
@@ -396,6 +397,7 @@ export function simulateRun({
   const seaStateAnomalies = [];
   const upperAirAnomalies = [];
   let arrivedHours = null;
+  let distanceMadeGoodNm = 0;
 
   while (hours < maxHours && arrivedHours == null) {
     const target = track[targetIndex];
@@ -445,11 +447,13 @@ export function simulateRun({
       hours += hoursNeeded;
       t = new Date(t.getTime() + hoursNeeded * 3600000);
       pos = { lat: target.lat, lon: target.lon };
+      distanceMadeGoodNm += remaining;
       arrivedNow = true;
     } else {
       pos = destinationPoint(pos.lat, pos.lon, sogDir, stepDistance);
       hours += STEP_HOURS;
       t = new Date(t.getTime() + STEP_HOURS * 3600000);
+      distanceMadeGoodNm += stepDistance;
     }
     if (motoring) {
       motoringHours += STEP_HOURS;
@@ -501,6 +505,9 @@ export function simulateRun({
       timestamp: t.toISOString(),
       lat: pos.lat,
       lon: pos.lon,
+      distanceFromStartNm: Math.round(distanceMadeGoodNm * 10) / 10,
+      headingDeg: Math.round(((heading / DEG) % 360) * 10) / 10,
+      twdDeg: weather?.surface?.twd ?? null,
       awsKnots: comfort.awsKnots,
       azMs2: comfort.acceleration.value,
       comfortLevel: comfort.comfort,
@@ -683,7 +690,12 @@ export function simulatePassage({
     motoringHours: nominal.motoringHours,
     fuelConsumptionGal: nominal.fuelGal,
     hourlyComfort: nominal.hourly,
-    sailEvents: nominal.sailEvents,
+    // Tacks and gybes the plan implies, merged into the sail-change
+    // queue alongside the recommendation-driven changes (work doc #5)
+    sailEvents: [
+      ...(nominal.sailEvents ?? []),
+      ...detectManeuvers(nominal.hourly),
+    ].sort((x, y) => x.hoursFromNow - y.hoursFromNow),
     hazardAlerts: nominal.hazardAlerts,
     seaStateAnomalies: nominal.seaStateAnomalies,
     upperAirAnomalies: nominal.upperAirAnomalies,
@@ -725,6 +737,9 @@ export function filterExceptions(simulationResult) {
       etaP90: simulationResult.eta?.p90 ?? null,
       totalMotorHours: simulationResult.motoringHours ?? 0,
       totalFuelGal: simulationResult.fuelConsumptionGal ?? 0,
+      // Whole-route sail-work queue: recommendations plus the
+      // tacks/gybes the plan implies (work doc #5)
+      sailChanges: simulationResult.sailEvents ?? [],
       macroSeaAnomalies: (simulationResult.seaStateAnomalies ?? []).filter(
         (a) => a.steepnessRatio < 3.28,
       ),

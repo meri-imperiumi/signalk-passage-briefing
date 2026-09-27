@@ -302,9 +302,11 @@ export function tacticalNow(exceptions) {
 
 /**
  * Sail action cards for the tactical dashboard, oldest first.
+ * Maneuver events (work doc #5) carry `maneuver`, `toTack` and the
+ * expected TWS so the cards can read "Tack to starboard ~14:20, 12 kt".
  *
  * @param {object|null} exceptions
- * @returns {Array<{hoursFromNow: number, stamp: string, sailState: string, night: boolean}>}
+ * @returns {Array<{hoursFromNow: number, stamp: string, sailState: string, night: boolean, maneuver: string|null, toTack: string|null, twsKnots: number|null}>}
  */
 export function sailActionCards(exceptions) {
   return (exceptions?.next24h?.sailChanges ?? []).map((e) => ({
@@ -312,7 +314,41 @@ export function sailActionCards(exceptions) {
     stamp: fmtUtc(e.timestamp),
     sailState: e.sailState ?? "?",
     night: Boolean(e.night),
+    maneuver: e.maneuver ?? null,
+    toTack: e.toTack ?? null,
+    twsKnots: e.twsAtManeuver ?? null,
   }));
+}
+
+/**
+ * Whole-route sail-work timeline for the strategic outlook (work doc
+ * #5): recommendation-driven changes plus tacks/gybes, oldest first.
+ *
+ * @param {object|null} exceptions
+ * @returns {Array<{hoursFromNow: number, stamp: string, label: string, detail: string}>}
+ */
+export function sailWorkTimeline(exceptions) {
+  return (exceptions?.passageSummary?.sailChanges ?? []).map((e) => {
+    const state = String(e.sailState ?? "?");
+    const [combination, tack] = state.split("@");
+    const label = e.maneuver
+      ? `${e.maneuver === "tack" ? "Tack" : "Gybe"} to ${e.toTack ?? tack ?? "?"}`
+      : combination || state;
+    const detail = [
+      e.distanceFromStartNm != null
+        ? `${Math.round(e.distanceFromStartNm)} nm`
+        : null,
+      e.twsAtManeuver != null ? fmtKn(e.twsAtManeuver) : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return {
+      hoursFromNow: e.hoursFromNow,
+      stamp: fmtUtc(e.timestamp),
+      label,
+      detail,
+    };
+  });
 }
 
 /**

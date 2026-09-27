@@ -86,7 +86,8 @@ class TacticalDashboard extends HTMLElement {
 
     this._spark.setColumns(exceptions?.next24h?.comfortBlocks ?? []);
 
-    // Sail action cards — only when there are changes
+    // Sail action cards — only when there are changes; maneuver
+    // events read as the sail work they demand (work doc #5)
     const cards = sailActionCards(exceptions);
     this._actionsEl.innerHTML = "";
     if (cards.length > 0) {
@@ -98,10 +99,14 @@ class TacticalDashboard extends HTMLElement {
         el.style.setProperty("--theme-color", "var(--color-orange)");
         const name = document.createElement("span");
         name.className = "value-small";
-        name.textContent = c.sailState;
+        name.textContent = c.maneuver
+          ? `${c.maneuver === "tack" ? "Tack" : "Gybe"} to ${c.toTack ?? "?"}`
+          : c.sailState;
         const when = document.createElement("span");
         when.className = "muted";
-        when.textContent = `${c.night ? "☾ " : ""}+${c.hoursFromNow}h ${c.stamp}`;
+        when.textContent = c.maneuver
+          ? `~${c.stamp}${c.twsKnots != null ? `, ${c.twsKnots.toFixed(0)} kt` : ""}`
+          : `${c.night ? "☾ " : ""}+${c.hoursFromNow}h ${c.stamp}`;
         el.append(name, when);
         wrap.appendChild(el);
       }
