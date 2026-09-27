@@ -28,6 +28,9 @@ class PassageOutlook extends HTMLElement {
     if (!this.shadowRoot) {
       this.attachShadow({ mode: "open" });
     }
+    // Embed mode (work doc #8): compact chrome for a plotter dialog —
+    // no app header, just the tactical/strategic switch and content
+    this.embedded = new URLSearchParams(location.search).get("embed") === "1";
     this.shadowRoot.innerHTML = `
       <style>
         :host { display: block; }
@@ -65,6 +68,7 @@ class PassageOutlook extends HTMLElement {
         <button id="tab-strategic" role="tab" aria-selected="false">Strategic</button>
       </div>
       <main id="view"></main>
+      ${this.embedded ? "" : "<backfill-controls></backfill-controls>"}
     `;
 
     this._routeSelect = this.shadowRoot.getElementById("route");
@@ -74,9 +78,7 @@ class PassageOutlook extends HTMLElement {
     this._tabStrategic = this.shadowRoot.getElementById("tab-strategic");
     this._view = this.shadowRoot.getElementById("view");
 
-    // Embed mode (work doc #8): compact chrome for a plotter dialog —
-    // no app header, just the tactical/strategic switch and content
-    this.embedded = new URLSearchParams(location.search).get("embed") === "1";
+    // Embed mode (work doc #8): compact chrome for a plotter dialog
     if (this.embedded) {
       this.shadowRoot.querySelector("header").hidden = true;
     }

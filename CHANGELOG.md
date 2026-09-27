@@ -46,8 +46,9 @@
 
 ### Added
 
-- Logbook backfill controls on the strategic screen: a card that
-  runs `POST /api/backfill` (optional from/to date range) from the
+- Logbook backfill controls in the webapp root (collapsed by
+  default, available in every mode including conditions-here): runs
+  `POST /api/backfill` (optional from/to date range) from the
   browser session and shows the learned summary. The route is
   auth-gated server-side, so the webapp session is the interface;
   the backfill report stays available as `bin/backfill-report.js`.

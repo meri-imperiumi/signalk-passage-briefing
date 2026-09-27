@@ -19,6 +19,9 @@ class BackfillControls extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>
         :host { display: block; }
+        details.sk-card { margin-bottom: 12px; }
+        summary { cursor: pointer; font-weight: 700; }
+        .body { margin-top: 8px; }
         .row {
           display: flex; gap: 8px; flex-wrap: wrap;
           align-items: center; margin-top: 8px;
@@ -31,19 +34,21 @@ class BackfillControls extends HTMLElement {
         }
         .out.err { color: var(--color-red); }
       </style>
-      <section class="sk-card">
-        <h2>Logbook Backfill</h2>
-        <p class="note">
-          Learn sail preferences from signalk-logbook history into the
-          day/night matrix (optional date range).
-        </p>
-        <div class="row">
-          <label>From <input type="date" id="from"></label>
-          <label>To <input type="date" id="to"></label>
-          <button id="run">Backfill</button>
+      <details class="sk-card">
+        <summary>Logbook Backfill</summary>
+        <div class="body">
+          <p class="note">
+            Learn sail preferences from signalk-logbook history into the
+            day/night matrix (optional date range).
+          </p>
+          <div class="row">
+            <label>From <input type="date" id="from"></label>
+            <label>To <input type="date" id="to"></label>
+            <button id="run">Backfill</button>
+          </div>
+          <div class="out" id="out"></div>
         </div>
-        <div class="out" id="out"></div>
-      </section>
+      </details>
     `;
     this._run = this.shadowRoot.getElementById("run");
     this._out = this.shadowRoot.getElementById("out");
