@@ -61,7 +61,8 @@ function buildManifest(assetBase, version) {
         id: "passage-brief-tile",
         title: "Passage Brief",
         type: "iframe",
-        url: `${assetBase}/brief-ext-widget.html`,
+        // ?v= cache-busts the host's iframe when the plugin updates
+        url: `${assetBase}/brief-ext-widget.html?v=${version}`,
         size: "1x1",
         lifecycle: "whileEnabled",
       },

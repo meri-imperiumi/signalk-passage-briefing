@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- The plotter widget HTML and JS are cache-busted with the plugin
+  version, so widget updates actually reach the host's iframe —
+  a stale cached copy was showing a removed Open button.
+
 - The plotter tile drops its tap-to-open attempts entirely: the host
   sandbox blocks pop-ups AND top-frame navigation (even
   user-activated — verified on board, `allow-top-navigation-by-user-
