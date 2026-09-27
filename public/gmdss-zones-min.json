@@ -1,0 +1,157 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "zone": 14, "roman": "XIV", "name": "New Zealand / South Pacific" },
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [ [ [160.0, 0.0], [180.0, 0.0], [180.0, -90.0], [160.0, -90.0], [160.0, 0.0] ] ],
+          [ [ [-180.0, 0.0], [-120.0, 0.0], [-120.0, -90.0], [-180.0, -90.0], [-180.0, 0.0] ] ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "zone": 10, "roman": "X", "name": "Australia / Tasman Sea" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [ [80.0, 0.0], [160.0, 0.0], [160.0, -90.0], [80.0, -90.0], [80.0, 0.0] ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "zone": 11, "roman": "XI", "name": "Southeast Asia / Japan" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [ [95.0, 0.0], [180.0, 0.0], [180.0, 60.0], [95.0, 60.0], [95.0, 0.0] ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "zone": 8, "roman": "VIII", "name": "India / Arabian Sea" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [ [30.0, -12.0], [95.0, -12.0], [95.0, 30.0], [30.0, 30.0], [30.0, -12.0] ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "zone": 7, "roman": "VII", "name": "South Africa / Indian Ocean" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [ [-20.0, -6.0], [80.0, -6.0], [80.0, -90.0], [-20.0, -90.0], [-20.0, -6.0] ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "zone": 9, "roman": "IX", "name": "Pakistan / Persian Gulf / Red Sea" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [ [30.0, 12.0], [80.0, 12.0], [80.0, 30.0], [30.0, 30.0], [30.0, 12.0] ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "zone": 12, "roman": "XII", "name": "USA West Coast / Eastern Pacific" },
+      "geometry": {
+        "type": "MultiPolygon",
+        "coordinates": [
+          [ [ [180.0, 0.0], [180.0, 67.0], [180.0, 0.0] ] ], 
+          [ [ [-180.0, 0.0], [-120.0, 0.0], [-120.0, 67.0], [-180.0, 67.0], [-180.0, 0.0] ] ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "zone": 16, "roman": "XVI", "name": "Peru / Eastern Tropical Pacific" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [ [-120.0, -18.0], [-70.0, -18.0], [-70.0, 0.0], [-120.0, 0.0], [-120.0, -18.0] ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "zone": 15, "roman": "XV", "name": "Chile / South-Eastern Pacific" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [ [-120.0, -90.0], [-70.0, -90.0], [-70.0, -18.0], [-120.0, -18.0], [-120.0, -90.0] ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "zone": 6, "roman": "VI", "name": "Argentina / South Atlantic" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [ [-70.0, -90.0], [-20.0, -90.0], [-20.0, -35.0], [-70.0, -35.0], [-70.0, -90.0] ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "zone": 5, "roman": "V", "name": "Brazil / Tropical Atlantic" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [ [-50.0, -35.0], [-20.0, -35.0], [-20.0, 7.0], [-50.0, 7.0], [-50.0, -35.0] ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "zone": 4, "roman": "IV", "name": "USA East Coast / Western Atlantic" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [ [-120.0, 7.0], [-40.0, 7.0], [-40.0, 67.0], [-120.0, 67.0], [-120.0, 7.0] ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "zone": 2, "roman": "II", "name": "Eastern Atlantic / Africa Coast" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [ [-40.0, 7.0], [35.0, 7.0], [35.0, 48.0], [-40.0, 48.0], [-40.0, 7.0] ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "zone": 1, "roman": "I", "name": "UK / North Atlantic" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [ [-40.0, 48.0], [45.0, 48.0], [45.0, 75.0], [-40.0, 75.0], [-40.0, 48.0] ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "zone": 3, "roman": "III", "name": "Mediterranean Sea" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [ [-5.0, 30.0], [35.0, 30.0], [35.0, 48.0], [-5.0, 48.0], [-5.0, 30.0] ]
+        ]
+      }
+    }
+  ]
+}
