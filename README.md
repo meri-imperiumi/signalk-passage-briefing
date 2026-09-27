@@ -32,6 +32,9 @@ and [@meri-imperiumi/signalk-logbook](https://github.com/meri-imperiumi/signalk-
 - Resources API — route geometries and polar tables
 - History API (on board) — wind/attempt snapshots for the sail-event
   backfill
+- Published tile paths — `navigation.briefing.generatedAt` / `.route` /
+  `.hasNew` / `.comfort` drive the plotter-extension tile
+  (`.acknowledgedAt` is writable to clear the NEW badge)
 - [signalk-logbook](https://github.com/meri-imperiumi/signalk-logbook)
   store — crewed sail events (reefs, sail changes) that train the
   preference matrix
@@ -43,6 +46,15 @@ and [@meri-imperiumi/signalk-logbook](https://github.com/meri-imperiumi/signalk-
 - [Open-Meteo Forecast API](https://open-meteo.com/en/docs) — surface
   wind, gusts, MSL pressure, CAPE and the pressure-layer fields behind
   the K-index (best-match model)
+- [NOAA SWPC planetary K-index forecast](https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json)
+  — geomagnetic activity behind the aurora advisories
+- [JPL SBDB query API](https://ssd-api.jpl.nasa.gov/doc/sbdb_query.html)
+  — comet brightness parameters (M1/K1) behind the Sky Notes comets
+- [NOAA TGFTP radiofax tree](https://tgftp.nws.noaa.gov/fax/) and the
+  [BoM radiofax service](http://ftp2.bom.gov.au/anon/gen/radio_fax/) —
+  synoptic surface-analysis charts per METAREA zone (work doc #11),
+  per the schedule in
+  [otherfax.txt](https://tgftp.nws.noaa.gov/fax/otherfax.txt)
 - [Open-Meteo Marine API](https://open-meteo.com/en/docs) —
   NOAA GFS-Wave 0.25° combined sea/wind sea/swell partitions, and
   Météo-France SMOC surface currents

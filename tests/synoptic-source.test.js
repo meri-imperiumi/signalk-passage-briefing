@@ -46,15 +46,16 @@ describe("chart URL selection", () => {
   test("hour boundaries pick 00Z before noon, 12Z from noon", () => {
     const before = chartUrlForZone(map, 14, new Date("2026-09-27T11:59:00Z"));
     const at = chartUrlForZone(map, 14, new Date("2026-09-27T12:00:00Z"));
-    assert.match(before.url, /IDX0032\.TIF$/);
+    assert.match(before.urls[0], /IDX0032\.TIF$/);
+    assert.equal(before.urls.length, 2); // candidate mirrors
     assert.equal(before.validHour, "00");
-    assert.match(at.url, /IDX0532\.TIF$/);
+    assert.match(at.urls[0], /IDX0532\.TIF$/);
     assert.equal(at.validHour, "12");
   });
 
   test("static filenames skip the hour logic", () => {
     const pick = chartUrlForZone(map, 10, new Date("2026-09-27T18:00:00Z"));
-    assert.match(pick.url, /IDX0102\.TIF$/);
+    assert.match(pick.urls[0], /IDX0102\.TIF$/);
     assert.equal(pick.validHour, "static");
   });
 
@@ -64,11 +65,11 @@ describe("chart URL selection", () => {
     };
     // From 12Z with no 12Z variant: falls back to the 00Z chart
     const pick = chartUrlForZone(map2, 3, new Date("2026-09-27T18:00:00Z"));
-    assert.equal(pick.url, "http://a/00.TIF");
+    assert.deepEqual(pick.urls, ["http://a/00.TIF"]);
     assert.equal(pick.validHour, "00");
     assert.equal(chartUrlForZone(map2, 14), null); // not in this map
     assert.deepEqual(chartsForZones(map2, [3, 14]), [
-      { zone: 3, url: "http://a/00.TIF", validHour: "00" },
+      { zone: 3, urls: ["http://a/00.TIF"], validHour: "00" },
     ]);
   });
 });
@@ -131,7 +132,11 @@ describe("conversion and cache", () => {
       fetchImpl,
     });
     assert.deepEqual(result.fetched, [10]);
-    assert.deepEqual(result.failed, [11]);
+    assert.deepEqual(
+      result.failed.map((f) => f.zone),
+      [11],
+    );
+    assert.match(result.failed[0].error, /404/);
     assert.ok(await loadSynoptic(dir, 10));
     assert.equal(await loadSynoptic(dir, 11), null);
   });

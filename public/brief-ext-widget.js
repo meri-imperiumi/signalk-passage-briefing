@@ -189,15 +189,23 @@ class BriefExtWidget extends HTMLElement {
     for (const url of BRIEF_URLS) {
       try {
         const res = await fetch(url, { method: "GET" });
-        if (res.ok) {
-          window.open(url, "_blank");
+        if (!res.ok) {
+          continue;
+        }
+        // 1) pop-up, 2) host dialog, 3) navigate this frame — the
+        // plotter host sandboxes the iframe without allow-popups, so
+        // the blocked window.open falls through to navigation
+        const win = window.open(url, "_blank");
+        if (win) {
           return;
         }
+        location.assign(url);
+        return;
       } catch (_error) {
         // Try the next mount
       }
     }
-    window.open(BRIEF_URLS[0], "_blank");
+    location.assign(BRIEF_URLS[0]);
   }
 
   /**

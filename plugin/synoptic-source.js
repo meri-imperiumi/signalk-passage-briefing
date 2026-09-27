@@ -30,7 +30,7 @@ function loadSynopticMap() {
  * @param {SynopticMap} map
  * @param {number} zone
  * @param {Date} [now]
- * @returns {{url: string, validHour: string}|null}
+ * @returns {{urls: string[], validHour: string}|null}
  */
 function chartUrlForZone(map, zone, now = new Date()) {
   const entry = map[String(zone)];
@@ -38,7 +38,7 @@ function chartUrlForZone(map, zone, now = new Date()) {
     return null;
   }
   if (entry.url) {
-    return { url: entry.url, validHour: "static" };
+    return { urls: toCandidates(entry.url), validHour: "static" };
   }
   const hours = entry.hours ?? {};
   const key = now.getUTCHours() < 12 ? "00" : "12";
@@ -47,9 +47,15 @@ function chartUrlForZone(map, zone, now = new Date()) {
     return null;
   }
   return {
-    url: chosen,
+    urls: toCandidates(chosen),
     validHour: hours[key] ? key : hours["00"] ? "00" : "12",
   };
+}
+
+/** Map entries carry a URL string or a candidate list (mirrors of
+ * the same chart, tried in order). */
+function toCandidates(url) {
+  return Array.isArray(url) ? url : [url];
 }
 
 /**
@@ -58,7 +64,7 @@ function chartUrlForZone(map, zone, now = new Date()) {
  * @param {SynopticMap} map
  * @param {number[]} zones
  * @param {Date} [now]
- * @returns {Array<{zone: number, url: string, validHour: string}>}
+ * @returns {Array<{zone: number, urls: string[], validHour: string}>}
  */
 function chartsForZones(map, zones, now = new Date()) {
   const out = [];
@@ -96,7 +102,8 @@ async function saveIndex(dataDir, index) {
  * @param {Date} [params.now]
  * @param {typeof fetch} [params.fetchImpl]
  * @param {number} [params.timeoutMs]
- * @returns {Promise<{fetched: number[], skipped: number[], failed: number[]}>}
+ * @returns {Promise<{fetched: number[], skipped: number[],
+ *   failed: Array<{zone: number, url: string, error: string}>}>}
  */
 async function refreshSynoptics({
   dataDir,
@@ -113,44 +120,51 @@ async function refreshSynoptics({
   const failed = [];
   for (const pick of picked) {
     const cached = index[pick.zone];
-    if (
+    const sameChart =
       cached &&
-      cached.url === pick.url &&
-      cached.validHour === pick.validHour
-    ) {
+      cached.url === pick.urls[0] &&
+      cached.validHour === pick.validHour;
+    if (sameChart) {
       skipped.push(pick.zone);
       continue;
     }
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      let response;
+    // Candidate mirrors of the same chart, tried in order (e.g. the
+    // documented BoM anon host plus the legacy alias)
+    for (const url of pick.urls) {
       try {
-        response = await fetchImpl(pick.url, { signal: controller.signal });
-      } finally {
-        clearTimeout(timer);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        let response;
+        try {
+          response = await fetchImpl(url, { signal: controller.signal });
+        } finally {
+          clearTimeout(timer);
+        }
+        if (!response.ok) {
+          throw new Error(`${response.status} ${response.statusText}`);
+        }
+        const bytes = Buffer.from(await response.arrayBuffer());
+        const converted = convertToPng(bytes);
+        if (!converted) {
+          throw new Error("unsupported chart format");
+        }
+        const file = `synoptic-${pick.zone}.png`;
+        await writeFile(join(dataDir, file), converted.png);
+        index[pick.zone] = {
+          url: pick.urls[0],
+          fetchedFrom: url,
+          validHour: pick.validHour,
+          fetchedAt: new Date().toISOString(),
+          file,
+          width: converted.width,
+          height: converted.height,
+        };
+        fetched.push(pick.zone);
+        break;
+      } catch (error) {
+        // Chart unavailable this cycle: keep the cache, record why
+        failed.push({ zone: pick.zone, url, error: error.message });
       }
-      if (!response.ok) {
-        throw new Error(`${response.status} ${response.statusText}`);
-      }
-      const bytes = Buffer.from(await response.arrayBuffer());
-      const converted = convertToPng(bytes);
-      if (!converted) {
-        throw new Error("unsupported chart format");
-      }
-      const file = `synoptic-${pick.zone}.png`;
-      await writeFile(join(dataDir, file), converted.png);
-      index[pick.zone] = {
-        url: pick.url,
-        validHour: pick.validHour,
-        fetchedAt: new Date().toISOString(),
-        file,
-        width: converted.width,
-        height: converted.height,
-      };
-      fetched.push(pick.zone);
-    } catch {
-      failed.push(pick.zone); // Chart unavailable this cycle: keep the cache
     }
   }
   await saveIndex(dataDir, index);

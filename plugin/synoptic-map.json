@@ -1,5 +1,5 @@
 {
-  "_reference": "https://tgftp.nws.noaa.gov/fax/otherfax.txt — NOAA marine radiofax schedule; the lookup table for verifying/extending chart product IDs (work doc #11).",
+  "_reference": "https://tgftp.nws.noaa.gov/fax/otherfax.txt \u2014 NOAA marine radiofax schedule; the lookup table for verifying/extending chart product IDs (work doc #11).",
   "1": {
     "name": "North Atlantic / UK waters",
     "source": "NOAA TGFTP",
@@ -19,7 +19,10 @@
   "10": {
     "name": "Australia / Tasman",
     "source": "BoM radiofax",
-    "url": "http://ftp.bom.gov.au/anon/gen/radio_fax/IDX0102.TIF"
+    "url": [
+      "http://ftp2.bom.gov.au/anon/gen/radio_fax/IDX0102.TIF",
+      "http://ftp.bom.gov.au/anon/gen/radio_fax/IDX0102.TIF"
+    ]
   },
   "11": {
     "name": "NW Pacific",
@@ -35,9 +38,15 @@
     "name": "South Pacific / NZ",
     "source": "BoM radiofax (dedicated South Pacific MSLP analysis)",
     "hours": {
-      "00": "http://ftp.bom.gov.au/anon/gen/radio_fax/IDX0032.TIF",
-      "12": "http://ftp.bom.gov.au/anon/gen/radio_fax/IDX0532.TIF"
+      "00": [
+        "http://ftp2.bom.gov.au/anon/gen/radio_fax/IDX0032.TIF",
+        "http://ftp.bom.gov.au/anon/gen/radio_fax/IDX0032.TIF"
+      ],
+      "12": [
+        "http://ftp2.bom.gov.au/anon/gen/radio_fax/IDX0532.TIF",
+        "http://ftp.bom.gov.au/anon/gen/radio_fax/IDX0532.TIF"
+      ]
     },
-    "verifyOnBoard": "BoM anon tree over HTTP — confirm the host serves it, else try https or the ftp:// scheme"
+    "verifyOnBoard": "BoM anon host: ftp2 is the documented server, ftp.bom.gov.au kept as fallback"
   }
 }

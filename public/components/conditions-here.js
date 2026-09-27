@@ -155,9 +155,13 @@ class ConditionsHere extends HTMLElement {
 
     const rows = hereHourly(payload, config);
     const now = hereNow(payload, rows);
-    this._tierEl.textContent = now.comfortLevel ?? "no data";
+    // The tier is computed server-side with this same model at
+    // compile time and rides the payload — identical to what the
+    // plotter tile publishes
+    const tier = payload.comfortTier ?? now.comfortLevel ?? null;
+    this._tierEl.textContent = tier ?? "no data";
     this._tierEl.style.color = now.color;
-    this._cinfo?.setAttribute("tier", now.comfortLevel ?? "");
+    this._cinfo?.setAttribute("tier", tier ?? "");
 
     const wind = [
       now.twsKnots != null

@@ -110,6 +110,20 @@ describe("plugin", () => {
     ]);
   });
 
+  /** Waits until the predicate holds (refreshes span several event
+   * loop turns once the physics module and synoptic fetches join the
+   * here path). */
+  async function waitFor(predicate, ms = 5000) {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (predicate()) {
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return predicate();
+  }
+
   test("internet transition with no route briefs conditions here", async () => {
     const { mockOpenMeteo } = require("./openmeteo-mock.js");
     const app = createMockApp();
@@ -131,11 +145,12 @@ describe("plugin", () => {
         },
       ],
     });
-    const tick = () => new Promise((resolve) => setTimeout(resolve, 60));
     const originalFetch = globalThis.fetch;
     globalThis.fetch = mockOpenMeteo();
+    app.debug = (m) => console.error("DBG:", m);
+    app.error = (m) => console.error("PLUGIN-ERR:", m);
     try {
-      await tick();
+      await waitFor(() => /Conditions here cached at/.test(app.getStatus()));
       assert.match(app.getStatus(), /Conditions here cached at/);
       assert.ok(
         existsSync(join(app.dataDir, "weather", "here.json")),
@@ -148,7 +163,7 @@ describe("plugin", () => {
           { values: [{ path: "network.internet.state", value: "online" }] },
         ],
       });
-      await tick();
+      await waitFor(() => /Conditions here cached at/.test(app.getStatus()));
       assert.match(app.getStatus(), /Conditions here cached at/);
     } finally {
       globalThis.fetch = originalFetch;
@@ -930,7 +945,7 @@ describe("plugin", () => {
     const openMeteoFetch = mockOpenMeteo();
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async (url) => {
-      if (String(url).includes("ftp.bom.gov.au")) {
+      if (String(url).includes("bom.gov.au")) {
         return {
           ok: true,
           status: 200,

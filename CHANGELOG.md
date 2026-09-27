@@ -4,6 +4,18 @@
 
 ### Fixed
 
+- A half-migrated synoptic-source candidate-list change shipped a
+  `pick.urls is not iterable` error that failed every here refresh on
+  board. Consistent again, with per-candidate mirrors and loud
+  failure records (zone, url, error) instead of silent drops.
+- The published tile comfort tier is computed with the webapp's own
+  model (`models.mjs` hereHourly) and stored on the payload, which
+  the conditions-here view also reads — one implementation, one
+  cached value, no drift between tile and view.
+- Tile tap: when the host sandbox blocks the pop-up entirely, the
+  widget navigates its own frame to the brief webapp as the final
+  fallback.
+
 - Bulletin geography parsing, corrected against a live NFFN
   bulletin: two-coordinate trough axes now parse as open lines (the
   NFFN style omits `TO` separators, so `10S 160E 12S 166E` produced

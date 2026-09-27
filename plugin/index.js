@@ -490,42 +490,30 @@ module.exports = (app) => {
     return { cachedAt: payload.metadata.fetchedAt };
   }
 
-  let physicsPromise = null;
+  let modelsPromise = null;
 
   /**
-   * Current comfort tier for the tile (work doc #8): the payload's
-   * first forecast step through the Sereno comfort model at SOG 0 —
-   * the same math the conditions-here view runs client-side.
+   * Current comfort tier for the tile (work doc #8): computed with
+   * the webapp's own model (models.mjs hereHourly at SOG 0) so the
+   * published value and the conditions-here view can never drift
+   * apart — one implementation, two consumers.
    *
    * @param {object} payload
    * @returns {Promise<string|null>}
    */
   async function currentComfortTier(payload) {
     try {
-      const step = payload?.waypoints?.[0]?.forecasts?.[0];
-      if (!step) {
+      if (!payload?.waypoints?.[0]?.forecasts?.length) {
         return null;
       }
-      physicsPromise ??= import("../public/sereno-physics.mjs");
-      const { serenoComfort, travelDirection } = await physicsPromise;
-      const comfort = serenoComfort(
-        {
-          hsMeters: step.marine?.hsCombined ?? 0,
-          tpSeconds: step.marine?.tpCombined ?? 0,
-          waveTravelDirectionRad: travelDirection(
-            (step.marine?.dirCombined ?? 0) * (Math.PI / 180),
-          ),
-        },
-        {
-          sogKnots: 0,
-          headingRad: 0,
-          waterlineLengthM: simulationConfig.waterline_length_m,
-          kHeel: simulationConfig.k_heel,
-          kPitch: simulationConfig.k_pitch,
-        },
-        { twsKnots: step.surface?.tws ?? 0, twaRad: 0 },
-      );
-      return comfort.comfort ?? null;
+      modelsPromise ??= import("../public/components/models.mjs");
+      const { hereHourly } = await modelsPromise;
+      const rows = hereHourly(payload, {
+        waterline_length_m: simulationConfig.waterline_length_m,
+        k_heel: simulationConfig.k_heel,
+        k_pitch: simulationConfig.k_pitch,
+      });
+      return rows[0]?.comfortLevel ?? null;
     } catch (_error) {
       return null;
     }
@@ -925,6 +913,11 @@ module.exports = (app) => {
       };
       stateMachine = new PassageStateMachine();
       db = new PassageDatabase(app.getDataDirPath());
+
+      // Warm the webapp models module so the first compile does not
+      // pay the dynamic-import cost mid-refresh
+      modelsPromise ??= import("../public/components/models.mjs");
+      modelsPromise.catch(() => {});
 
       app.subscriptionmanager.subscribe(
         {
