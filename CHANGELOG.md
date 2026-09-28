@@ -6,6 +6,10 @@
 
 ### Fixed
 
+- The route simulation crashed with `startTime.getTime is not a
+  function` when the caller passed the payload's ISO timestamp
+  string instead of a Date — simulatePassage now accepts both.
+
 - The plotter widget HTML and JS are cache-busted with the plugin
   version, so widget updates actually reach the host's iframe —
   a stale cached copy was showing a removed Open button.

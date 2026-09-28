@@ -657,6 +657,12 @@ export function simulatePassage({
   energyHourly,
   startTime = new Date(),
 }) {
+  // Accept an ISO string (the payload stores fetchedAt as text) or a
+  // Date — callers on the wire pass strings
+  startTime = new Date(startTime);
+  if (Number.isNaN(startTime.getTime())) {
+    startTime = new Date();
+  }
   const runs = ETA_FACTORS.map((twsFactor) =>
     simulateRun({
       payload,
