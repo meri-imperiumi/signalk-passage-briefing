@@ -1341,4 +1341,54 @@ describe("plugin", () => {
 
     plugin.stop();
   });
+
+  test("oneshot fetch falls back to conditions here when the briefed route is gone", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const app = createMockApp();
+    app.getSelfPath = (path) =>
+      path === "navigation.position"
+        ? { latitude: -21.1, longitude: -175.2 }
+        : null;
+    // The server no longer knows the last briefed route
+    app.resourcesApi = {
+      async getResource(resType, resId) {
+        throw new Error(`Resource not found! (${resId})`);
+      },
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({});
+
+    // Previous session briefed a route that has since been deleted
+    mkdirSync(join(app.dataDir, "weather"), { recursive: true });
+    writeFileSync(
+      join(app.dataDir, "weather", "last-route"),
+      "31f1ea06-5efa-4e00-b9c8-8d08e16a40f9",
+    );
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockOpenMeteo();
+    try {
+      app.getDeltaHandlers()[0]({
+        updates: [
+          {
+            values: [{ path: "network.internet.state", value: "online" }],
+          },
+        ],
+      });
+      await waitFor(() => /Conditions here cached at/.test(app.getStatus()));
+      assert.match(app.getStatus(), /Conditions here cached at/);
+      assert.ok(
+        existsSync(join(app.dataDir, "weather", "here.json")),
+        "conditions here refreshed instead",
+      );
+      assert.ok(
+        !existsSync(join(app.dataDir, "weather", "last-route")),
+        "stale last-route pointer removed",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    plugin.stop();
+  });
 });

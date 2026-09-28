@@ -20,7 +20,7 @@
 
 const { join } = require("node:path");
 const { homedir } = require("node:os");
-const { mkdir, readFile, writeFile } = require("node:fs/promises");
+const { mkdir, readFile, unlink, writeFile } = require("node:fs/promises");
 
 const { PassageStateMachine } = require("./state-machine.js");
 const { PassageDatabase } = require("./sqlite-db.js");
@@ -631,7 +631,12 @@ module.exports = (app) => {
     }
     let coordinates;
     if (typeof app.resourcesApi?.getResource === "function") {
-      const route = await app.resourcesApi.getResource("routes", routeId);
+      let route;
+      try {
+        route = await app.resourcesApi.getResource("routes", routeId);
+      } catch (error) {
+        throw new Error(`Route ${routeId} not found (${error.message})`);
+      }
       coordinates = route?.feature?.geometry?.coordinates;
     }
     if (!Array.isArray(coordinates) || coordinates.length < 2) {
@@ -687,6 +692,12 @@ module.exports = (app) => {
    * trigger). The multi-endpoint fetch lands in the briefing refresh;
    * the outcome is surfaced through the plugin status.
    *
+   * The route being sailed wins; otherwise the last briefed one is
+   * re-briefed. A route that has vanished from resources (deleted
+   * after it was briefed) is skipped instead of failing every future
+   * refresh — with no route left, conditions-here stays fresh (work
+   * doc #7).
+   *
    * @param {"oneshot"|"cron"} trigger
    */
   async function runFetch(trigger) {
@@ -694,41 +705,43 @@ module.exports = (app) => {
       setStatus(`Fetch skipped while offline (${trigger})`);
       return;
     }
-    // The route being sailed wins; otherwise re-brief the last one;
-    // with no route at all keep conditions-here fresh (work doc #7)
-    let routeId = activeRouteId(observations[ACTIVE_ROUTE_PATH]);
-    if (!routeId) {
-      try {
-        routeId = (
-          await readFile(
-            join(app.getDataDirPath(), "weather", "last-route"),
-            "utf8",
-          )
-        ).trim();
-      } catch (_error) {
-        routeId = null;
-      }
+    const lastRouteFile = join(app.getDataDirPath(), "weather", "last-route");
+    let lastRouteId = null;
+    try {
+      lastRouteId = (await readFile(lastRouteFile, "utf8")).trim();
+    } catch (_error) {
+      lastRouteId = null;
     }
-    if (!routeId) {
+    const activeId = activeRouteId(observations[ACTIVE_ROUTE_PATH]);
+    const candidates = [...new Set([activeId, lastRouteId].filter(Boolean))];
+    for (const routeId of candidates) {
       try {
-        const here = await refreshHere();
-        setStatus(`Conditions here cached at ${here.cachedAt} (${trigger})`);
+        const result = await refreshBriefing(routeId);
+        // Bulletins ride the same online window (work doc #4 §1)
+        await refreshBulletinsOnline(trigger, result.waypoints);
+        setStatus(
+          `Briefing for ${routeId} cached at ${result.fetchedAt} (${trigger})`,
+        );
+        return;
       } catch (error) {
-        app.error(`Here refresh failed (${trigger}): ${error.message}`);
-        setError(`Here refresh failed (${trigger}): ${error.message}`);
+        if (!/not found/i.test(error.message)) {
+          app.error(`Briefing refresh failed (${trigger}): ${error.message}`);
+          setError(`Briefing refresh failed (${trigger}): ${error.message}`);
+          return;
+        }
+        // Route deleted since it was briefed: try the next candidate
+        app.debug?.(`Route ${routeId} no longer exists (${trigger})`);
+        if (routeId === lastRouteId && routeId !== activeId) {
+          await unlink(lastRouteFile).catch(() => {});
+        }
       }
-      return;
     }
     try {
-      const result = await refreshBriefing(routeId);
-      // Bulletins ride the same online window (work doc #4 §1)
-      await refreshBulletinsOnline(trigger, result.waypoints);
-      setStatus(
-        `Briefing for ${routeId} cached at ${result.fetchedAt} (${trigger})`,
-      );
+      const here = await refreshHere();
+      setStatus(`Conditions here cached at ${here.cachedAt} (${trigger})`);
     } catch (error) {
-      app.error(`Briefing refresh failed (${trigger}): ${error.message}`);
-      setError(`Briefing refresh failed (${trigger}): ${error.message}`);
+      app.error(`Here refresh failed (${trigger}): ${error.message}`);
+      setError(`Here refresh failed (${trigger}): ${error.message}`);
     }
   }
 

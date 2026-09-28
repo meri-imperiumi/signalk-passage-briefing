@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A scheduled (oneshot/cron) refresh no longer fails forever when
+  the last briefed route has been deleted from resources: the stale
+  `last-route` pointer is removed and the refresh falls back to
+  keeping conditions-here fresh. Previously every cycle died with
+  `Briefing refresh failed (oneshot): Resource not found!`.
+
 ### Changed
 
 - The tactical "Next 24 Hours" hero readout is labeled `AWS` and
