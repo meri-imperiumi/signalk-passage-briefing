@@ -409,6 +409,27 @@ export function sailStateLabel(key) {
 }
 
 /**
+ * Label for one sail-change event: bare "No sails" says WHY the
+ * canvas is down — the plan drifts (`No sails - drifting`) or the
+ * engine pushes (`Motoring`) — instead of implying bare-pole sailing.
+ *
+ * @param {{sailState: string|null, propulsion?: string|null}} event
+ * @returns {string} Human label
+ */
+function sailEventLabel(event) {
+  const label = sailStateLabel(event.sailState);
+  if (label === "No sails") {
+    if (event.propulsion === "adrift") {
+      return "No sails - drifting";
+    }
+    if (event.propulsion === "motor") {
+      return "Motoring";
+    }
+  }
+  return label;
+}
+
+/**
  * Sail action cards for the tactical dashboard, oldest first.
  * Maneuver events (work doc #5) carry `maneuver`, `toTack` and the
  * expected TWS so the cards can read "Tack to starboard ~14:20, 12 kt".
@@ -420,7 +441,7 @@ export function sailActionCards(exceptions) {
   return (exceptions?.next24h?.sailChanges ?? []).map((e) => ({
     hoursFromNow: e.hoursFromNow,
     stamp: fmtUtc(e.timestamp),
-    label: sailStateLabel(e.sailState) || "?",
+    label: sailEventLabel(e) || "?",
     night: Boolean(e.night),
     maneuver: e.maneuver ?? null,
     toTack: e.toTack ?? null,
@@ -441,7 +462,7 @@ export function sailWorkTimeline(exceptions) {
     const [combination, tack] = state.split("@");
     const label = e.maneuver
       ? `${e.maneuver === "tack" ? "Tack" : "Gybe"} to ${e.toTack ?? tack ?? "?"}`
-      : sailStateLabel(combination) || state;
+      : sailEventLabel(e) || state;
     const detail = [
       e.distanceFromStartNm != null
         ? `${Math.round(e.distanceFromStartNm)} nm`

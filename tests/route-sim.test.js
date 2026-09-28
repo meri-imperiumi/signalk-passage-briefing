@@ -18,6 +18,8 @@ const approx = (actual, expected, epsilon = 1e-6) =>
 function buildPayload({
   hours = 72,
   tws = 10,
+  /** Per-hour TWS overrides (bin-edge chatter fixtures). */
+  twsByHour = null,
   twd = 45,
   hs = 1.5,
   tp = 8,
@@ -40,7 +42,7 @@ function buildPayload({
       return {
         timestamp: new Date(Date.UTC(2026, 5, 21, h)).toISOString(),
         surface: {
-          tws,
+          tws: twsByHour != null ? (twsByHour[h] ?? tws) : tws,
           twd,
           mslp: 1013,
           gust: tws + 5,
@@ -205,6 +207,8 @@ describe("simulateRun", () => {
     });
     assert.equal(day.sailEvents[0].sailState, "GENOA_1_MAIN");
     assert.equal(day.sailEvents[0].night, false);
+    // 10 kn TWS is above the motoring threshold: the boat sails
+    assert.equal(day.sailEvents[0].propulsion, "sailing");
 
     // Equator, 22:00 UTC: after sunset
     const night = simulateRun({
@@ -215,6 +219,48 @@ describe("simulateRun", () => {
     });
     assert.equal(night.sailEvents[0].sailState, "STAYSAIL_MAIN_1_REEF");
     assert.equal(night.sailEvents[0].night, true);
+  });
+
+  test("sail events say drifting or motoring when sails are down", async () => {
+    const { simulateRun } = await simPromise;
+    // Wind below the (raised) motoring threshold the whole way, still
+    // inside the matrix's learned 10-15 kn bin
+    const driftRun = simulateRun({
+      payload: buildPayload({ tws: 10 }),
+      startTime: START,
+      matrix: MATRIX,
+      config: { motoring_tws_threshold: 20, drift_mode_enabled: true },
+      maxHours: 3,
+    });
+    assert.ok(driftRun.sailEvents.length >= 1);
+    assert.equal(driftRun.sailEvents[0].propulsion, "adrift");
+
+    const motorRun = simulateRun({
+      payload: buildPayload({ tws: 10 }),
+      startTime: START,
+      matrix: MATRIX,
+      config: { motoring_tws_threshold: 20, drift_mode_enabled: false },
+      maxHours: 3,
+    });
+    assert.ok(motorRun.sailEvents.length >= 1);
+    assert.equal(motorRun.sailEvents[0].propulsion, "motor");
+  });
+
+  test("bin-edge chatter does not flap the sail-change queue", async () => {
+    const { simulateRun } = await simPromise;
+    // TWS alternating across the 10 kn bin edge every hour: the
+    // suggestions flip each step, so only the first rig may emit —
+    // no change is ever held a full step
+    const run = simulateRun({
+      payload: buildPayload({
+        twsByHour: [8, 12, 8, 12, 8, 12, 8, 12],
+        hours: 8,
+      }),
+      startTime: START,
+      matrix: MATRIX,
+      maxHours: 8,
+    });
+    assert.equal(run.sailEvents.length, 1, `events ${run.sailEvents.length}`);
   });
 
   test("collects steep-sea and convective anomalies", async () => {

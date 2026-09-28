@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Sail-change events no longer flap when the forecast sits on a
+  matrix bin edge: a suggested state must hold through a full
+  simulation step before it enters the sail-work queue.
+
+### Added
+
+- "No sails" stretches now say why the canvas is down: `No sails -
+  drifting` when the plan drifts below the motoring wind threshold,
+  `Motoring` when the engine pushes — reconciling the sail-work
+  queue with a zero engine-hours plan (drift mode).
+
 ### Added
 
 - ETA percentile rows in the strategic outlook flag night arrivals

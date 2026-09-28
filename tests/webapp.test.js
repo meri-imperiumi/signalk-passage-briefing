@@ -157,6 +157,31 @@ test("webapp view models", async (t) => {
     assert.deepEqual(sailActionCards(null), []);
   });
 
+  await t.test("sail action cards say drifting or motoring", () => {
+    const cards = sailActionCards({
+      next24h: {
+        sailChanges: [
+          {
+            hoursFromNow: 3,
+            timestamp: "2026-06-21T09:00:00Z",
+            sailState: "NO_SAILS",
+            propulsion: "adrift",
+            night: false,
+          },
+          {
+            hoursFromNow: 6,
+            timestamp: "2026-06-21T12:00:00Z",
+            sailState: "NO_SAILS",
+            propulsion: "motor",
+            night: false,
+          },
+        ],
+      },
+    });
+    assert.equal(cards[0].label, "No sails - drifting");
+    assert.equal(cards[1].label, "Motoring");
+  });
+
   await t.test("splitSevere tokenizes severe keywords", () => {
     const tokens = splitSevere(
       "EXPECT WINDS 35 KNOTS. Rough seas with heavy GALE warnings.",
@@ -287,4 +312,27 @@ test("webapp view models", async (t) => {
       assert.deepEqual(sailWorkTimeline(null), []);
     },
   );
+
+  await t.test("sailWorkTimeline says drifting or motoring", () => {
+    const timeline = sailWorkTimeline({
+      passageSummary: {
+        sailChanges: [
+          {
+            hoursFromNow: 5,
+            timestamp: "2026-06-21T14:00:00.000Z",
+            sailState: "NO_SAILS",
+            propulsion: "adrift",
+          },
+          {
+            hoursFromNow: 8,
+            timestamp: "2026-06-21T17:00:00.000Z",
+            sailState: "MAIN_1_REEF",
+            propulsion: "sailing",
+          },
+        ],
+      },
+    });
+    assert.equal(timeline[0].label, "No sails - drifting");
+    assert.equal(timeline[1].label, "Main 1 reef");
+  });
 });

@@ -387,6 +387,10 @@ export function simulateRun({
   let targetIndex = 1;
   let nearest = 0;
   let sailState = null;
+  /** Suggestion seen but not yet held a full step (bin-edge chatter
+   * guard: a state must persist before it enters the queue). */
+  let pendingSailState = null;
+  let pendingSailSince = 0;
   let t = new Date(startTime.getTime());
   let hours = 0;
   let motoringHours = 0;
@@ -481,8 +485,18 @@ export function simulateRun({
       { twsKnots: tws ?? 0, twaRad },
     );
 
-    // Learned sail preference for these conditions
+    // Learned sail preference for these conditions. A suggestion must
+    // hold through a full step before it becomes an event (work doc
+    // #5): bin-edge chatter must not flap the sail-work queue. The
+    // event carries the step's propulsion mode so "no sails" reads as
+    // drifting or motoring instead of bare-pole sailing.
     const night = isNight(t, pos.lat, pos.lon);
+    const propulsion =
+      tws != null && tws >= cfg.motoring_tws_threshold
+        ? "sailing"
+        : cfg.drift_mode_enabled
+          ? "adrift"
+          : "motor";
     if (matrix) {
       const suggested = suggestSailState(
         matrix,
@@ -490,14 +504,28 @@ export function simulateRun({
         Math.abs(((twaRad / DEG + 540) % 360) - 180),
         night,
       );
-      if (suggested && suggested.preferredSailState !== sailState) {
-        sailState = suggested.preferredSailState;
-        sailEvents.push({
-          hoursFromNow: Math.round(hours * 10) / 10,
-          timestamp: t.toISOString(),
-          sailState,
-          night,
-        });
+      const suggestedState = suggested?.preferredSailState ?? null;
+      if (suggestedState != null && suggestedState !== sailState) {
+        if (
+          sailState == null ||
+          (suggestedState === pendingSailState &&
+            hours - pendingSailSince >= STEP_HOURS)
+        ) {
+          // First rig of the passage, or the suggestion held through a
+          // full step: a real change
+          sailState = suggestedState;
+          sailEvents.push({
+            hoursFromNow: Math.round(hours * 10) / 10,
+            timestamp: t.toISOString(),
+            sailState,
+            night,
+            propulsion,
+          });
+          pendingSailState = null;
+        } else if (suggestedState !== pendingSailState) {
+          pendingSailState = suggestedState;
+          pendingSailSince = hours;
+        }
       }
     }
 
