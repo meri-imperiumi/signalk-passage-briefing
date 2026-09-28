@@ -149,7 +149,7 @@ describe("simulateRun", () => {
     // ~180 nm at ~5.7 kn close reach
     assert.ok(run.etaHours > 25 && run.etaHours < 40, `eta ${run.etaHours}`);
     assert.equal(run.motoringHours, 0);
-    assert.equal(run.fuelGal, 0);
+    assert.equal(run.fuelLiters, 0);
     assert.ok(run.hourly.length > 20);
     assert.ok(run.hourly[0].stwKnots > 3, "under sail");
     assert.equal(run.hourly[0].motoring, false);
@@ -174,7 +174,7 @@ describe("simulateRun", () => {
     assert.equal(run.etaHours, 48);
     assert.equal(run.hourly[0].stwKnots, 0);
     assert.equal(run.motoringHours, 0);
-    assert.equal(run.fuelGal, 0);
+    assert.equal(run.fuelLiters, 0);
   });
 
   test("motor mode: below the threshold the engine pushes at 4.5 kn", async () => {
@@ -184,11 +184,15 @@ describe("simulateRun", () => {
       startTime: START,
       config: { motoring_tws_threshold: 20, drift_mode_enabled: false },
     });
-    // 180 nm at 4.5 kn ≈ 40 h, burning 0.8 gal/h
+    // 180 nm at 4.5 kn ≈ 40 h, burning 1.8 l/h
     assert.ok(run.etaHours > 35 && run.etaHours < 45, `eta ${run.etaHours}`);
     assert.equal(run.hourly[0].stwKnots, 4.5);
     assert.ok(run.motoringHours > 35);
-    assert.ok(run.fuelGal > 30 && run.fuelGal < 34, `fuel ${run.fuelGal}`);
+    assert.ok(
+      run.fuelLiters > run.motoringHours * 1.79 &&
+        run.fuelLiters < run.motoringHours * 1.81,
+      `fuel ${run.fuelLiters} for ${run.motoringHours} motor hours`,
+    );
   });
 
   test("learns sail suggestions from the matrix, day and night bucketed", async () => {

@@ -13,7 +13,7 @@ test("webapp view models", async (t) => {
     COMFORT_TIERS,
     comfortColor,
     etaTable,
-    fmtGal,
+    fmtLiters,
     fmtHours,
     fmtKn,
     fmtUtc,
@@ -40,9 +40,9 @@ test("webapp view models", async (t) => {
     assert.equal(fmtHours(null), "");
   });
 
-  await t.test("fmtKn and fmtGal keep one decimal", () => {
+  await t.test("fmtKn and fmtLiters keep one decimal", () => {
     assert.equal(fmtKn(12.34), "12.3 kn");
-    assert.equal(fmtGal(3.96), "4.0 gal");
+    assert.equal(fmtLiters(71.96), "72.0 l");
     assert.equal(fmtKn(null), "");
   });
 
@@ -237,7 +237,7 @@ test("webapp view models", async (t) => {
         etaP50: "2026-06-22T13:00:00Z",
         etaP90: "2026-06-22T14:30:00Z",
         totalMotorHours: 40,
-        totalFuelGal: 32,
+        totalFuelLiters: 72,
       },
     });
     assert.deepEqual(
@@ -246,7 +246,7 @@ test("webapp view models", async (t) => {
     );
     assert.equal(table.rows[2].stamp, "06-22 14:30Z");
     assert.equal(table.motorHours, "1d 16h");
-    assert.equal(table.fuel, "32.0 gal");
+    assert.equal(table.fuel, "72.0 l");
     assert.equal(etaTable(null).motorHours, "");
   });
 

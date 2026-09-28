@@ -88,16 +88,16 @@ export function fmtKn(knots) {
 }
 
 /**
- * Formats fuel in gallons with one decimal.
+ * Formats fuel in liters with one decimal (SI — never imperial).
  *
- * @param {number|null|undefined} gallons
+ * @param {number|null|undefined} liters
  * @returns {string} Empty string when unset/invalid
  */
-export function fmtGal(gallons) {
-  if (gallons == null || !Number.isFinite(gallons)) {
+export function fmtLiters(liters) {
+  if (liters == null || !Number.isFinite(liters)) {
     return "";
   }
-  return `${gallons.toFixed(1)} gal`;
+  return `${liters.toFixed(1)} l`;
 }
 
 /**
@@ -475,6 +475,7 @@ export function etaTable(exceptions) {
     ],
     motorHours:
       summary.totalMotorHours != null ? fmtHours(summary.totalMotorHours) : "",
-    fuel: summary.totalFuelGal != null ? fmtGal(summary.totalFuelGal) : "",
+    fuel:
+      summary.totalFuelLiters != null ? fmtLiters(summary.totalFuelLiters) : "",
   };
 }

@@ -125,6 +125,7 @@ const HERE_TTL_MS = 3 * 60 * 60 * 1000;
 const DEFAULTS = {
   motoring_tws_threshold: 3.5,
   drift_mode_enabled: true,
+  motor_fuel_l_per_hour: 1.8,
   waterline_length_m: 9.4,
   spool_directory: join(homedir(), ".signalk", "spool", "passage-outlook"),
   k_heel: 0.35,
@@ -168,6 +169,7 @@ module.exports = (app) => {
   let simulationConfig = {
     motoring_tws_threshold: DEFAULTS.motoring_tws_threshold,
     drift_mode_enabled: DEFAULTS.drift_mode_enabled,
+    motor_fuel_l_per_hour: DEFAULTS.motor_fuel_l_per_hour,
     waterline_length_m: DEFAULTS.waterline_length_m,
     k_heel: DEFAULTS.k_heel,
     k_pitch: DEFAULTS.k_pitch,
@@ -964,6 +966,14 @@ module.exports = (app) => {
           title: "Enable Drift Mode (Zero Fuel / Current Drift)",
           default: DEFAULTS.drift_mode_enabled,
         },
+        motor_fuel_l_per_hour: {
+          type: "number",
+          title: "Motor Fuel Consumption (liters per hour)",
+          description:
+            "Burn rate of the auxiliary at its passage speed, used when " +
+            "drift mode is off and the wind is below the motoring threshold.",
+          default: DEFAULTS.motor_fuel_l_per_hour,
+        },
         waterline_length_m: {
           type: "number",
           title: "Waterline Length (meters)",
@@ -1047,6 +1057,7 @@ module.exports = (app) => {
       simulationConfig = {
         motoring_tws_threshold: config.motoring_tws_threshold,
         drift_mode_enabled: config.drift_mode_enabled,
+        motor_fuel_l_per_hour: config.motor_fuel_l_per_hour,
         waterline_length_m: config.waterline_length_m,
         k_heel: config.k_heel,
         k_pitch: config.k_pitch,

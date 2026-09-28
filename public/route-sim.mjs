@@ -53,16 +53,18 @@ export const HAZARD_RADIUS_NM = 5.0;
 export const SIMULATION_DEFAULTS = {
   motoring_tws_threshold: 3.5,
   drift_mode_enabled: true,
+  motor_fuel_l_per_hour: 1.8,
   waterline_length_m: 9.4,
   k_heel: 0.35,
   k_pitch: 0.4,
 };
 
 /**
- * Fuel burn of the auxiliary at its passage speed (gal/h), used when
- * drift mode is off and the wind is below the motoring threshold.
+ * Fuel burn of the auxiliary at its passage speed (liters per hour,
+ * SI — the boat's tank and pump gauge speak liters), used when drift
+ * mode is off and the wind is below the motoring threshold.
  */
-export const MOTOR_FUEL_GAL_PER_HOUR = 0.8;
+export const MOTOR_FUEL_L_PER_HOUR = 1.8;
 
 /**
  * Motor passage speed (knots) when drift mode is off.
@@ -388,7 +390,7 @@ export function simulateRun({
   let t = new Date(startTime.getTime());
   let hours = 0;
   let motoringHours = 0;
-  let fuelGal = 0;
+  let fuelLiters = 0;
 
   const hourly = [];
   const sailEvents = [];
@@ -422,7 +424,7 @@ export function simulateRun({
       fuelRate = 0;
     } else {
       stw = MOTOR_SPEED_KNOTS;
-      fuelRate = MOTOR_FUEL_GAL_PER_HOUR;
+      fuelRate = cfg.motor_fuel_l_per_hour ?? MOTOR_FUEL_L_PER_HOUR;
       motoring = true;
     }
 
@@ -456,7 +458,7 @@ export function simulateRun({
     }
     if (motoring) {
       motoringHours += STEP_HOURS;
-      fuelGal += fuelRate * STEP_HOURS;
+      fuelLiters += fuelRate * STEP_HOURS;
     }
 
     // Comfort of the hour (SPEC §5.2)
@@ -584,7 +586,7 @@ export function simulateRun({
     etaHours: arrivedHours,
     eta: new Date(startTime.getTime() + arrivedHours * 3600000).toISOString(),
     motoringHours,
-    fuelGal: Math.round(fuelGal * 100) / 100,
+    fuelLiters: Math.round(fuelLiters * 100) / 100,
     hourly,
     sailEvents,
     positions,
@@ -693,7 +695,7 @@ export function simulatePassage({
       p90: pct(1),
     },
     motoringHours: nominal.motoringHours,
-    fuelConsumptionGal: nominal.fuelGal,
+    fuelConsumptionLiters: nominal.fuelLiters,
     hourlyComfort: nominal.hourly,
     // Tacks and gybes the plan implies, merged into the sail-change
     // queue alongside the recommendation-driven changes (work doc #5)
@@ -709,7 +711,7 @@ export function simulatePassage({
       twsFactor: ETA_FACTORS[i],
       etaHours: run.etaHours,
       motoringHours: run.motoringHours,
-      fuelGal: run.fuelGal,
+      fuelLiters: run.fuelLiters,
     })),
   };
 }
@@ -741,7 +743,7 @@ export function filterExceptions(simulationResult) {
       etaP50: simulationResult.eta?.p50 ?? null,
       etaP90: simulationResult.eta?.p90 ?? null,
       totalMotorHours: simulationResult.motoringHours ?? 0,
-      totalFuelGal: simulationResult.fuelConsumptionGal ?? 0,
+      totalFuelLiters: simulationResult.fuelConsumptionLiters ?? 0,
       // Whole-route sail-work queue: recommendations plus the
       // tacks/gybes the plan implies (work doc #5)
       sailChanges: simulationResult.sailEvents ?? [],

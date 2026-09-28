@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Fuel is handled in liters end to end (SI — no imperial units):
+  the motor burn rate is configurable as `Motor Fuel Consumption
+  (liters per hour)` with a 1.8 l/h default, and the strategic ETA
+  table shows e.g. `72.0 l` instead of gallons.
+
 ### Fixed
 
 - Switching the route selector between "Conditions here" and a route
