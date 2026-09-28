@@ -162,19 +162,30 @@ class StrategicOutlook extends HTMLElement {
       this._seaEl.appendChild(el);
     }
 
-    // Sail work: recommendations plus the planned tacks/gybes (doc #5)
+    // Sail work: recommendations plus the planned tacks/gybes (doc
+    // #5), rendered as cards like the tactical action queue
     this._sailWorkEl.innerHTML = "";
     const sailWork = sailWorkTimeline(exceptions);
-    for (const item of sailWork) {
-      const el = document.createElement("div");
-      el.className =
-        item.label.startsWith("Tack") || item.label.startsWith("Gybe")
-          ? "warn"
-          : "";
-      el.textContent = `+${item.hoursFromNow}h ${item.stamp} · ${item.label}${item.detail ? ` · ${item.detail}` : ""}`;
-      this._sailWorkEl.appendChild(el);
-    }
-    if (sailWork.length === 0) {
+    if (sailWork.length > 0) {
+      const wrap = document.createElement("div");
+      wrap.className = "cards";
+      for (const item of sailWork) {
+        const el = document.createElement("div");
+        el.className = "card";
+        if (item.label.startsWith("Tack") || item.label.startsWith("Gybe")) {
+          el.style.setProperty("--theme-color", "var(--color-orange)");
+        }
+        const name = document.createElement("span");
+        name.className = "value-small";
+        name.textContent = item.label;
+        const when = document.createElement("span");
+        when.className = "muted";
+        when.textContent = `+${item.hoursFromNow}h ${item.stamp}${item.detail ? ` · ${item.detail}` : ""}`;
+        el.append(name, when);
+        wrap.appendChild(el);
+      }
+      this._sailWorkEl.appendChild(wrap);
+    } else {
       const el = document.createElement("span");
       el.className = "none";
       el.textContent = "No sail changes planned";

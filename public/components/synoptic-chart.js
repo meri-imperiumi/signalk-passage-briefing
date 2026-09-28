@@ -38,6 +38,27 @@ class SynopticChart extends HTMLElement {
       this.hidden = true;
     });
     img.src = `${PLUGIN_API}/synoptic`;
+
+    // The chart can be embedded deep inside other shadow roots, where
+    // data-mode attribute propagation never reaches — track the
+    // document palette directly
+    const applyMode = () => {
+      this.setAttribute(
+        "data-mode",
+        document.documentElement.dataset.mode === "day" ? "day" : "night",
+      );
+    };
+    applyMode();
+    this._modeObserver = new MutationObserver(applyMode);
+    this._modeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-mode"],
+    });
+  }
+
+  disconnectedCallback() {
+    this._modeObserver?.disconnect();
+    this._modeObserver = null;
   }
 }
 

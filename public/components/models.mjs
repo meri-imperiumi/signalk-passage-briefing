@@ -459,7 +459,7 @@ export function sailActionCards(exceptions) {
 export function sailWorkTimeline(exceptions) {
   return (exceptions?.passageSummary?.sailChanges ?? []).map((e) => {
     const state = String(e.sailState ?? "?");
-    const [combination, tack] = state.split("@");
+    const [, tack] = state.split("@");
     const label = e.maneuver
       ? `${e.maneuver === "tack" ? "Tack" : "Gybe"} to ${e.toTack ?? tack ?? "?"}`
       : sailEventLabel(e) || state;

@@ -347,8 +347,10 @@ class PassageOutlook extends HTMLElement {
     );
     if (target) {
       target.setExceptions(this._exceptions);
-      if (strategicView && this._briefing?.payload) {
-        target.setBulletin(this._briefing.payload.metareaBulletin ?? null);
+      if (this._briefing?.payload) {
+        // Both screens carry the warning blocks; the raw bulletin
+        // console stays strategic-only
+        target.setBulletin?.(this._briefing.payload.metareaBulletin ?? null);
       }
       this.pushSpaceEvents(target);
     }

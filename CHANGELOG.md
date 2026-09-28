@@ -4,6 +4,19 @@
 
 ### Changed
 
+- Strategic outlook layout: motor hours and fuel use the shared
+  stat styling, and the sail-work queue renders as cards (tack/gybe
+  highlighted) like the tactical action queue.
+
+- "Warnings On Your Waters" and the synoptic surface-analysis chart
+  now also appear on the tactical dashboard, not just the strategic
+  view; the chart's night palette follows the document mode via its
+  own observation (it previously never inverted when embedded).
+  Shared card/stat styles moved into the common shadow-DOM base
+  stylesheet.
+
+### Changed
+
 - Sail-change events no longer flap when the forecast sits on a
   matrix bin edge: a suggested state must hold through a full
   simulation step before it enters the sail-work queue.

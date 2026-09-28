@@ -9,7 +9,7 @@
  * @file components/tactical-dashboard.js
  */
 
-import { sailActionCards, tacticalNow } from "./models.mjs";
+import { sailActionCards, splitSevere, tacticalNow } from "./models.mjs";
 import { SK_BASE_CSS } from "./sk-base-css.js";
 
 /**
@@ -30,12 +30,6 @@ class TacticalDashboard extends HTMLElement {
           font-size: 1rem; font-weight: 700;
           letter-spacing: 0.1em; text-transform: uppercase;
         }
-        .cards { display: grid; gap: 8px; }
-        .card {
-          border: 1px solid var(--theme-color, var(--color-teal));
-          padding: 8px 12px; display: flex; justify-content: space-between;
-          gap: 8px; align-items: baseline;
-        }
         .banner {
           border: 1px solid var(--color-red);
           color: var(--color-red);
@@ -43,6 +37,10 @@ class TacticalDashboard extends HTMLElement {
           padding: 8px 12px; margin-top: 8px;
           text-transform: uppercase; letter-spacing: 0.1em;
           font-size: 0.85rem; font-weight: 700;
+        }
+        strong.sev {
+          color: var(--color-orange);
+          text-transform: uppercase;
         }
       </style>
       <section class="sk-card theme-teal">
@@ -59,6 +57,11 @@ class TacticalDashboard extends HTMLElement {
         <div id="hazards"></div>
         <div id="space"></div>
       </section>
+      <section class="sk-card theme-red" id="blocks-card" hidden>
+        <h2>Warnings On Your Waters</h2>
+        <div class="console" id="blocks"></div>
+      </section>
+      <synoptic-chart hidden></synoptic-chart>
     `;
     this._awsEl = this.shadowRoot.getElementById("aws");
     this._tierEl = this.shadowRoot.getElementById("tier");
@@ -68,8 +71,13 @@ class TacticalDashboard extends HTMLElement {
     this._energyEl = this.shadowRoot.getElementById("energy");
     this._hazardsEl = this.shadowRoot.getElementById("hazards");
     this._spaceEl = this.shadowRoot.getElementById("space");
+    this._blocksCard = this.shadowRoot.getElementById("blocks-card");
+    this._blocksEl = this.shadowRoot.getElementById("blocks");
     if (this._exceptions) {
       this.setExceptions(this._exceptions);
+    }
+    if (this._bulletin !== undefined) {
+      this.setBulletin(this._bulletin);
     }
   }
 
@@ -162,6 +170,40 @@ class TacticalDashboard extends HTMLElement {
       el.className = "banner";
       el.textContent = `✦ ${e.description}`;
       this._spaceEl.appendChild(el);
+    }
+  }
+
+  /**
+   * METAREA warning blocks for the route (work doc #4 §5): the
+   * geographically filtered paragraphs, severe keywords lit. Shares
+   * the strategic outlook's rendering; the raw bulletin console
+   * stays on the strategic screen only. Also mirrors the synoptic
+   * surface-analysis chart here.
+   *
+   * @param {{blocks?: Array<{text: string}>}|null} bulletin
+   */
+  setBulletin(bulletin) {
+    this._bulletin = bulletin;
+    if (!this._blocksEl) {
+      return; // Not yet connected
+    }
+    const blocks = bulletin?.blocks ?? [];
+    this._blocksCard.hidden = blocks.length === 0;
+    this._blocksEl.innerHTML = "";
+    for (const block of blocks) {
+      const pre = document.createElement("div");
+      pre.style.marginBottom = "8px";
+      for (const token of splitSevere(block.text)) {
+        if (token.severe) {
+          const strong = document.createElement("strong");
+          strong.className = "sev";
+          strong.textContent = token.text;
+          pre.appendChild(strong);
+        } else {
+          pre.appendChild(document.createTextNode(token.text));
+        }
+      }
+      this._blocksEl.appendChild(pre);
     }
   }
 }

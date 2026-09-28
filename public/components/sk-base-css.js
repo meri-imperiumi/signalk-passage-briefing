@@ -73,6 +73,28 @@ export const SK_BASE_CSS = `
     font-family: var(--font-data);
     font-variant-numeric: tabular-nums;
   }
+  .value-small {
+    font-family: var(--font-data);
+    font-variant-numeric: tabular-nums;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text-main);
+  }
+  .grid-auto {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+  .cards { display: grid; gap: 8px; }
+  .card {
+    border: 1px solid var(--theme-color, var(--color-teal));
+    padding: 8px 12px;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: baseline;
+    flex-wrap: wrap;
+  }
 
   button {
     appearance: none;
