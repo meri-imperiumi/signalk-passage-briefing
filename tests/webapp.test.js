@@ -18,6 +18,7 @@ test("webapp view models", async (t) => {
     fmtKn,
     fmtUtc,
     sailActionCards,
+    sailStateLabel,
     sparklineColumns,
     splitSevere,
     tacticalNow,
@@ -104,6 +105,32 @@ test("webapp view models", async (t) => {
     assert.match(tacticalNow(null).color, /unknown/);
   });
 
+  await t.test("sailStateLabel humanizes canonical keys", () => {
+    assert.equal(
+      sailStateLabel("GENOA_1_30_FURLED_MAIN_1_REEF"),
+      "Genoa 1 30% furled + Main 1 reef",
+    );
+    assert.equal(
+      sailStateLabel("GENOA_1_10_FURLED_MAIN"),
+      "Genoa 1 10% furled + Main",
+    );
+    assert.equal(
+      sailStateLabel("GENOA_1_MAIN_1_REEF"),
+      "Genoa 1 + Main 1 reef",
+    );
+    assert.equal(
+      sailStateLabel("GENOA_1_10_FURLED_MAIN_1_REEF_STAYSAIL"),
+      "Genoa 1 10% furled + Main 1 reef + Staysail",
+    );
+    assert.equal(sailStateLabel("NO_SAILS"), "No sails");
+    assert.equal(sailStateLabel("MAIN_2_REEF"), "Main 2 reefs");
+    // Maneuver state side suffix is ignored
+    assert.equal(sailStateLabel("GENOA_1_MAIN@starboard"), "Genoa 1 + Main");
+    // Unknown keys pass through untouched
+    assert.equal(sailStateLabel("?"), "?");
+    assert.equal(sailStateLabel(null), "");
+  });
+
   await t.test("sailActionCards format stamps and night flags", () => {
     const cards = sailActionCards({
       next24h: {
@@ -125,7 +152,8 @@ test("webapp view models", async (t) => {
     });
     assert.equal(cards[0].stamp, "06-21 12:00Z");
     assert.equal(cards[1].night, true);
-    assert.equal(cards[1].sailState, "STAYSAIL_MAIN_1_REEF");
+    assert.equal(cards[0].label, "Genoa 1 + Main");
+    assert.equal(cards[1].label, "Staysail + Main 1 reef");
     assert.deepEqual(sailActionCards(null), []);
   });
 
@@ -223,7 +251,7 @@ test("webapp view models", async (t) => {
   });
 
   await t.test(
-    "sailWorkTimeline labels maneuvers and keeps changes plain",
+    "sailWorkTimeline labels maneuvers and humanizes changes",
     () => {
       const timeline = sailWorkTimeline({
         passageSummary: {
@@ -231,7 +259,7 @@ test("webapp view models", async (t) => {
             {
               hoursFromNow: 2,
               timestamp: "2026-06-21T08:00:00.000Z",
-              sailState: "MAIN_REEF_1",
+              sailState: "MAIN_1_REEF",
             },
             {
               hoursFromNow: 4,
@@ -246,7 +274,7 @@ test("webapp view models", async (t) => {
         },
       });
       assert.equal(timeline.length, 2);
-      assert.equal(timeline[0].label, "MAIN_REEF_1");
+      assert.equal(timeline[0].label, "Main 1 reef");
       assert.equal(timeline[0].detail, "");
       assert.equal(timeline[1].label, "Tack to port");
       assert.equal(timeline[1].detail, "32 nm · 12.2 kn");

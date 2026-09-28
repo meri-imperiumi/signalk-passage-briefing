@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Sail-change cards in the tactical dashboard and the sail-work
+  timeline in the strategic outlook render the canonical sail-state
+  keys as human-readable labels: `GENOA_1_30_FURLED_MAIN_1_REEF`
+  reads "Genoa 1 30% furled + Main 1 reef", `NO_SAILS` reads "No
+  sails". Unparseable keys still fall back to the raw form.
+
 ## [0.2.1] - 2026-09-28
 
 ## [0.2.0] - 2026-09-28

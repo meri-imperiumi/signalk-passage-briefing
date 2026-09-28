@@ -301,18 +301,126 @@ export function tacticalNow(exceptions) {
 }
 
 /**
+ * Sail-type words that mark the start of a new sail component inside
+ * a canonical sail-state key. Reef/furl bits always terminate their
+ * component, so only consecutive *full* sails are ambiguous without
+ * the vessel's sail inventory — this small dictionary of common sail
+ * types closes the gap (e.g. `GENOA_1_MAIN` is two sails, not one
+ * named "Genoa 1 Main").
+ */
+const SAIL_COMPONENT_WORDS = new Set([
+  "MAIN",
+  "GENOA",
+  "JIB",
+  "STAYSAIL",
+  "FORESAIL",
+  "MIZZEN",
+  "SPINNAKER",
+  "GENNAKER",
+  "YANKEE",
+  "FOCK",
+  "CODE",
+  "DRIFTER",
+  "SPIN",
+]);
+
+/**
+ * Human-readable label for a canonical sail-state key (as built by
+ * `logbook-source.js` `sailStateKey`): `GENOA_1_30_FURLED_MAIN_1_REEF`
+ * reads as `Genoa 1 30% furled + Main 1 reef`, `NO_SAILS` as
+ * `No sails`. A trailing `@side` (maneuver states) is ignored.
+ *
+ * @param {string|null|undefined} key - Canonical key, e.g. `MAIN_1_REEF`
+ * @returns {string} Label, or the raw input when nothing parses
+ */
+export function sailStateLabel(key) {
+  const raw = String(key ?? "").trim();
+  if (!raw) {
+    return "";
+  }
+  const combination = raw.split("@")[0];
+  if (!combination || combination === "?") {
+    return raw;
+  }
+  if (combination === "NO_SAILS") {
+    return "No sails";
+  }
+
+  const components = [];
+  let words = [];
+  let reefs = null;
+  let furled = null;
+  const flush = () => {
+    if (words.length > 0 || reefs != null || furled != null) {
+      components.push({ words, reefs, furled });
+    }
+    words = [];
+    reefs = null;
+    furled = null;
+  };
+
+  const tokens = combination.split("_");
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const value = /^\d+$/.test(token) ? Number(token) : null;
+    const next = tokens[i + 1];
+    if (value != null && (next === "REEF" || next === "FURLED")) {
+      // Bit run `N REEF` / `N FURLED`: ends the component name run
+      if (next === "REEF") {
+        reefs = value;
+      } else {
+        furled = value;
+      }
+      i++;
+      continue;
+    }
+    if (
+      words.length > 0 &&
+      (reefs != null || furled != null || SAIL_COMPONENT_WORDS.has(token))
+    ) {
+      flush();
+    }
+    words.push(token);
+  }
+  flush();
+
+  if (components.length === 0) {
+    return raw;
+  }
+  return components
+    .map(({ words: sailWords, reefs: nReef, furled: nFurled }) => {
+      const name = sailWords
+        .map((word) =>
+          /^\d/.test(word)
+            ? word
+            : word.charAt(0) + word.slice(1).toLowerCase(),
+        )
+        .join(" ");
+      const bits = [];
+      if (nReef != null) {
+        bits.push(`${nReef} reef${nReef === 1 ? "" : "s"}`);
+      }
+      if (nFurled != null) {
+        bits.push(`${nFurled}% furled`);
+      }
+      return [name, ...bits].filter(Boolean).join(" ");
+    })
+    .join(" + ");
+}
+
+/**
  * Sail action cards for the tactical dashboard, oldest first.
  * Maneuver events (work doc #5) carry `maneuver`, `toTack` and the
  * expected TWS so the cards can read "Tack to starboard ~14:20, 12 kt".
  *
  * @param {object|null} exceptions
- * @returns {Array<{hoursFromNow: number, stamp: string, sailState: string, night: boolean, maneuver: string|null, toTack: string|null, twsKnots: number|null}>}
+ * @returns {Array<{hoursFromNow: number, stamp: string, label: string, night: boolean, maneuver: string|null, toTack: string|null, twsKnots: number|null}>}
  */
 export function sailActionCards(exceptions) {
   return (exceptions?.next24h?.sailChanges ?? []).map((e) => ({
     hoursFromNow: e.hoursFromNow,
     stamp: fmtUtc(e.timestamp),
-    sailState: e.sailState ?? "?",
+    label: sailStateLabel(e.sailState) || "?",
     night: Boolean(e.night),
     maneuver: e.maneuver ?? null,
     toTack: e.toTack ?? null,
@@ -333,7 +441,7 @@ export function sailWorkTimeline(exceptions) {
     const [combination, tack] = state.split("@");
     const label = e.maneuver
       ? `${e.maneuver === "tack" ? "Tack" : "Gybe"} to ${e.toTack ?? tack ?? "?"}`
-      : combination || state;
+      : sailStateLabel(combination) || state;
     const detail = [
       e.distanceFromStartNm != null
         ? `${Math.round(e.distanceFromStartNm)} nm`

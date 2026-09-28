@@ -108,7 +108,7 @@ class TacticalDashboard extends HTMLElement {
         name.className = "value-small";
         name.textContent = c.maneuver
           ? `${c.maneuver === "tack" ? "Tack" : "Gybe"} to ${c.toTack ?? "?"}`
-          : c.sailState;
+          : c.label;
         const when = document.createElement("span");
         when.className = "muted";
         when.textContent = c.maneuver
