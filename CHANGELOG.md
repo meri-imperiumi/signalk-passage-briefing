@@ -4,6 +4,13 @@
 
 ### Changed
 
+- The tactical "Next 24 Hours" hero readout is labeled `AWS` and
+  shows its unit: `AWS 17.0 kn` instead of a bare number. (Signal K
+  carries wind in SI m/s internally; the briefing displays the
+  nautical kn.)
+
+### Changed
+
 - Sail-change cards in the tactical dashboard and the sail-work
   timeline in the strategic outlook render the canonical sail-state
   keys as human-readable labels: `GENOA_1_30_FURLED_MAIN_1_REEF`

@@ -48,6 +48,7 @@ class TacticalDashboard extends HTMLElement {
       <section class="sk-card theme-teal">
         <h2>Next 24 Hours</h2>
         <div class="now">
+          <span class="label">AWS</span>
           <span class="value" id="aws">—</span>
           <span class="tier" id="tier">no data</span>
           <comfort-info id="cinfo"></comfort-info>
@@ -86,7 +87,7 @@ class TacticalDashboard extends HTMLElement {
     // Now readout
     const now = tacticalNow(exceptions);
     this._awsEl.textContent =
-      now.awsKnots != null ? `${now.awsKnots.toFixed(1)}` : "—";
+      now.awsKnots != null ? `${now.awsKnots.toFixed(1)} kn` : "—";
     this._tierEl.textContent = now.comfortLevel ?? "no data";
     this._tierEl.style.color = now.color;
     this._cinfo?.setAttribute("tier", now.comfortLevel ?? "");
