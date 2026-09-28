@@ -87,7 +87,13 @@ function parseKpForecast(json, { from = new Date(), hours = 24 } = {}) {
   const end = start + hours * 3600000;
   const entries = [];
   for (const row of json) {
-    const t = new Date(row?.time_tag).getTime();
+    // SWPC time_tag is UTC but offsetless: parsing it bare would
+    // interpret it in the server's timezone and shift the whole
+    // window (a UTC+13 boat must see the same forecast as a UTC one)
+    const raw = typeof row?.time_tag === "string" ? row.time_tag : "";
+    const t = new Date(
+      /[Zz]|[+-]\d\d:?\d\d$/.test(raw) ? raw : `${raw}Z`,
+    ).getTime();
     const kp = row?.kp;
     if (!Number.isFinite(t) || typeof kp !== "number" || !Number.isFinite(kp)) {
       continue;

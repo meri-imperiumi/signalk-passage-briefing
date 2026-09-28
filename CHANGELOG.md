@@ -59,6 +59,11 @@
   fetches bulletins and synoptics for the track, so the outer
   duplicate pass is gone.
 
+- SWPC solar-weather timestamps are UTC but carry no offset, so
+  they were parsed in the server's local timezone: on a boat far
+  from Greenwich the entire Kp forecast window shifted and aurora
+  alerts degraded. Offsetless timestamps are now read as UTC.
+
 - Switching the route selector between "Conditions here" and a route
   now actually swaps the view: the tactical/strategic shell is
   rebuilt for the served mode (previously the tabbed views never
