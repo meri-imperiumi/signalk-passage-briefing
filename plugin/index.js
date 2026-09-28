@@ -1269,10 +1269,14 @@ module.exports = (app) => {
        * everything else is here mode.
        */
       router.get("/api/briefing", async (req, res) => {
-        const routeId =
-          typeof req.query.route === "string" ? req.query.route : "";
+        // An explicit ?route= (even empty) selects the mode — the
+        // route picker's "Conditions here" entry requests exactly
+        // that. With no param at all the route being sailed wins,
+        // falling back to here when none (work doc #7)
+        const explicitRoute = typeof req.query.route === "string";
+        const routeId = explicitRoute ? req.query.route.trim() : "";
         const activeId = activeRouteId(observations[ACTIVE_ROUTE_PATH]);
-        const effectiveRoute = routeId || activeId;
+        const effectiveRoute = routeId || (explicitRoute ? "" : activeId);
         if (!effectiveRoute) {
           const here = await loadHere();
           if (!here) {

@@ -187,6 +187,52 @@ describe("plugin", () => {
     plugin.stop();
   });
 
+  test("explicit empty route param serves here even with an active route", () => {
+    const app = createMockApp();
+    app.getSelfPath = (path) =>
+      path === "navigation.position"
+        ? { latitude: -21.1, longitude: -175.2 }
+        : path === "navigation.course.activeRoute"
+          ? { value: { href: "/resources/routes/r1" } }
+          : null;
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+
+    const call = async (path, req = { query: {} }) => {
+      const route = app.getRoutes().find((r) => r.path === path);
+      const res = {
+        code: null,
+        payload: null,
+        status(code) {
+          this.code = code;
+          return this;
+        },
+        json(payload) {
+          this.payload = payload;
+        },
+      };
+      await route.handler(req, res);
+      return res;
+    };
+
+    return (async () => {
+      // No param at all: the route being sailed wins (nothing cached,
+      // so the response is the route shell for the webapp)
+      let res = await call("/api/briefing");
+      assert.equal(res.payload.mode, "route");
+      assert.equal(res.payload.routeId, "r1");
+
+      // Explicit ?route= (the picker's "Conditions here") selects here
+      // mode even while the route is active
+      res = await call("/api/briefing", { query: { route: "" } });
+      assert.equal(res.payload.mode, "here");
+      assert.equal(res.payload.payload, null);
+
+      plugin.stop();
+    })();
+  });
+
   test("here mode: served from cache with mode marker and refreshed online", async () => {
     const { mockOpenMeteo } = require("./openmeteo-mock.js");
     const app = createMockApp();

@@ -71,6 +71,13 @@
   appeared to do nothing). Stale model data from the previous
   selection is dropped instead of flashing.
 
+- Selecting "Conditions here" in the route picker now actually
+  serves conditions-here: the briefing API treated an empty `route`
+  parameter as "serve the route being sailed", so the selection
+  silently returned the same route view. An explicit `?route=`
+  (even empty) now selects; only a fully omitted parameter falls
+  back to the active route.
+
 ## [0.2.1] - 2026-09-28
 
 ## [0.2.0] - 2026-09-28

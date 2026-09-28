@@ -184,7 +184,10 @@ class PassageOutlook extends HTMLElement {
    * @param {string} routeId - Route resource id, or "" for here mode
    */
   async loadBriefing(routeId) {
-    const query = routeId ? `?route=${encodeURIComponent(routeId)}` : "";
+    // Always send ?route=: the empty string is an explicit request
+    // for conditions-here, not an omission (the server otherwise
+    // serves the route being sailed)
+    const query = `?route=${encodeURIComponent(routeId)}`;
     try {
       this._briefing = await fetchJson(`${PLUGIN_API}/briefing${query}`);
       if (!this._briefing.payload) {
@@ -198,9 +201,10 @@ class PassageOutlook extends HTMLElement {
           await this.refreshBriefing();
           return;
         }
+        const mode = this._briefing.mode;
         this._briefing = null;
         this.renderRoute();
-        this.renderStale(true);
+        this.renderStale(true, mode);
         return;
       }
       // Route change: drop cached exceptions from the previous mode,
@@ -241,8 +245,9 @@ class PassageOutlook extends HTMLElement {
    * "No cached briefing yet" strip with the refresh affordance.
    *
    * @param {boolean} show
+   * @param {string} [mode] - Served mode the strip refers to
    */
-  renderStale(show) {
+  renderStale(show, mode = "route") {
     this.shadowRoot.getElementById("stale")?.remove();
     if (!show) {
       return;
@@ -251,7 +256,10 @@ class PassageOutlook extends HTMLElement {
     strip.className = "stale";
     strip.id = "stale";
     const text = document.createElement("span");
-    text.textContent = "No cached briefing for this route";
+    text.textContent =
+      mode === "here"
+        ? "No cached conditions yet"
+        : "No cached briefing for this route";
     const button = document.createElement("button");
     button.textContent = "Fetch now";
     button.disabled = this._status?.online !== true;
