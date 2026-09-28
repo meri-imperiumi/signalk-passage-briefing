@@ -22,6 +22,22 @@ import { SK_BASE_CSS } from "./sk-base-css.js";
 const PLUGIN_API = "/plugins/signalk-passage-briefing/api";
 
 /**
+ * Friendly text for fetch failures: the 8 s/120 s abort timeouts
+ * surface with cryptic engine-specific messages ("Fetch is aborted",
+ * "The operation was aborted") — say what actually happened instead.
+ *
+ * @param {Error} error
+ * @param {string} fallback - Prefix for non-abort failures
+ * @returns {string}
+ */
+function fetchErrorMessage(error, fallback) {
+  if (error?.name === "AbortError" || /abort/i.test(error?.message ?? "")) {
+    return "The server took too long to answer — it may be busy compiling a briefing. Try again.";
+  }
+  return `${fallback}: ${error.message}`;
+}
+
+/**
  * The custom element (browser only).
  */
 class PassageOutlook extends HTMLElement {
@@ -59,6 +75,13 @@ class PassageOutlook extends HTMLElement {
           align-items: center; flex-wrap: wrap;
         }
         .stale button { min-height: 40px; padding: 8px 12px; }
+        .loading {
+          border: 1px solid var(--color-grey);
+          color: var(--text-muted);
+          font-family: var(--font-data, ui-monospace, monospace);
+          letter-spacing: 0.1em; text-transform: uppercase;
+          padding: 8px 12px; margin-bottom: 12px;
+        }
       </style>
       <header>
         <h1>Passage Briefing</h1>
@@ -188,8 +211,16 @@ class PassageOutlook extends HTMLElement {
     // for conditions-here, not an omission (the server otherwise
     // serves the route being sailed)
     const query = `?route=${encodeURIComponent(routeId)}`;
+    // Sequence token: only the newest selection may paint, so rapid
+    // switching cannot apply a stale response
+    this._loadSeq = (this._loadSeq ?? 0) + 1;
+    const seq = this._loadSeq;
+    this.renderLoading();
     try {
-      this._briefing = await fetchJson(`${PLUGIN_API}/briefing${query}`);
+      this._briefing = await fetchJson(`${PLUGIN_API}/briefing${query}`, 20000);
+      if (seq !== this._loadSeq) {
+        return;
+      }
       if (!this._briefing.payload) {
         // A never-briefed route: fetch it once automatically (online)
         // instead of requiring the button — but only once per route,
@@ -205,6 +236,9 @@ class PassageOutlook extends HTMLElement {
         this._briefing = null;
         this.renderRoute();
         this.renderStale(true, mode);
+        return;
+      }
+      if (seq !== this._loadSeq) {
         return;
       }
       // Route change: drop cached exceptions from the previous mode,
@@ -223,7 +257,10 @@ class PassageOutlook extends HTMLElement {
         this.simulate();
       }
     } catch (error) {
-      this.showError(`Briefing unavailable: ${error.message}`);
+      if (seq !== this._loadSeq) {
+        return;
+      }
+      this.showError(fetchErrorMessage(error, "Briefing unavailable"));
     }
   }
 
@@ -231,14 +268,35 @@ class PassageOutlook extends HTMLElement {
   async refreshBriefing() {
     const routeId = this._routeSelect.value;
     const query = routeId ? `?route=${encodeURIComponent(routeId)}` : "";
+    this.renderLoading(
+      routeId
+        ? "Fetching briefing — can take a minute over a slow link…"
+        : "Fetching conditions…",
+    );
     try {
       await fetchJson(`${PLUGIN_API}/briefing/refresh${query}`, 120000, {
         method: "POST",
       });
       await this.loadBriefing(routeId);
     } catch (error) {
-      this.showError(`Refresh failed: ${error.message}`);
+      this.showError(fetchErrorMessage(error, "Refresh failed"));
     }
+  }
+
+  /**
+   * Loading strip replacing the view while a fetch or refresh runs:
+   * briefing compiles can take tens of seconds on a slow link, and
+   * silence reads as a broken app.
+   *
+   * @param {string} [message]
+   */
+  renderLoading(message = "Loading briefing…") {
+    this.shadowRoot.getElementById("stale")?.remove();
+    this._view.innerHTML = "";
+    const strip = document.createElement("div");
+    strip.className = "loading";
+    strip.textContent = message;
+    this._view.appendChild(strip);
   }
 
   /**

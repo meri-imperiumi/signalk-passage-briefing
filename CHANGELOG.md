@@ -78,6 +78,13 @@
   (even empty) now selects; only a fully omitted parameter falls
   back to the active route.
 
+- The webapp shows a loading state while a briefing loads or
+  refreshes (compiles can take tens of seconds on a slow link —
+  silence read as a broken app), and timed-out requests say the
+  server is busy and to retry instead of surfacing the cryptic
+  engine abort text. Rapid mode switching can no longer apply a
+  stale response after a newer one.
+
 ## [0.2.1] - 2026-09-28
 
 ## [0.2.0] - 2026-09-28
