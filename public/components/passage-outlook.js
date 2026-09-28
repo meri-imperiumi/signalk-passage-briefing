@@ -187,7 +187,16 @@ class PassageOutlook extends HTMLElement {
     try {
       this._briefing = await fetchJson(`${PLUGIN_API}/briefing${query}`);
       if (!this._briefing.payload) {
-        // Nothing cached yet (200 with empty payload): refresh strip
+        // A never-briefed route: fetch it once automatically (online)
+        // instead of requiring the button — but only once per route,
+        // so an unreachable route can't loop
+        const key = this._briefing.routeId ?? "here";
+        this._autoFetched ??= new Set();
+        if (this._briefing.mode === "route" && !this._autoFetched.has(key)) {
+          this._autoFetched.add(key);
+          await this.refreshBriefing();
+          return;
+        }
         this._briefing = null;
         this.renderStale(true);
         return;
