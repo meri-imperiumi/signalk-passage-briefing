@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- ETA percentile rows in the strategic outlook flag night arrivals
+  with a moon marker: arrival day/night is computed at the
+  destination for each of P10/P50/P90.
+
+- "No sails" stretches now say why the canvas is down: `No sails -
+  drifting` when the plan drifts below the motoring wind threshold,
+  `Motoring` when the engine pushes — reconciling the sail-work
+  queue with a zero engine-hours plan (drift mode).
+
 ### Changed
 
 - Strategic outlook layout: motor hours and fuel use the shared
@@ -15,40 +26,25 @@
   Shared card/stat styles moved into the common shadow-DOM base
   stylesheet.
 
-### Changed
-
 - Sail-change events no longer flap when the forecast sits on a
   matrix bin edge: a suggested state must hold through a full
   simulation step before it enters the sail-work queue.
-
-### Added
-
-- "No sails" stretches now say why the canvas is down: `No sails -
-  drifting` when the plan drifts below the motoring wind threshold,
-  `Motoring` when the engine pushes — reconciling the sail-work
-  queue with a zero engine-hours plan (drift mode).
-
-### Added
-
-- ETA percentile rows in the strategic outlook flag night arrivals
-  with a moon marker: arrival day/night is computed at the
-  destination for each of P10/P50/P90.
-
-### Changed
 
 - Fuel is handled in liters end to end (SI — no imperial units):
   the motor burn rate is configurable as `Motor Fuel Consumption
   (liters per hour)` with a 1.8 l/h default, and the strategic ETA
   table shows e.g. `72.0 l` instead of gallons.
 
-### Fixed
+- The tactical "Next 24 Hours" hero readout is labeled `AWS` and
+  shows its unit: `AWS 17.0 kn` instead of a bare number. (Signal K
+  carries wind in SI m/s internally; the briefing displays the
+  nautical kn.)
 
-- Switching the route selector between "Conditions here" and a route
-  now actually swaps the view: the tactical/strategic shell is
-  rebuilt for the served mode (previously the tabbed views never
-  came back after visiting conditions-here, so route selection
-  appeared to do nothing). Stale model data from the previous
-  selection is dropped instead of flashing.
+- Sail-change cards in the tactical dashboard and the sail-work
+  timeline in the strategic outlook render the canonical sail-state
+  keys as human-readable labels: `GENOA_1_30_FURLED_MAIN_1_REEF`
+  reads "Genoa 1 30% furled + Main 1 reef", `NO_SAILS` reads "No
+  sails". Unparseable keys still fall back to the raw form.
 
 ### Fixed
 
@@ -58,20 +54,17 @@
   keeping conditions-here fresh. Previously every cycle died with
   `Briefing refresh failed (oneshot): Resource not found!`.
 
-### Changed
+- The scheduled (oneshot/cron) route refresh no longer pulls the
+  bulletin stack twice per cycle: the briefing refresh already
+  fetches bulletins and synoptics for the track, so the outer
+  duplicate pass is gone.
 
-- The tactical "Next 24 Hours" hero readout is labeled `AWS` and
-  shows its unit: `AWS 17.0 kn` instead of a bare number. (Signal K
-  carries wind in SI m/s internally; the briefing displays the
-  nautical kn.)
-
-### Changed
-
-- Sail-change cards in the tactical dashboard and the sail-work
-  timeline in the strategic outlook render the canonical sail-state
-  keys as human-readable labels: `GENOA_1_30_FURLED_MAIN_1_REEF`
-  reads "Genoa 1 30% furled + Main 1 reef", `NO_SAILS` reads "No
-  sails". Unparseable keys still fall back to the raw form.
+- Switching the route selector between "Conditions here" and a route
+  now actually swaps the view: the tactical/strategic shell is
+  rebuilt for the served mode (previously the tabbed views never
+  came back after visiting conditions-here, so route selection
+  appeared to do nothing). Stale model data from the previous
+  selection is dropped instead of flashing.
 
 ## [0.2.1] - 2026-09-28
 

@@ -719,8 +719,6 @@ module.exports = (app) => {
     for (const routeId of candidates) {
       try {
         const result = await refreshBriefing(routeId);
-        // Bulletins ride the same online window (work doc #4 §1)
-        await refreshBulletinsOnline(trigger, result.waypoints);
         setStatus(
           `Briefing for ${routeId} cached at ${result.fetchedAt} (${trigger})`,
         );
