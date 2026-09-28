@@ -134,7 +134,12 @@ class StrategicOutlook extends HTMLElement {
       tdLabel.className = "muted";
       tdLabel.textContent = row.label;
       const tdStamp = document.createElement("td");
-      tdStamp.textContent = row.stamp || "—";
+      tdStamp.textContent = row.night
+        ? `${row.stamp || "—"} ☾`
+        : row.stamp || "—";
+      if (row.night) {
+        tdStamp.title = "Night arrival at destination";
+      }
       tr.append(tdLabel, tdStamp);
       this._etaBody.appendChild(tr);
     }

@@ -327,6 +327,11 @@ describe("simulatePassage", () => {
     const p50 = new Date(result.eta.p50).getTime();
     const p90 = new Date(result.eta.p90).getTime();
     assert.ok(p10 <= p50 && p50 <= p90, `${p10} <= ${p50} <= ${p90}`);
+    // Day/night bucket per arrival, computed at the destination
+    assert.deepEqual(Object.keys(result.eta.night), ["p10", "p50", "p90"]);
+    for (const flag of Object.values(result.eta.night)) {
+      assert.equal(typeof flag, "boolean");
+    }
 
     // 24 h × (500 − 600) Wh
     assert.equal(result.energy.netSolar24h, 12);

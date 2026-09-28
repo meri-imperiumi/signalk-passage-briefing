@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- ETA percentile rows in the strategic outlook flag night arrivals
+  with a moon marker: arrival day/night is computed at the
+  destination for each of P10/P50/P90.
+
 ### Changed
 
 - Fuel is handled in liters end to end (SI — no imperial units):

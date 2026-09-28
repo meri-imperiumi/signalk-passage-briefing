@@ -467,11 +467,24 @@ export function sailWorkTimeline(exceptions) {
  */
 export function etaTable(exceptions) {
   const summary = exceptions?.passageSummary ?? {};
+  const night = summary.etaNight ?? {};
   return {
     rows: [
-      { label: "P10", stamp: fmtUtc(summary.etaP10) },
-      { label: "P50", stamp: fmtUtc(summary.etaP50) },
-      { label: "P90", stamp: fmtUtc(summary.etaP90) },
+      {
+        label: "P10",
+        stamp: fmtUtc(summary.etaP10),
+        night: night.p10 === true,
+      },
+      {
+        label: "P50",
+        stamp: fmtUtc(summary.etaP50),
+        night: night.p50 === true,
+      },
+      {
+        label: "P90",
+        stamp: fmtUtc(summary.etaP90),
+        night: night.p90 === true,
+      },
     ],
     motorHours:
       summary.totalMotorHours != null ? fmtHours(summary.totalMotorHours) : "",

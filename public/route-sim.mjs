@@ -681,18 +681,35 @@ export function simulatePassage({
   const nominal = runs[ETA_FACTORS.indexOf(1.0)] ?? base;
 
   const etas = runs.map((run) => run.etaHours).sort((a, b) => a - b);
+  const pctHours = (p) =>
+    etas[Math.min(etas.length - 1, Math.round(p * (etas.length - 1)))];
   const pct = (p) =>
-    new Date(
-      startTime.getTime() +
-        etas[Math.min(etas.length - 1, Math.round(p * (etas.length - 1)))] *
-          3600000,
-    ).toISOString();
+    new Date(startTime.getTime() + pctHours(p) * 3600000).toISOString();
+  // Day/night at the destination per arrival percentile: a night
+  // landfall is worth flagging (dark anchorage, tired crew)
+  const destination =
+    payload?.waypoints?.[payload.waypoints.length - 1] ?? null;
+  const etaNight = (p) => {
+    if (!destination) {
+      return null;
+    }
+    return isNight(
+      new Date(startTime.getTime() + pctHours(p) * 3600000),
+      destination.lat,
+      destination.lon,
+    );
+  };
 
   return {
     eta: {
       p10: pct(0),
       p50: pct(0.5),
       p90: pct(1),
+      night: {
+        p10: etaNight(0),
+        p50: etaNight(0.5),
+        p90: etaNight(1),
+      },
     },
     motoringHours: nominal.motoringHours,
     fuelConsumptionLiters: nominal.fuelLiters,
@@ -742,6 +759,7 @@ export function filterExceptions(simulationResult) {
       etaP10: simulationResult.eta?.p10 ?? null,
       etaP50: simulationResult.eta?.p50 ?? null,
       etaP90: simulationResult.eta?.p90 ?? null,
+      etaNight: simulationResult.eta?.night ?? null,
       totalMotorHours: simulationResult.motoringHours ?? 0,
       totalFuelLiters: simulationResult.fuelConsumptionLiters ?? 0,
       // Whole-route sail-work queue: recommendations plus the

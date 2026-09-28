@@ -236,6 +236,7 @@ test("webapp view models", async (t) => {
         etaP10: "2026-06-22T12:00:00Z",
         etaP50: "2026-06-22T13:00:00Z",
         etaP90: "2026-06-22T14:30:00Z",
+        etaNight: { p10: false, p50: true, p90: true },
         totalMotorHours: 40,
         totalFuelLiters: 72,
       },
@@ -247,6 +248,10 @@ test("webapp view models", async (t) => {
     assert.equal(table.rows[2].stamp, "06-22 14:30Z");
     assert.equal(table.motorHours, "1d 16h");
     assert.equal(table.fuel, "72.0 l");
+    assert.deepEqual(
+      table.rows.map((row) => row.night),
+      [false, true, true],
+    );
     assert.equal(etaTable(null).motorHours, "");
   });
 
