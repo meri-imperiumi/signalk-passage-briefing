@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- Switching the route selector between "Conditions here" and a route
+  now actually swaps the view: the tactical/strategic shell is
+  rebuilt for the served mode (previously the tabbed views never
+  came back after visiting conditions-here, so route selection
+  appeared to do nothing). Stale model data from the previous
+  selection is dropped instead of flashing.
+
+### Fixed
+
 - A scheduled (oneshot/cron) refresh no longer fails forever when
   the last briefed route has been deleted from resources: the stale
   `last-route` pointer is removed and the refresh falls back to

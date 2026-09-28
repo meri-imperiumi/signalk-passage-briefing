@@ -98,6 +98,7 @@ class PassageOutlook extends HTMLElement {
 
     this._worker = null;
     this._briefing = null;
+    this._briefingKey = null;
     this._exceptions = null;
 
     this.renderRoute();
@@ -198,13 +199,23 @@ class PassageOutlook extends HTMLElement {
           return;
         }
         this._briefing = null;
+        this.renderRoute();
         this.renderStale(true);
         return;
       }
+      // Route change: drop cached exceptions from the previous mode,
+      // they belong to another track (or none at all)
+      const key = this._briefing.routeId ?? "here";
+      if (key !== this._briefingKey) {
+        this._briefingKey = key;
+        this._exceptions = null;
+      }
       this.renderStale(false);
-      if (this._briefing.mode === "here") {
-        this.renderHere();
-      } else {
+      // Rebuild the view shell for the served mode: leaving "Conditions
+      // here" must bring the tactical/strategic tabs back, and the
+      // worker's results render into the elements this creates
+      this.renderRoute();
+      if (this._briefing.mode !== "here") {
         this.simulate();
       }
     } catch (error) {
