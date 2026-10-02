@@ -363,6 +363,90 @@ describe("plugin", () => {
     plugin.stop();
   });
 
+  test("weather-api source: briefing reads the server Weather API provider (work doc #16)", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const RAD = Math.PI / 180;
+    // WeatherData entries like a provider (weather-router-plus)
+    // serves them: Signal K units, ascending steps near now so the
+    // here window's 24h filter keeps them
+    const step = (hours) => ({
+      date: new Date(Date.now() + hours * 3600000).toISOString(),
+      type: "point",
+      description: `ECMWF IFS 0.25° open data, cycle test, +${hours} h`,
+      wind: { speedTrue: 5.14, directionTrue: 45 * RAD, gust: 7.7 },
+      outside: { pressure: 101300 },
+      water: {
+        waveSignificantHeight: 1,
+        wavePeriod: 6,
+        waveDirection: 160 * RAD,
+      },
+    });
+    const app = createMockApp();
+    app.getSelfPath = (path) =>
+      path === "navigation.position"
+        ? { latitude: -21.1, longitude: -175.2 }
+        : null;
+    app.weatherApi = {
+      getForecasts: async (position, type, options) => {
+        assert.deepEqual(position, { latitude: -21.1, longitude: -175.2 });
+        assert.equal(type, "point");
+        assert.ok(options.maxCount >= 24);
+        return [0, 3, 6, 9, 12, 15, 18, 21, 24].map(step);
+      },
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const call = async (path, req = { query: {} }) => {
+      const route = app.getRoutes().find((r) => r.path === path);
+      const res = {
+        code: null,
+        payload: null,
+        status(code) {
+          this.code = code;
+          return this;
+        },
+        json(payload) {
+          this.payload = payload;
+        },
+      };
+      await route.handler(req, res);
+      return res;
+    };
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "online" }] },
+      ],
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => mockOpenMeteo()(url, opts);
+    try {
+      await call("/api/briefing/refresh");
+      const res = await call("/api/briefing");
+      assert.equal(res.code, null);
+      assert.equal(res.payload.mode, "here");
+      assert.equal(res.payload.payload.metadata.source, "weather-api");
+      assert.match(
+        res.payload.payload.metadata.models[0],
+        /^weather-api:ECMWF IFS/,
+      );
+      assert.equal(res.payload.payload.waypoints.length, 1);
+      assert.equal(res.payload.payload.waypoints[0].lat, -21.1);
+      const forecast = res.payload.payload.waypoints[0].forecasts[0];
+      assert.equal(forecast.surface.tws, 9.99);
+      assert.equal(forecast.surface.twd, 45);
+      assert.equal(forecast.surface.mslp, 1013);
+      // Upper air absent from the provider: degraded, not invented
+      assert.equal(forecast.upperAir.cape, null);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    plugin.stop();
+  });
+
   test("ignores unrelated paths and unexpected values", () => {
     const app = createMockApp();
     const plugin = pluginFactory(app);

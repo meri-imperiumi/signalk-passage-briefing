@@ -59,13 +59,13 @@ const {
 const {
   DEFAULT_FORECAST_DAYS,
   distanceNm: distanceNmLatLon,
-  fetchWeatherAlongTrack,
   listCachedRoutes,
   loadPayload,
   routeDistanceNm,
   sampleRoutePoints,
   savePayload,
 } = require("./fetch-engine.js");
+const { createWeatherFetcher } = require("./weather-source.js");
 
 /**
  * Plugin identifier (matches package name without the scope).
@@ -143,6 +143,10 @@ const DEFAULTS = {
    * seed; extend via configuration. */
   bulletin_stations: [{ zone: 14, header: "FQPS01", station: "NFFN" }],
   publish_metarea_notes: true,
+  /** Weather source selection (work doc #16): the server's Weather
+   * API when a provider answers (signalk-weather-router-plus),
+   * Open-Meteo otherwise. */
+  weather_source: "auto",
 };
 
 /**
@@ -193,6 +197,9 @@ module.exports = (app) => {
   let notesStore = null;
   /** Publish METAREA blocks as resources/notes (doc #12). */
   let publishNotesEnabled = true;
+  /** Track-weather fetch the briefing windows call (work doc #16):
+   * Weather API when selected/available, Open-Meteo otherwise. */
+  let trackWeatherFetcher = null;
 
   /**
    * Whether the internet link currently allows fetching.
@@ -534,7 +541,7 @@ module.exports = (app) => {
     await refreshSynopticsOnline("here", waypoints);
     // forecast_days=2: Open-Meteo's first day starts at 00Z, so two
     // days guarantee 24 forward hours from any fetch time
-    const payload = await fetchWeatherAlongTrack({
+    const payload = await trackWeatherFetcher({
       waypoints,
       forecastDays: 2,
     });
@@ -649,7 +656,7 @@ module.exports = (app) => {
     // metareaBulletin): pulled first so this briefing carries them
     await refreshBulletinsOnline("briefing", waypoints);
     await refreshSynopticsOnline("briefing", waypoints);
-    const payload = await fetchWeatherAlongTrack({ waypoints, forecastDays });
+    const payload = await trackWeatherFetcher({ waypoints, forecastDays });
     const bulletin = await bulletinForTrack(waypoints);
     if (bulletin) {
       payload.metareaBulletin = bulletin;
@@ -1031,6 +1038,16 @@ module.exports = (app) => {
             "server's resources/notes so chart plotters show them.",
           default: DEFAULTS.publish_metarea_notes,
         },
+        weather_source: {
+          type: "string",
+          title: "Weather Source",
+          description:
+            "auto prefers the server Weather API (signalk-weather-router-plus " +
+            "when installed) and falls back to Open-Meteo; the forced " +
+            "choices never fall back.",
+          enum: ["auto", "weather-api", "open-meteo"],
+          default: DEFAULTS.weather_source,
+        },
       },
     },
 
@@ -1043,6 +1060,13 @@ module.exports = (app) => {
         ? config.bulletin_urls
         : [];
       publishNotesEnabled = config.publish_metarea_notes !== false;
+      // Weather source (work doc #16): the server's Weather API when
+      // present (signalk-weather-router-plus registers a provider over
+      // its decoded ECMWF run), Open-Meteo per config or fallback
+      trackWeatherFetcher = createWeatherFetcher({
+        weatherApi: app.weatherApi,
+        weatherSource: config.weather_source,
+      });
       bulletinStations = Array.isArray(config.bulletin_stations)
         ? config.bulletin_stations.filter(
             (station) =>

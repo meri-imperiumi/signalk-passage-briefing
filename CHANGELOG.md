@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- Weather source selection (`weather_source`: `auto` / `weather-api` /
+  `open-meteo`, default `auto`): when the server has the Weather API
+  and a provider answers — signalk-weather-router-plus serving its
+  decoded ECMWF run — waypoint forecasts for the here and route
+  briefing windows are read from it in-process (`app.weatherApi`)
+  instead of Open-Meteo, so the briefing reasons from the same
+  forecast the router planned with and offshore fetches stay local.
+  Provider responses (Signal K units) map onto the payload
+  conventions (knots, degrees true, hPa); combined sea only — swell
+  and wind-sea partitions and the upper-air fields behind the
+  convective warnings degrade to absent. A failed Weather API fetch
+  falls back to Open-Meteo for that window; the forced choices never
+  fall back.
+
 ### Fixed
 
 - Bulletin geography now resolves named synoptic features in area

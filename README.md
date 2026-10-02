@@ -3,12 +3,7 @@
 Offshore passage daily briefing webapp for Signal K: a plugin that plans
 and reviews passages for a cruising sailing vessel.
 
-The plugin fetches multi-model weather along the planned route (online,
-or via a GRIB/text spool when offline offshore), runs a step-forward
-isochrone simulation with a monohull comfort model, learns the crew's
-sail preferences from the electronic logbook, and serves a two-screen
-webapp: a 24-hour tactical dashboard and a strategic passage summary.
-See [SPEC.md](SPEC.md) for the full design.
+The plugin fetches weather along the planned route — from the server's Weather API when a provider answers, Open-Meteo otherwise; fetched online, or via a GRIB/text spool when offline offshore. It runs a step-forward isochrone simulation with a monohull comfort model, learns the crew's sail preferences from the electronic logbook, and serves a two-screen webapp: a 24-hour tactical dashboard and a strategic passage summary. See [SPEC.md](SPEC.md) for the full design.
 
 Part of the Lille Ø offshore suite, alongside
 [@meri-imperiumi/signalk-energy-predictor](https://github.com/meri-imperiumi/signalk-energy-predictator)
@@ -40,8 +35,20 @@ and [@meri-imperiumi/signalk-logbook](https://github.com/meri-imperiumi/signalk-
   preference matrix
 - [@signalk/sailsconfiguration](https://www.npmjs.com/package/@signalk/sailsconfiguration)
   — sail inventory used to filter free-text noise out of log entries
+- Weather API (`app.weatherApi`) — waypoint forecasts from the
+  registered provider, the preferred source (`weather_source: auto`)
+  whenever one answers; [signalk-weather-router-plus](https://github.com/motamman/signalk-weather-router-plus)
+  serves it from its decoded ECMWF run, so briefing numbers match what
+  the router planned with. That source carries combined sea only:
+  swell/wind-sea partitions and the upper-air fields behind the
+  convective warnings degrade to absent rather than being invented
 
 ### External
+
+The Open-Meteo entries below are the fallback weather source: used
+when no Weather API provider answers (or `weather_source` is
+`open-meteo`), and the only source of the partition and upper-air
+fields the Weather API providers don't publish.
 
 - [Open-Meteo Forecast API](https://open-meteo.com/en/docs) — surface
   wind, gusts, MSL pressure, CAPE and the pressure-layer fields behind
@@ -69,6 +76,11 @@ and [@meri-imperiumi/signalk-logbook](https://github.com/meri-imperiumi/signalk-
 
 All external fetches are online-gated and cached to the plugin data
 directory, so the last payloads survive the offline hours.
+
+## Pairing with Weather Router Plus
+
+[signalk-weather-router-plus](https://github.com/motamman/signalk-weather-router-plus)
+plans the passage: isochrone routing against the vessel's polar on the ECMWF open-data run it keeps decoded on disk, with map overlays, tides and currents. Activate the route it publishes to the Resources API, and this plugin briefs it — `navigation.course.activeRoute` wins over the last briefed route at the next fetch window, and with `weather_source: auto` (the default) the briefing reads its forecasts from the router's Weather API provider. One forecast on board, planner and briefing in agreement: the router for planning and visualization, the briefing for the underway daily routine (comfort, sail changes, bulletins, energy).
 
 ## Acknowledgments
 
