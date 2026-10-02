@@ -772,12 +772,6 @@ export function filterExceptions(simulationResult) {
   return {
     next24h: {
       comfortBlocks: (simulationResult.hourlyComfort ?? []).slice(0, 24),
-      sailChanges: (simulationResult.sailEvents ?? []).filter(
-        (e) => e.hoursFromNow <= 24,
-      ),
-      hazards: (simulationResult.hazardAlerts ?? []).filter(
-        (h) => h.hoursFromNow <= 24,
-      ),
       solarYieldKwh: simulationResult.energy?.netSolar24h ?? null,
       energyDeficitAlert:
         simulationResult.energy?.netBalance24h != null &&
@@ -793,6 +787,9 @@ export function filterExceptions(simulationResult) {
       // Whole-route sail-work queue: recommendations plus the
       // tacks/gybes the plan implies (work doc #5)
       sailChanges: simulationResult.sailEvents ?? [],
+      // Whole-route hazard alerts (work doc #18): the unified
+      // timeline slices per screen, so the summary carries them all
+      hazards: simulationResult.hazardAlerts ?? [],
       macroSeaAnomalies: (simulationResult.seaStateAnomalies ?? []).filter(
         (a) => a.steepnessRatio < 3.28,
       ),

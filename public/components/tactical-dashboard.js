@@ -1,15 +1,17 @@
 /**
  * `<tactical-dashboard>` — Screen 1: the next 24 hours (SPEC §6.3).
  *
- * Exception-driven: sail action cards render only when there are
- * changes, the energy warning only on deficit, hazard banners only
- * on proximity alerts. Data arrives via `setExceptions()` from the
- * root component; updates touch cached DOM nodes only.
+ * Exception-driven: the unified passage timeline (work doc #18)
+ * renders the 24 h slice of every event source, the energy warning
+ * only on deficit. Data arrives via `setExceptions()` plus
+ * `setPayload()` from the root component; updates touch cached DOM
+ * nodes only.
  *
  * @file components/tactical-dashboard.js
  */
 
-import { sailActionCards, splitSevere, tacticalNow } from "./models.mjs";
+import { mergeTimeline, splitSevere, tacticalNow } from "./models.mjs";
+import "./passage-timeline.js";
 import { SK_BASE_CSS } from "./sk-base-css.js";
 
 /**
@@ -52,10 +54,8 @@ class TacticalDashboard extends HTMLElement {
           <comfort-info id="cinfo"></comfort-info>
         </div>
         <horizon-sparkline id="spark"></horizon-sparkline>
-        <div id="actions"></div>
         <div id="energy"></div>
-        <div id="hazards"></div>
-        <div id="space"></div>
+        <passage-timeline id="timeline"></passage-timeline>
       </section>
       <section class="sk-card theme-red" id="blocks-card" hidden>
         <h2>Warnings On Your Waters</h2>
@@ -67,14 +67,15 @@ class TacticalDashboard extends HTMLElement {
     this._tierEl = this.shadowRoot.getElementById("tier");
     this._cinfo = this.shadowRoot.getElementById("cinfo");
     this._spark = this.shadowRoot.getElementById("spark");
-    this._actionsEl = this.shadowRoot.getElementById("actions");
     this._energyEl = this.shadowRoot.getElementById("energy");
-    this._hazardsEl = this.shadowRoot.getElementById("hazards");
-    this._spaceEl = this.shadowRoot.getElementById("space");
+    this._timeline = this.shadowRoot.getElementById("timeline");
     this._blocksCard = this.shadowRoot.getElementById("blocks-card");
     this._blocksEl = this.shadowRoot.getElementById("blocks");
     if (this._exceptions) {
       this.setExceptions(this._exceptions);
+    }
+    if (this._payload !== undefined) {
+      this.setPayload(this._payload);
     }
     if (this._bulletin !== undefined) {
       this.setBulletin(this._bulletin);
@@ -102,33 +103,6 @@ class TacticalDashboard extends HTMLElement {
 
     this._spark.setColumns(exceptions?.next24h?.comfortBlocks ?? []);
 
-    // Sail action cards — only when there are changes; maneuver
-    // events read as the sail work they demand (work doc #5)
-    const cards = sailActionCards(exceptions);
-    this._actionsEl.innerHTML = "";
-    if (cards.length > 0) {
-      const wrap = document.createElement("div");
-      wrap.className = "cards";
-      for (const c of cards) {
-        const el = document.createElement("div");
-        el.className = "card";
-        el.style.setProperty("--theme-color", "var(--color-orange)");
-        const name = document.createElement("span");
-        name.className = "value-small";
-        name.textContent = c.maneuver
-          ? `${c.maneuver === "tack" ? "Tack" : "Gybe"} to ${c.toTack ?? "?"}`
-          : c.label;
-        const when = document.createElement("span");
-        when.className = "muted";
-        when.textContent = c.maneuver
-          ? `~${c.stamp}${c.twsKnots != null ? `, ${c.twsKnots.toFixed(0)} kt` : ""}`
-          : `${c.night ? "☾ " : ""}+${c.hoursFromNow}h ${c.stamp}`;
-        el.append(name, when);
-        wrap.appendChild(el);
-      }
-      this._actionsEl.appendChild(wrap);
-    }
-
     // Energy deficit — only when true
     const deficit = exceptions?.next24h?.energyDeficitAlert === true;
     this._energyEl.innerHTML = "";
@@ -139,38 +113,42 @@ class TacticalDashboard extends HTMLElement {
       this._energyEl.appendChild(el);
     }
 
-    // Hazard banners — only when present
-    const hazards = exceptions?.next24h?.hazards ?? [];
-    this._hazardsEl.innerHTML = "";
-    for (const h of hazards) {
-      const el = document.createElement("div");
-      el.className = "banner";
-      el.textContent = `⚠ ${h.description ?? h.noteId ?? "hazard"} +${h.hoursFromNow}h`;
-      this._hazardsEl.appendChild(el);
-    }
-    if (this._spaceEvents) {
-      this.setSpaceEvents(this._spaceEvents);
-    }
+    this._renderTimeline();
   }
 
   /**
-   * Tactical space-weather banners (work doc #3): aurora-class
-   * alerts only; comet items belong to the strategic outlook.
+   * Briefing payload (work docs #3, #17): carries the space events
+   * and zone transitions the timeline merges in alongside the
+   * exception view's own sources.
    *
-   * @param {Array<{description: string}>|null} events
+   * @param {object|null} payload
    */
-  setSpaceEvents(events) {
-    this._spaceEvents = events;
-    if (!this._spaceEl) {
+  setPayload(payload) {
+    this._payload = payload;
+    if (!this._timeline) {
       return; // Not yet connected
     }
-    this._spaceEl.innerHTML = "";
-    for (const e of events ?? []) {
-      const el = document.createElement("div");
-      el.className = "banner";
-      el.textContent = `✦ ${e.description}`;
-      this._spaceEl.appendChild(el);
+    this._renderTimeline();
+  }
+
+  /**
+   * The unified timeline (work doc #18): the 24 h slice of the
+   * merged view model — sail work, maneuvers, convective risk, sea
+   * state, zones, sky and hazards in one chronological list.
+   */
+  _renderTimeline() {
+    if (!this._timeline) {
+      return;
     }
+    const items = mergeTimeline(
+      this._exceptions ?? null,
+      this._payload ?? null,
+    );
+    this._timeline.setTimeline(
+      items.filter(
+        (item) => item.hoursFromNow != null && item.hoursFromNow <= 24,
+      ),
+    );
   }
 
   /**

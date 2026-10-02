@@ -1,12 +1,13 @@
 /**
  * `<strategic-outlook>` — Screen 2: whole-passage summary (SPEC
- * §6.3). ETA percentile table, macro sea-state warnings, convective
- * warnings and the raw METAREA bulletin console.
+ * §6.3). ETA percentile table, the unified passage timeline (work
+ * doc #18) and the raw METAREA bulletin console.
  *
  * @file components/strategic-outlook.js
  */
 
-import { etaTable, sailWorkTimeline, splitSevere } from "./models.mjs";
+import { etaTable, mergeTimeline, splitSevere } from "./models.mjs";
+import "./passage-timeline.js";
 import { SK_BASE_CSS } from "./sk-base-css.js";
 
 /**
@@ -23,14 +24,6 @@ class StrategicOutlook extends HTMLElement {
         :host { display: block; }
         .sk-card { margin-bottom: 12px; }
         pre.console { margin: 0; }
-        .warn {
-          color: var(--color-orange);
-          font-family: var(--font-data, ui-monospace, monospace);
-          font-size: 0.85rem;
-          padding: 4px 0;
-        }
-        .warn.severe { color: var(--color-red); }
-        .none { color: var(--text-muted); font-size: 0.85rem; }
         strong.sev {
           color: var(--color-orange);
           text-transform: uppercase;
@@ -49,21 +42,9 @@ class StrategicOutlook extends HTMLElement {
           <div><div class="label">Fuel</div><div class="value-small" id="fuel">—</div></div>
         </div>
       </section>
-      <section class="sk-card theme-orange">
-        <h2>Macro Sea State</h2>
-        <div id="sea"><span class="none">No anomalies</span></div>
-      </section>
-      <section class="sk-card theme-red">
-        <h2>Convective Risk</h2>
-        <div id="conv"><span class="none">No warnings</span></div>
-      </section>
-      <section class="sk-card theme-orange">
-        <h2>Sail Work</h2>
-        <div id="sailwork"><span class="none">No sail changes planned</span></div>
-      </section>
-      <section class="sk-card" id="sky-card" hidden>
-        <h2>Sky Notes</h2>
-        <div id="sky"></div>
+      <section class="sk-card theme-teal">
+        <h2>Passage Timeline</h2>
+        <passage-timeline id="timeline"></passage-timeline>
       </section>
       <section class="sk-card theme-teal">
         <h2>METAREA Bulletin</h2>
@@ -78,42 +59,46 @@ class StrategicOutlook extends HTMLElement {
     this._etaBody = this.shadowRoot.getElementById("eta-body");
     this._motorEl = this.shadowRoot.getElementById("motor");
     this._fuelEl = this.shadowRoot.getElementById("fuel");
-    this._seaEl = this.shadowRoot.getElementById("sea");
-    this._convEl = this.shadowRoot.getElementById("conv");
-    this._sailWorkEl = this.shadowRoot.getElementById("sailwork");
-    this._skyCard = this.shadowRoot.getElementById("sky-card");
-    this._skyEl = this.shadowRoot.getElementById("sky");
+    this._timeline = this.shadowRoot.getElementById("timeline");
     this._bulletinEl = this.shadowRoot.getElementById("bulletin");
     if (this._exceptions) {
       this.setExceptions(this._exceptions);
     }
+    if (this._payload !== undefined) {
+      this.setPayload(this._payload);
+    }
     if (this._bulletin !== undefined) {
       this.setBulletin(this._bulletin);
-    }
-    if (this._spaceEvents !== undefined) {
-      this.setSpaceEvents(this._spaceEvents);
     }
   }
 
   /**
-   * Sky notes (work doc #3): comets and any other non-urgent space
-   * events for the passage summary. Hidden when there are none.
+   * Briefing payload (work docs #3, #17): carries the space events
+   * and zone transitions the timeline merges in alongside the
+   * exception view's own sources.
    *
-   * @param {Array<{description: string, tactical: boolean}>|null} events
+   * @param {object|null} payload
    */
-  setSpaceEvents(events) {
-    this._spaceEvents = events;
-    if (!this._skyEl) {
+  setPayload(payload) {
+    this._payload = payload;
+    if (!this._timeline) {
       return; // Not yet connected
     }
-    const list = (events ?? []).filter((e) => !e.tactical);
-    this._skyCard.hidden = list.length === 0;
-    this._skyEl.innerHTML = "";
-    for (const e of list) {
-      const el = document.createElement("div");
-      el.textContent = `✦ ${e.description}`;
-      this._skyEl.appendChild(el);
+    this._renderTimeline();
+  }
+
+  /**
+   * The unified timeline (work doc #18): the whole passage — sail
+   * work, maneuvers, convective risk, sea state, zones, sky and
+   * hazards in one chronological list.
+   */
+  _renderTimeline() {
+    if (!this._timeline) {
+      return;
     }
+    this._timeline.setTimeline(
+      mergeTimeline(this._exceptions ?? null, this._payload ?? null),
+    );
   }
 
   /**
@@ -146,74 +131,7 @@ class StrategicOutlook extends HTMLElement {
     this._motorEl.textContent = table.motorHours || "—";
     this._fuelEl.textContent = table.fuel || "—";
 
-    // Macro sea-state anomalies
-    this._seaEl.innerHTML = "";
-    const sea = exceptions?.passageSummary?.macroSeaAnomalies ?? [];
-    for (const a of sea) {
-      const el = document.createElement("div");
-      el.className = "warn";
-      el.textContent = `+${a.hoursFromNow}h steep sea (ratio ${a.steepnessRatio})`;
-      this._seaEl.appendChild(el);
-    }
-    if (sea.length === 0) {
-      const el = document.createElement("span");
-      el.className = "none";
-      el.textContent = "No anomalies";
-      this._seaEl.appendChild(el);
-    }
-
-    // Sail work: recommendations plus the planned tacks/gybes (doc
-    // #5), rendered as cards like the tactical action queue
-    this._sailWorkEl.innerHTML = "";
-    const sailWork = sailWorkTimeline(exceptions);
-    if (sailWork.length > 0) {
-      const wrap = document.createElement("div");
-      wrap.className = "cards";
-      for (const item of sailWork) {
-        const el = document.createElement("div");
-        el.className = "card";
-        if (item.label.startsWith("Tack") || item.label.startsWith("Gybe")) {
-          el.style.setProperty("--theme-color", "var(--color-orange)");
-        }
-        const name = document.createElement("span");
-        name.className = "value-small";
-        name.textContent = item.label;
-        const when = document.createElement("span");
-        when.className = "muted";
-        when.textContent = `+${item.hoursFromNow}h ${item.stamp}${item.detail ? ` · ${item.detail}` : ""}`;
-        el.append(name, when);
-        wrap.appendChild(el);
-      }
-      this._sailWorkEl.appendChild(wrap);
-    } else {
-      const el = document.createElement("span");
-      el.className = "none";
-      el.textContent = "No sail changes planned";
-      this._sailWorkEl.appendChild(el);
-    }
-
-    // Convective warnings
-    this._convEl.innerHTML = "";
-    const conv = exceptions?.passageSummary?.convectiveWarnings ?? [];
-    for (const a of conv) {
-      const el = document.createElement("div");
-      el.className = "warn severe";
-      const parts = [];
-      if (a.cape != null) {
-        parts.push(`CAPE ${a.cape}`);
-      }
-      if (a.kIndex != null) {
-        parts.push(`K ${a.kIndex}`);
-      }
-      el.textContent = `+${a.hoursFromNow}h convection (${parts.join(", ")})`;
-      this._convEl.appendChild(el);
-    }
-    if (conv.length === 0) {
-      const el = document.createElement("span");
-      el.className = "none";
-      el.textContent = "No warnings";
-      this._convEl.appendChild(el);
-    }
+    this._renderTimeline();
   }
 
   /**

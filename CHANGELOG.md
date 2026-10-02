@@ -4,6 +4,18 @@
 
 ### Added
 
+- Unified passage timeline: a new `<passage-timeline>` component and
+  `mergeTimeline()` view model render every event source — sail
+  changes, planned tacks and gybes, convective risk, macro sea state,
+  territorial waters transitions, sky events and hazard notes — as
+  one chronological list with a time gutter, kind glyph and severity
+  colour. The tactical dashboard renders the 24 h slice, the
+  strategic outlook the whole passage; the per-type blocks (Sail
+  Work, Convective Risk, Macro Sea State, Sky Notes) and the tactical
+  hazard banners are replaced by it. The exception view now carries
+  the whole-route hazard list in `passageSummary.hazards` (the 24 h
+  `next24h.sailChanges` and `next24h.hazards` slices are gone — the
+  timeline slices itself).
 - Weather source selection (`weather_source`: `auto` / `weather-api` /
   `open-meteo`, default `auto`): when the server has the Weather API
   and a provider answers — signalk-weather-router-plus serving its

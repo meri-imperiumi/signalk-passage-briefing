@@ -417,21 +417,10 @@ class PassageOutlook extends HTMLElement {
         // Both screens carry the warning blocks; the raw bulletin
         // console stays strategic-only
         target.setBulletin?.(this._briefing.payload.metareaBulletin ?? null);
+        // The unified timeline (work doc #18) merges payload-borne
+        // events (space, zone transitions) alongside the exceptions
+        target.setPayload?.(this._briefing.payload);
       }
-      this.pushSpaceEvents(target);
-    }
-  }
-
-  /**
-   * Space events (work doc #3): aurora-class alerts to whichever
-   * screen is active, comet items ride the strategic Sky Notes.
-   *
-   * @param {HTMLElement} target - Active screen element
-   */
-  pushSpaceEvents(target) {
-    const events = this._briefing?.payload?.spaceEvents ?? [];
-    if (typeof target.setSpaceEvents === "function") {
-      target.setSpaceEvents(events);
     }
   }
 

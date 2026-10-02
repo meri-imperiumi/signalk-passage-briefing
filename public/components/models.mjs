@@ -430,53 +430,183 @@ function sailEventLabel(event) {
 }
 
 /**
- * Sail action cards for the tactical dashboard, oldest first.
- * Maneuver events (work doc #5) carry `maneuver`, `toTack` and the
- * expected TWS so the cards can read "Tack to starboard ~14:20, 12 kt".
+ * Hours from the payload's fetch time to an event timestamp, rounded
+ * to a tenth. Null when either side is missing or unparsable — the
+ * item then sorts undated, last.
  *
- * @param {object|null} exceptions
- * @returns {Array<{hoursFromNow: number, stamp: string, label: string, night: boolean, maneuver: string|null, toTack: string|null, twsKnots: number|null}>}
+ * @param {string|null|undefined} timestamp
+ * @param {number|null} fetchMs - Epoch ms of the payload fetch
+ * @returns {number|null}
  */
-export function sailActionCards(exceptions) {
-  return (exceptions?.next24h?.sailChanges ?? []).map((e) => ({
-    hoursFromNow: e.hoursFromNow,
-    stamp: fmtUtc(e.timestamp),
-    label: sailEventLabel(e) || "?",
-    night: Boolean(e.night),
-    maneuver: e.maneuver ?? null,
-    toTack: e.toTack ?? null,
-    twsKnots: e.twsAtManeuver ?? null,
-  }));
+function relHours(timestamp, fetchMs) {
+  if (fetchMs == null || timestamp == null) {
+    return null;
+  }
+  const ms = new Date(timestamp).getTime();
+  return Number.isNaN(ms) ? null : Math.round((ms - fetchMs) / 360000) / 10;
 }
 
 /**
- * Whole-route sail-work timeline for the strategic outlook (work doc
- * #5): recommendation-driven changes plus tacks/gybes, oldest first.
+ * Unified passage timeline (work doc #18): every event source mapped
+ * to one chronological shape — `{hoursFromNow, timestamp, stamp,
+ * kind, severity, label, detail}` — sorted by time, undated last.
+ * Kinds: `sail`, `maneuver`, `convective`, `sea`, `zone`, `space`,
+ * `hazard`; new event sources become new kinds instead of new blocks
+ * (work doc #1's lines of interest will ride in as `line`).
+ * Severities: `info`, `warn`, `severe` — the renderer's colour
+ * scale. The tactical dashboard renders the 24 h slice of this list,
+ * the strategic outlook the whole passage.
  *
- * @param {object|null} exceptions
- * @returns {Array<{hoursFromNow: number, stamp: string, label: string, detail: string}>}
+ * Sail changes and planned tacks/gybes come from the whole-passage
+ * summary: the 24 h view is a slice of the same simulation list, so
+ * merging both views would duplicate every early entry. Space events
+ * and zone transitions ride the briefing payload; their
+ * `hoursFromNow` is derived from the timestamp against the payload's
+ * fetch time (aurora peaks carry a real forecast time; comet notes
+ * are current-sky items and sort first).
+ *
+ * @param {object|null} exceptions - Worker exception view
+ * @param {object|null} payload - Briefing payload
+ *   (UnifiedWeatherPayload; optional `spaceEvents`,
+ *   `zoneTransitions`)
+ * @returns {Array<{hoursFromNow: number|null, timestamp: string|null, stamp: string, kind: string, severity: string, label: string, detail: string, night: boolean}>}
  */
-export function sailWorkTimeline(exceptions) {
-  return (exceptions?.passageSummary?.sailChanges ?? []).map((e) => {
+export function mergeTimeline(exceptions, payload = null) {
+  const summary = exceptions?.passageSummary ?? {};
+  const fetchMs = payload?.metadata?.fetchedAt
+    ? new Date(payload.metadata.fetchedAt).getTime()
+    : null;
+  const items = [];
+  const push = (item) => {
+    items.push({
+      hoursFromNow: null,
+      timestamp: null,
+      label: "?",
+      detail: "",
+      night: false,
+      ...item,
+      stamp: fmtUtc(item.timestamp),
+    });
+  };
+
+  // Sail work (work doc #5): recommendation-driven changes plus the
+  // tacks/gybes the plan implies; maneuvers read as the sail work
+  // they demand
+  for (const e of summary.sailChanges ?? []) {
+    const maneuver = e.maneuver === "tack" || e.maneuver === "gybe";
     const state = String(e.sailState ?? "?");
     const [, tack] = state.split("@");
-    const label = e.maneuver
-      ? `${e.maneuver === "tack" ? "Tack" : "Gybe"} to ${e.toTack ?? tack ?? "?"}`
-      : sailEventLabel(e) || state;
-    const detail = [
-      e.distanceFromStartNm != null
-        ? `${Math.round(e.distanceFromStartNm)} nm`
-        : null,
-      e.twsAtManeuver != null ? fmtKn(e.twsAtManeuver) : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    return {
-      hoursFromNow: e.hoursFromNow,
-      stamp: fmtUtc(e.timestamp),
-      label,
-      detail,
-    };
+    push({
+      hoursFromNow: e.hoursFromNow ?? null,
+      timestamp: e.timestamp ?? null,
+      kind: maneuver ? "maneuver" : "sail",
+      severity: maneuver ? "warn" : "info",
+      label: maneuver
+        ? `${e.maneuver === "tack" ? "Tack" : "Gybe"} to ${e.toTack ?? tack ?? "?"}`
+        : sailEventLabel(e) || state,
+      detail: [
+        e.distanceFromStartNm != null
+          ? `${Math.round(e.distanceFromStartNm)} nm`
+          : null,
+        e.twsAtManeuver != null ? fmtKn(e.twsAtManeuver) : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      night: Boolean(e.night),
+    });
+  }
+
+  // Macro sea-state anomalies (steepness below the breaking ratio)
+  for (const a of summary.macroSeaAnomalies ?? []) {
+    push({
+      hoursFromNow: a.hoursFromNow ?? null,
+      timestamp: a.timestamp ?? null,
+      kind: "sea",
+      severity: "warn",
+      label: "Steep sea",
+      detail: [
+        a.steepnessRatio != null ? `ratio ${a.steepnessRatio}` : null,
+        a.hsMeters != null ? `Hs ${a.hsMeters.toFixed(1)} m` : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    });
+  }
+
+  // Convective warnings (CAPE / K-index thresholds)
+  for (const c of summary.convectiveWarnings ?? []) {
+    const parts = [];
+    if (c.cape != null) {
+      parts.push(`CAPE ${c.cape}`);
+    }
+    if (c.kIndex != null) {
+      parts.push(`K ${c.kIndex}`);
+    }
+    push({
+      hoursFromNow: c.hoursFromNow ?? null,
+      timestamp: c.timestamp ?? null,
+      kind: "convective",
+      severity: "severe",
+      label: "Convection risk",
+      detail: parts.join(" · "),
+    });
+  }
+
+  // Hazard notes along the track (whole passage; the tactical slice
+  // picks up its share by hoursFromNow)
+  for (const h of summary.hazards ?? []) {
+    push({
+      hoursFromNow: h.hoursFromNow ?? null,
+      timestamp: h.timestamp ?? null,
+      kind: "hazard",
+      severity: "severe",
+      label: h.description ?? h.noteId ?? "Hazard note",
+      detail:
+        h.distanceNm != null && h.distanceNm > 0
+          ? `${h.distanceNm} nm off`
+          : "",
+    });
+  }
+
+  // Space events (work doc #3): aurora-class alerts are tactical,
+  // comet notes are strategic sky items
+  for (const e of payload?.spaceEvents ?? []) {
+    push({
+      hoursFromNow: relHours(e.timestamp, fetchMs),
+      timestamp: e.timestamp ?? null,
+      kind: "space",
+      severity: e.tactical ? "warn" : "info",
+      label: e.description ?? e.kind ?? "Sky event",
+    });
+  }
+
+  // Territorial waters transitions (work doc #17): the source object
+  // carries `enter`/`leave` in its own `kind`; the timeline kind is
+  // always `zone`
+  for (const z of payload?.zoneTransitions ?? []) {
+    const territory = z.territory?.name ?? "?";
+    push({
+      hoursFromNow: z.hoursFromNow ?? relHours(z.timestamp, fetchMs),
+      timestamp: z.timestamp ?? null,
+      kind: "zone",
+      severity: "info",
+      label: `${z.kind === "leave" ? "Leaving" : "Entering"} ${territory} territorial waters`,
+      detail:
+        z.distanceFromStartNm != null
+          ? `${Math.round(z.distanceFromStartNm)} nm`
+          : "",
+    });
+  }
+
+  return items.sort((a, b) => {
+    if (a.hoursFromNow == null || b.hoursFromNow == null) {
+      return a.hoursFromNow == null && b.hoursFromNow == null
+        ? 0
+        : a.hoursFromNow == null
+          ? 1
+          : -1;
+    }
+    return a.hoursFromNow - b.hoursFromNow;
   });
 }
 

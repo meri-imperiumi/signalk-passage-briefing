@@ -385,7 +385,7 @@ describe("simulatePassage", () => {
 
     const exceptions = filterExceptions(result);
     assert.ok(exceptions.next24h.comfortBlocks.length <= 24);
-    assert.ok(exceptions.next24h.sailChanges.length >= 1);
+    assert.ok(exceptions.passageSummary.sailChanges.length >= 1);
     assert.equal(exceptions.next24h.solarYieldKwh, 12);
     assert.equal(exceptions.next24h.energyDeficitAlert, true);
     assert.equal(exceptions.passageSummary.etaP50, result.eta.p50);
@@ -395,6 +395,7 @@ describe("simulatePassage", () => {
     );
     assert.ok(exceptions.passageSummary.macroSeaAnomalies.length === 0);
     assert.ok(exceptions.passageSummary.convectiveWarnings.length === 0);
+    assert.ok(Array.isArray(exceptions.passageSummary.hazards));
   });
 
   test("convective warnings surface in the passage summary", async () => {

@@ -17,14 +17,13 @@ test("webapp view models", async (t) => {
     fmtHours,
     fmtKn,
     fmtUtc,
-    sailActionCards,
+    mergeTimeline,
     sailStateLabel,
     sparklineColumns,
     splitSevere,
     tacticalNow,
     hereHourly,
     hereNow,
-    sailWorkTimeline,
   } = await import("../public/components/models.mjs");
 
   await t.test("fmtUtc renders MM-DD HH:MMZ in UTC", () => {
@@ -131,57 +130,6 @@ test("webapp view models", async (t) => {
     assert.equal(sailStateLabel(null), "");
   });
 
-  await t.test("sailActionCards format stamps and night flags", () => {
-    const cards = sailActionCards({
-      next24h: {
-        sailChanges: [
-          {
-            hoursFromNow: 6,
-            timestamp: "2026-06-21T12:00:00Z",
-            sailState: "GENOA_1_MAIN",
-            night: false,
-          },
-          {
-            hoursFromNow: 18,
-            timestamp: "2026-06-22T00:00:00Z",
-            sailState: "STAYSAIL_MAIN_1_REEF",
-            night: true,
-          },
-        ],
-      },
-    });
-    assert.equal(cards[0].stamp, "06-21 12:00Z");
-    assert.equal(cards[1].night, true);
-    assert.equal(cards[0].label, "Genoa 1 + Main");
-    assert.equal(cards[1].label, "Staysail + Main 1 reef");
-    assert.deepEqual(sailActionCards(null), []);
-  });
-
-  await t.test("sail action cards say drifting or motoring", () => {
-    const cards = sailActionCards({
-      next24h: {
-        sailChanges: [
-          {
-            hoursFromNow: 3,
-            timestamp: "2026-06-21T09:00:00Z",
-            sailState: "NO_SAILS",
-            propulsion: "adrift",
-            night: false,
-          },
-          {
-            hoursFromNow: 6,
-            timestamp: "2026-06-21T12:00:00Z",
-            sailState: "NO_SAILS",
-            propulsion: "motor",
-            night: false,
-          },
-        ],
-      },
-    });
-    assert.equal(cards[0].label, "No sails - drifting");
-    assert.equal(cards[1].label, "Motoring");
-  });
-
   await t.test("splitSevere tokenizes severe keywords", () => {
     const tokens = splitSevere(
       "EXPECT WINDS 35 KNOTS. Rough seas with heavy GALE warnings.",
@@ -280,59 +228,174 @@ test("webapp view models", async (t) => {
     assert.equal(etaTable(null).motorHours, "");
   });
 
-  await t.test(
-    "sailWorkTimeline labels maneuvers and humanizes changes",
-    () => {
-      const timeline = sailWorkTimeline({
-        passageSummary: {
-          sailChanges: [
-            {
-              hoursFromNow: 2,
-              timestamp: "2026-06-21T08:00:00.000Z",
-              sailState: "MAIN_1_REEF",
-            },
-            {
-              hoursFromNow: 4,
-              timestamp: "2026-06-21T10:00:00.000Z",
-              sailState: "MAIN_FULL@port",
-              maneuver: "tack",
-              toTack: "port",
-              distanceFromStartNm: 32.4,
-              twsAtManeuver: 12.2,
-            },
-          ],
-        },
-      });
-      assert.equal(timeline.length, 2);
-      assert.equal(timeline[0].label, "Main 1 reef");
-      assert.equal(timeline[0].detail, "");
-      assert.equal(timeline[1].label, "Tack to port");
-      assert.equal(timeline[1].detail, "32 nm · 12.2 kn");
-      assert.equal(timeline[1].stamp, "06-21 10:00Z");
-      assert.deepEqual(sailWorkTimeline(null), []);
-    },
-  );
-
-  await t.test("sailWorkTimeline says drifting or motoring", () => {
-    const timeline = sailWorkTimeline({
+  await t.test("mergeTimeline maps sail work and maneuvers (doc #18)", () => {
+    const timeline = mergeTimeline({
       passageSummary: {
         sailChanges: [
+          {
+            hoursFromNow: 2,
+            timestamp: "2026-06-21T08:00:00.000Z",
+            sailState: "MAIN_1_REEF",
+          },
+          {
+            hoursFromNow: 4,
+            timestamp: "2026-06-21T10:00:00.000Z",
+            sailState: "MAIN_FULL@port",
+            maneuver: "tack",
+            toTack: "port",
+            distanceFromStartNm: 32.4,
+            twsAtManeuver: 12.2,
+          },
           {
             hoursFromNow: 5,
             timestamp: "2026-06-21T14:00:00.000Z",
             sailState: "NO_SAILS",
             propulsion: "adrift",
           },
+        ],
+      },
+    });
+    assert.equal(timeline.length, 3);
+    assert.equal(timeline[0].kind, "sail");
+    assert.equal(timeline[0].severity, "info");
+    assert.equal(timeline[0].label, "Main 1 reef");
+    assert.equal(timeline[0].stamp, "06-21 08:00Z");
+    assert.equal(timeline[1].kind, "maneuver");
+    assert.equal(timeline[1].severity, "warn");
+    assert.equal(timeline[1].label, "Tack to port");
+    assert.equal(timeline[1].detail, "32 nm · 12.2 kn");
+    assert.equal(timeline[2].label, "No sails - drifting");
+    assert.deepEqual(mergeTimeline(null, null), []);
+  });
+
+  await t.test("mergeTimeline maps sea, convective and hazard sources", () => {
+    const timeline = mergeTimeline({
+      passageSummary: {
+        sailChanges: [],
+        macroSeaAnomalies: [
+          {
+            hoursFromNow: 7,
+            timestamp: "2026-06-21T13:00:00.000Z",
+            steepnessRatio: 2.4,
+            hsMeters: 1.5,
+            tpSeconds: 8,
+          },
+        ],
+        convectiveWarnings: [
           {
             hoursFromNow: 8,
-            timestamp: "2026-06-21T17:00:00.000Z",
-            sailState: "MAIN_1_REEF",
-            propulsion: "sailing",
+            timestamp: "2026-06-21T14:00:00.000Z",
+            cape: 1800,
+            kIndex: 30,
+          },
+        ],
+        hazards: [
+          {
+            hoursFromNow: 3,
+            timestamp: "2026-06-21T09:00:00.000Z",
+            noteId: "rock",
+            description: "Shoal water",
+            distanceNm: 2.4,
+          },
+          {
+            hoursFromNow: 6,
+            timestamp: "2026-06-21T12:00:00.000Z",
+            noteId: "restricted-area",
+            description: null,
           },
         ],
       },
     });
-    assert.equal(timeline[0].label, "No sails - drifting");
-    assert.equal(timeline[1].label, "Main 1 reef");
+    assert.deepEqual(
+      timeline.map((item) => [item.kind, item.label]),
+      [
+        ["hazard", "Shoal water"],
+        ["hazard", "restricted-area"],
+        ["sea", "Steep sea"],
+        ["convective", "Convection risk"],
+      ],
+    );
+    assert.equal(timeline[0].severity, "severe");
+    assert.equal(timeline[0].detail, "2.4 nm off");
+    assert.equal(timeline[2].severity, "warn");
+    assert.equal(timeline[2].detail, "ratio 2.4 · Hs 1.5 m");
+    assert.equal(timeline[3].severity, "severe");
+    assert.equal(timeline[3].detail, "CAPE 1800 · K 30");
+  });
+
+  await t.test("mergeTimeline merges payload space and zone events", () => {
+    const timeline = mergeTimeline(
+      {
+        passageSummary: {
+          sailChanges: [
+            {
+              hoursFromNow: 10,
+              timestamp: "2026-06-21T16:00:00.000Z",
+              sailState: "MAIN_1_REEF",
+            },
+          ],
+        },
+      },
+      {
+        metadata: { fetchedAt: "2026-06-21T06:00:00.000Z" },
+        spaceEvents: [
+          {
+            kind: "aurora",
+            timestamp: "2026-06-21T21:00:00.000Z",
+            tactical: true,
+            description: "Aurora possible: Kp 6 predicted tonight. Look north.",
+          },
+          {
+            kind: "comet",
+            timestamp: "2026-06-21T06:00:00.000Z",
+            tactical: false,
+            description: "Naked-eye comet X (mag 5.2) in range",
+          },
+        ],
+        zoneTransitions: [
+          {
+            kind: "leave",
+            hoursFromNow: 30,
+            timestamp: "2026-06-22T12:00:00.000Z",
+            distanceFromStartNm: 180.2,
+            territory: { name: "Finland", iso_ter: "FI" },
+          },
+        ],
+      },
+    );
+    assert.deepEqual(
+      timeline.map((item) => [item.kind, item.hoursFromNow, item.severity]),
+      [
+        ["space", 0, "info"],
+        ["sail", 10, "info"],
+        ["space", 15, "warn"],
+        ["zone", 30, "info"],
+      ],
+    );
+    assert.equal(timeline[0].label, "Naked-eye comet X (mag 5.2) in range");
+    assert.equal(
+      timeline[2].label,
+      "Aurora possible: Kp 6 predicted tonight. Look north.",
+    );
+    assert.equal(timeline[3].label, "Leaving Finland territorial waters");
+    assert.equal(timeline[3].detail, "180 nm");
+  });
+
+  await t.test("mergeTimeline sorts undated space events last", () => {
+    const timeline = mergeTimeline(null, {
+      metadata: { fetchedAt: "2026-06-21T06:00:00.000Z" },
+      spaceEvents: [
+        { timestamp: null, tactical: false, description: "undated" },
+        {
+          timestamp: "2026-06-21T12:00:00.000Z",
+          tactical: false,
+          description: "dated",
+        },
+      ],
+    });
+    assert.equal(timeline[0].label, "dated");
+    assert.equal(timeline[0].hoursFromNow, 6);
+    assert.equal(timeline[1].label, "undated");
+    assert.equal(timeline[1].hoursFromNow, null);
   });
 });
