@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Bulletin geography now resolves named synoptic features in area
+  bounds: `SOUTH OF 09S AND WEST OF CF` and `SOUTH OF 10S, BETWEEN
+  150W AND CF` compose a polygon from the cold front's defining
+  chain (clipped to the stated latitude bounds, closed across the
+  antimeridian with a margin so western-Pacific vessels stay in
+  west-of-front areas) instead of falling back to a hemisphere-wide
+  box that matched every vessel south of the bound.
+
+- Coordinate chains accept the Fiji/NFFN bulletin conventions the
+  strict parser dropped: the dateline written as bare `180` (`TROUGH
+  T3 12S 175E 14S 180 15S 177W`) and the equator written as `EQT`
+  (`EQT 177E`). Prose numbers (`280600 UTC`, `20 TO 30 KNOTS`) are
+  still rejected, and a rejected span no longer swallows a following
+  coordinate pair.
+
 ## [0.3.0] - 2026-09-28
 
 ### Added

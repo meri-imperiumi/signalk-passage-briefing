@@ -167,6 +167,41 @@ function hemisphereDegrees(value, hemisphere) {
 }
 
 /**
+ * Extracts every coordinate pair from a block as lon/lat points,
+ * without the ring bookkeeping. Hemisphere letters are optional to
+ * accept the bulletin shorthand the strict form misses: the dateline
+ * written as a bare `180` (`14S 180`, east by convention) and the
+ * equator written as `EQT` (`EQT 177E`). Pairs where both letters
+ * are missing are prose numbers ("280600 UTC", "20 TO 30 KNOTS")
+ * and rejected.
+ *
+ * @param {string} text
+ * @returns {number[][]} [[lon, lat], …] (possibly empty)
+ */
+function parseCoordinatePoints(text) {
+  const pair = /(\d+(?:\.\d+)?|EQT)\s*([NS])?[,\s]+(\d+(?:\.\d+)?)\s*([EW])?/gi;
+  const points = [];
+  let match;
+  while ((match = pair.exec(text)) !== null) {
+    const equator = match[1].toUpperCase() === "EQT";
+    const latHemi = match[2]?.toUpperCase();
+    const lonHemi = match[4]?.toUpperCase();
+    if (!equator && !latHemi && !lonHemi) {
+      // Prose numbers, not coordinates — resume inside the rejected
+      // span so it cannot swallow a following real coordinate pair
+      pair.lastIndex = match.index + 1;
+      continue;
+    }
+    const lat = equator ? 0 : hemisphereDegrees(match[1], latHemi ?? "N");
+    const lon = hemisphereDegrees(match[3], lonHemi ?? "E");
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+      points.push([lon, lat]);
+    }
+  }
+  return points;
+}
+
+/**
  * Parses coordinate chains like `16S 170E 20S 178W` into a GeoJSON
  * ring (lon/lat pairs, unclosed input closed automatically).
  *
@@ -174,16 +209,7 @@ function hemisphereDegrees(value, hemisphere) {
  * @returns {number[][]|null} [[lon, lat], …] closed, or null
  */
 function parseCoordinateChain(text) {
-  const pair = /(\d+(?:\.\d+)?)\s*([NS])[,\s]+(\d+(?:\.\d+)?)\s*([EW])/gi;
-  const ring = [];
-  let match;
-  while ((match = pair.exec(text)) !== null) {
-    const lat = hemisphereDegrees(match[1], match[2].toUpperCase());
-    const lon = hemisphereDegrees(match[3], match[4].toUpperCase());
-    if (Number.isFinite(lat) && Number.isFinite(lon)) {
-      ring.push([lon, lat]);
-    }
-  }
+  const ring = parseCoordinatePoints(text);
   if (ring.length < 2) {
     return null;
   }
@@ -284,6 +310,206 @@ function parseCardinalBounds(text) {
 }
 
 /**
+ * Synoptic feature declarations the named-bound resolution
+ * recognizes: `TROUGH T1`, `COLD FRONT CF`, `LOW PRESSURE L`, … The
+ * name must carry a digit or be one of the conventional CF, L, H so
+ * prose ("TROUGH AXIS") is not mistaken for a name.
+ */
+const FEATURE_DECLARATION =
+  /^(?:TROUGH|COLD FRONT|WARM FRONT|SHEAR LINE|RIDGE|LOW(?:\s+PRESSURE)?|HIGH)\s+([A-Z]\d+|CF|L|H)\b/i;
+
+/** Name-shaped token referenced by cardinal bounds. */
+const FEATURE_NAME = "(CF|L|H|[A-Z]\\d+)";
+
+/**
+ * Collects named synoptic features from a full bulletin: blocks that
+ * declare a feature and carry its defining coordinate chain —
+ * `COLD FRONT CF 16S 150W 20S 140W 25S 132W` — mapped name →
+ * chain. Later blocks reference these by name in their bounds
+ * ("WEST OF CF", "BETWEEN 150W AND CF").
+ *
+ * @param {string} text - Cleaned bulletin text
+ * @returns {Map<string, number[][]>} name → [[lon, lat], …]
+ */
+function collectFeatures(text) {
+  const features = new Map();
+  for (const block of segmentBlocks(text)) {
+    const match = block.trim().match(FEATURE_DECLARATION);
+    if (!match || features.has(match[1].toUpperCase())) {
+      continue;
+    }
+    const points = parseCoordinatePoints(block);
+    if (points.length > 0) {
+      features.set(match[1].toUpperCase(), points);
+    }
+  }
+  return features;
+}
+
+/**
+ * Clips a polyline to a latitude band, interpolating where segments
+ * cross the band edges, so composed feature polygons never extend
+ * past the block's stated latitude bounds. A chain entirely outside
+ * the band is kept unchanged (its ends still anchor the caps).
+ *
+ * @param {number[][]} pts - [[lon, lat], …]
+ * @param {number} minLat
+ * @param {number} maxLat
+ * @returns {number[][]} Clipped chain
+ */
+function clipChainToLatBand(pts, minLat, maxLat) {
+  if (pts.length === 0) {
+    return pts;
+  }
+  const inside = (lat) => lat <= maxLat && lat >= minLat;
+  const out = [];
+  if (inside(pts[0][1])) {
+    out.push(pts[0]);
+  }
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    if (inside(a[1]) !== inside(b[1])) {
+      const bound = inside(b[1])
+        ? a[1] > maxLat
+          ? maxLat
+          : minLat
+        : b[1] > maxLat
+          ? maxLat
+          : minLat;
+      const t = (bound - a[1]) / (b[1] - a[1]);
+      out.push([a[0] + (b[0] - a[0]) * t, bound]);
+    }
+    if (inside(b[1])) {
+      out.push(b);
+    }
+  }
+  return out.length > 0 ? out : pts;
+}
+
+/**
+ * Builds the polygon for bounds that reference a named feature
+ * instead of a longitude — `SOUTH OF 09S AND WEST OF CF`, `SOUTH OF
+ * 10S, BETWEEN 150W AND CF`. The feature's chain forms the slanted
+ * edge, clipped to the block's latitude bounds; the open side closes
+ * on the BETWEEN meridian when one is given, otherwise on the
+ * antimeridian extended a margin past the seam so areas west of a
+ * front still match vessels in the western Pacific. The front's
+ * trend south of its last point is approximated by its end meridian.
+ *
+ * @param {string} text - Block text
+ * @param {Map<string, number[][]>} features - `collectFeatures` map
+ * @returns {{type: "polygon", coordinates: number[][]}|null} Closed
+ *   ring, or null when no known feature is referenced (caller falls
+ *   back to the numeric bbox path)
+ */
+function composeFeatureBounds(text, features) {
+  const southOf = text.match(/SOUTH OF\s+(\d+(?:\.\d+)?)\s*([NS])/i);
+  const northOf = text.match(/NORTH OF\s+(\d+(?:\.\d+)?)\s*([NS])/i);
+  if (!southOf && !northOf) {
+    return null; // Feature refs come as area phrases with a lat bound
+  }
+  const maxLat = southOf
+    ? hemisphereDegrees(southOf[1], southOf[2].toUpperCase())
+    : 90;
+  const minLat = northOf
+    ? hemisphereDegrees(northOf[1], northOf[2].toUpperCase())
+    : -90;
+
+  // Which side of which feature: WEST OF/EAST OF name, or BETWEEN a
+  // meridian and a name (the name is then the opposite bound).
+  const westOf = text.match(new RegExp(`WEST OF\\s+${FEATURE_NAME}\\b`, "i"));
+  const eastOf = text.match(new RegExp(`EAST OF\\s+${FEATURE_NAME}\\b`, "i"));
+  const betweenMeridianName = text.match(
+    new RegExp(
+      `BETWEEN\\s+\\d+(?:\\.\\d+)?\\s*[EW]\\s+AND\\s+${FEATURE_NAME}\\b`,
+      "i",
+    ),
+  );
+  const betweenNameMeridian = text.match(
+    new RegExp(
+      `BETWEEN\\s+${FEATURE_NAME}\\s+AND\\s+\\d+(?:\\.\\d+)?\\s*[EW]`,
+      "i",
+    ),
+  );
+  const meridianMatch = text.match(/BETWEEN\s+(\d+(?:\.\d+)?)\s*([EW])/i);
+
+  let feature = null;
+  let side = null; // Region lies on this side of the feature
+  let meridian = null; // Explicit meridian closing the open side
+  if (westOf && features.has(westOf[1].toUpperCase())) {
+    feature = features.get(westOf[1].toUpperCase());
+    side = "west";
+  } else if (eastOf && features.has(eastOf[1].toUpperCase())) {
+    feature = features.get(eastOf[1].toUpperCase());
+    side = "east";
+  } else if (
+    betweenMeridianName &&
+    features.has(betweenMeridianName[1].toUpperCase())
+  ) {
+    feature = features.get(betweenMeridianName[1].toUpperCase());
+    side = "west";
+    meridian = hemisphereDegrees(
+      meridianMatch[1],
+      meridianMatch[2].toUpperCase(),
+    );
+  } else if (
+    betweenNameMeridian &&
+    features.has(betweenNameMeridian[1].toUpperCase())
+  ) {
+    feature = features.get(betweenNameMeridian[1].toUpperCase());
+    side = "east";
+    meridian = hemisphereDegrees(
+      meridianMatch[1],
+      meridianMatch[2].toUpperCase(),
+    );
+  }
+  if (!feature) {
+    return null; // Unknown name: fall back to the numeric bbox path
+  }
+
+  // Unwrap the chain into a contiguous frame and orient it
+  // north-end-first so the caps attach to the right ends
+  const lons = [feature[0][0]];
+  for (let i = 1; i < feature.length; i++) {
+    lons.push(unwrapLon(feature[i][0], lons[i - 1]));
+  }
+  let pts = feature.map(([, lat], i) => [lons[i], lat]);
+  if (pts.length > 1 && pts[0][1] < pts[pts.length - 1][1]) {
+    pts = [...pts].reverse();
+  }
+  pts = clipChainToLatBand(pts, minLat, maxLat);
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+  const center = (Math.min(...lons) + Math.max(...lons)) / 2;
+  let openLon;
+  if (meridian != null) {
+    openLon = unwrapLon(meridian, center);
+  } else if (side === "west") {
+    // West of the front reaches across the seam: the antimeridian
+    // plus a margin so 170E–180E vessels stay inside the area
+    openLon = unwrapLon(-180, center) - 60;
+  } else {
+    openLon = unwrapLon(180, center) + 60;
+  }
+
+  const ring = [
+    [first[0], maxLat],
+    ...pts,
+    [last[0], minLat],
+    [openLon, minLat],
+    [openLon, maxLat],
+  ];
+  if (
+    ring[0][0] !== ring[ring.length - 1][0] ||
+    ring[0][1] !== ring[ring.length - 1][1]
+  ) {
+    ring.push([...ring[0]]);
+  }
+  return { type: "polygon", coordinates: ring };
+}
+
+/**
  * Extracts the geographic geometry of a block: coordinate chain
  * first (polygon), cardinal bounds second (bbox). Front/trough
  * "axis" chains are lines, with the warning living in a band around
@@ -291,11 +517,16 @@ function parseCardinalBounds(text) {
  * distance the geometry carries `bufferNm` so the intersection test
  * expands to the band instead of the bare line.
  *
+ * Bounds referencing a named feature collected by `collectFeatures`
+ * ("WEST OF CF") resolve to a composed polygon; with no such feature
+ * known they fall back to the numeric bbox path.
+ *
  * @param {string} blockText
+ * @param {Map<string, number[][]>} [features] - `collectFeatures` map
  * @returns {{type: "polygon", coordinates: number[][], bufferNm?: number}|
  *   {type: "bbox", coordinates: number[]}|null}
  */
-function extractGeometry(blockText) {
+function extractGeometry(blockText, features = new Map()) {
   const bandMatch = blockText.match(
     /WITHIN\s+(\d+(?:\.\d+)?)\s*(?:NM|NAUTICAL\s+MILES?)\b/i,
   );
@@ -309,6 +540,10 @@ function extractGeometry(blockText) {
       coordinates: polygon,
       ...(bufferNm != null ? { bufferNm } : {}),
     };
+  }
+  const featurePolygon = composeFeatureBounds(blockText, features);
+  if (featurePolygon) {
+    return featurePolygon;
   }
   const bbox = parseCardinalBounds(blockText);
   if (bbox) {
@@ -532,10 +767,11 @@ function filterBulletin({
     return null;
   }
   const cleaned = stripBoilerplate(rawText);
+  const features = collectFeatures(cleaned);
   const header = cleaned.split(/\r?\n/, 1)[0]?.trim() ?? "";
   const blocks = segmentBlocks(cleaned)
     .map((blockText) => {
-      const geometry = extractGeometry(blockText);
+      const geometry = extractGeometry(blockText, features);
       if (!intersectsTrack(geometry, track)) {
         return null; // Discard rule: not on our waters
       }
@@ -732,8 +968,11 @@ module.exports = {
   segmentBlocks,
   ukhoBlocksFromWarnings,
   hemisphereDegrees,
+  parseCoordinatePoints,
   parseCoordinateChain,
   parseCardinalBounds,
+  collectFeatures,
+  composeFeatureBounds,
   extractGeometry,
   unwrapLon,
   ringContains,

@@ -14,10 +14,13 @@ const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 
 const {
+  collectFeatures,
+  extractGeometry,
   filterBulletin,
   navtexSubject,
   parseCardinalBounds,
   parseCoordinateChain,
+  parseCoordinatePoints,
   segmentBlocks,
   shouldRetainSubject,
   stripBoilerplate,
@@ -126,6 +129,118 @@ test("two coordinate pairs form an open axis line", () => {
   assert.equal(parseCoordinateChain("10S 160E"), null); // single pair
 });
 
+test("coordinate pairs accept Fiji/NFFN bulletin conventions: bare 180 and EQT", () => {
+  // The dateline takes no hemisphere letter; the equator is EQT
+  const chain = parseCoordinatePoints(
+    "TROUGH T3 12S 175E 14S 180 15S 177W SLOW MOVING",
+  );
+  assert.equal(chain.length, 3);
+  approx(chain[1][0], 180); // bare 180 is east by convention
+  approx(chain[1][1], -14);
+  const eqt = parseCoordinatePoints("TROUGH T2 12S 172E TO L TO EQT 177E");
+  assert.equal(eqt.length, 2);
+  approx(eqt[1][0], 177);
+  approx(eqt[1][1], 0); // EQT is the equator
+});
+
+test("coordinate pairs reject prose numbers", () => {
+  assert.deepEqual(parseCoordinatePoints("AT 280600 UTC. L SLOW MOVING."), []);
+  assert.deepEqual(
+    parseCoordinatePoints("EXPECT SOUTHEAST WINDS 20 TO 30 KNOTS."),
+    [],
+  );
+  // A rejected prose span must not swallow a real pair after it
+  const chain = parseCoordinatePoints("TROUGH T1 09S 160E 11S 163E");
+  assert.equal(chain.length, 2);
+  approx(chain[0][0], 160);
+  approx(chain[0][1], -9);
+});
+
+test("named features are collected from their declaring blocks", () => {
+  const text = [
+    "TROUGH T1 09S 160E 11S 163E SLOW MOVING.",
+    "",
+    "COLD FRONT CF 16S 150W 20S 140W 25S 132W SLOW MOVING.",
+    "",
+    " LOW PRESSURE L CENTER [1009 HPA] WAS ANALYSED NEAR 05.0S 171.0E AT",
+    "280600 UTC.",
+  ].join("\n");
+  const features = collectFeatures(text);
+  assert.deepEqual(features.get("T1"), [
+    [160, -9],
+    [163, -11],
+  ]);
+  assert.deepEqual(features.get("CF"), [
+    [-150, -16],
+    [-140, -20],
+    [-132, -25],
+  ]);
+  assert.deepEqual(features.get("L"), [[171, -5]]);
+  assert.equal(features.get("T2"), undefined);
+});
+
+test("WEST OF a named front composes a seam-crossing polygon", () => {
+  const features = collectFeatures(
+    "COLD FRONT CF 16S 150W 20S 140W 25S 132W SLOW MOVING.",
+  );
+  const geometry = extractGeometry(
+    "IN THE AREA SOUTH OF 09S AND WEST OF CF, EXPECT SOUTHEAST WINDS.",
+    features,
+  );
+  assert.equal(geometry.type, "polygon");
+  const ring = geometry.coordinates;
+  // Closed ring: front chain plus latitude caps and the open side
+  assert.deepEqual(ring[0], ring[ring.length - 1]);
+  // The front itself is the eastern edge
+  assert.ok(
+    ring.some(([lon, lat]) => lon === -150 && lat === -16),
+    "front chain included",
+  );
+  assert.ok(
+    ring.some(([lon, lat]) => lon === -132 && lat === -25),
+    "front end included",
+  );
+  // Caps at the stated latitude bounds
+  assert.ok(ring.some(([, lat]) => lat === -9));
+  assert.ok(ring.some(([, lat]) => lat === -90));
+  // A Fiji vessel (178E) is west of the front: inside the ring
+  assert.equal(ringContains(ring, 178, -17), true);
+  // East of the front at the front's own latitude: outside
+  assert.equal(ringContains(ring, -135, -23), false);
+});
+
+test("BETWEEN a meridian and a named front composes the wedge", () => {
+  const features = collectFeatures(
+    "COLD FRONT CF 16S 150W 20S 140W 25S 132W SLOW MOVING.",
+  );
+  const geometry = extractGeometry(
+    "IN THE AREA SOUTH OF 10S, BETWEEN 150W AND CF, EXPECT SWELLS.",
+    features,
+  );
+  assert.equal(geometry.type, "polygon");
+  const ring = geometry.coordinates;
+  // Inside the wedge: between 150W and the front at that latitude
+  assert.equal(ringContains(ring, -147, -18), true);
+  assert.equal(ringContains(ring, -144, -22), true);
+  // West of the 150W meridian: outside
+  assert.equal(ringContains(ring, 178, -17), false);
+  // East of the front at the same latitude: outside
+  assert.equal(ringContains(ring, -142, -18), false);
+});
+
+test("unknown feature names fall back to the hemisphere bbox", () => {
+  const features = collectFeatures("TROUGH T1 09S 160E 11S 163E SLOW MOVING.");
+  const geometry = extractGeometry(
+    "IN THE AREA SOUTH OF 09S AND WEST OF CF, EXPECT SOUTHEAST WINDS.",
+    features,
+  );
+  // CF is not declared: conservative full-longitude bbox remains
+  assert.deepEqual(geometry, {
+    type: "bbox",
+    coordinates: [-180, -90, 180, -9],
+  });
+});
+
 test("cardinal bounds translate to a bbox", () => {
   // SOUTH OF x means lat ≤ x: the box extends to the south pole
   assert.deepEqual(
@@ -178,6 +293,70 @@ test("live NFFN bulletin: axis lines band-filtered, cardinal areas kept", () => 
   );
   assert.ok(!texts.some((t) => t.includes("TROUGH T1")), "T1 band dropped");
   assert.ok(!texts.some((t) => t.includes("TROUGH T2")), "T2 band dropped");
+});
+
+/** Full FQPS01 NFFN synopsis with named features (CF, T1–T4, L). */
+const NFFN_SYNOPSIS = [
+  "PARTS 2 AND 3 : SYNOPSIS AND FORECAST VALID UNTIL SEP 291800 UTC.",
+  "",
+  " LOW PRESSURE L CENTER [1009 HPA] WAS ANALYSED NEAR 05.0S 171.0E AT",
+  "280600 UTC. L SLOW MOVING. POSITION POOR.",
+  "",
+  "TROUGH T1 09S 160E 11S 163E 14S 167E 18S 173E SLOW MOVING. POOR",
+  "VISIBILITY IN OCCASIONAL SHOWERS AND ISOLATED THUNDERSTORM WITHIN 100",
+  "NAUTICAL MILES OF T1.",
+  "",
+  "TROUGH T2 12S 172E 07S 171E TO L TO 03S 173E EQT 177E SLOW MOVING.",
+  "POOR VISIBILITY IN OCCASIONAL RAIN, HEAVY AT TIMES AND FEW",
+  "THUNDERSTORMS WITHIN 140 NAUTICAL MILES OF T2.",
+  "",
+  "TROUGH T3 12S 175E 14S 180 15S 177W SLOW MOVING. POOR VISIBILITY IN",
+  "SOME SHOWERS AND ISOLATED THUNDERSTORM WITHIN 080 NAUTICAL MILES OF",
+  "T3.",
+  "",
+  "TROUGH T4 04S 170W 06S 168W 08S 165W SLOW MOVING. POOR VISIBILITY IN",
+  "OCCASIONAL RAIN, HEAVY AT TIMES AND FEW THUNDERSTORMS WITHIN 140",
+  "NAUTICAL MILES OF T4.",
+  "",
+  "COLD FRONT CF 16S 150W 20S 140W 25S 132W SLOW MOVING. POOR VISIBILITY",
+  "IN SOME SHOWERS WITHIN 100 NAUTICAL MILES OF CF.",
+  "",
+  "IN THE AREA SOUTH OF 09S AND WEST OF CF, EXPECT SOUTHEAST WINDS 20 TO",
+  "30 KNOTS. ROUGH TO VERY ROUGH SEAS. MODERATE SOUTHERLY SWELLS.",
+  "",
+  "IN THE AREA SOUTH OF 10S, BETWEEN 150W AND CF, EXPECT MODERATE TO",
+  "HEAVY SOUTHERLY SWELLS.",
+].join("\n");
+
+test("named-feature areas: NFFN synopsis filtered for six vessels", () => {
+  const kept = (track) =>
+    filterBulletin({
+      rawText: NFFN_SYNOPSIS,
+      source: "spool",
+      track,
+    }).blocks.map((b) => b.text);
+  const has = (texts, marker) => texts.some((t) => t.includes(marker));
+
+  // Fiji: west of CF — winds warning applies, the 150W–CF swells do not
+  const fiji = kept([[178, -17]]);
+  assert.equal(has(fiji, "WEST OF CF"), true);
+  assert.equal(has(fiji, "BETWEEN 150W AND CF"), false);
+
+  // In the wedge between 150W and the front: both warnings apply
+  const wedge = kept([[-147, -18]]);
+  assert.equal(has(wedge, "WEST OF CF"), true);
+  assert.equal(has(wedge, "BETWEEN 150W AND CF"), true);
+
+  // Marquesas at 10S: east of the front's waters, nothing applies
+  const marquesas = kept([[-139, -11]]);
+  assert.equal(has(marquesas, "WEST OF CF"), false);
+  assert.equal(has(marquesas, "BETWEEN 150W AND CF"), false);
+
+  // The T1 band (160E–173E, 9S–18S ± 100nm) contains no test vessel
+  for (const track of [[[178, -17]], [[-147, -18]]]) {
+    const texts = kept(track);
+    assert.equal(has(texts, "TROUGH T1"), false);
+  }
 });
 
 // --- Antimeridian -------------------------------------------------------------
