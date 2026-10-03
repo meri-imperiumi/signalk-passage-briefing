@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-04
+
 ### Fixed
 
 - Cached briefings kept serving bulletin blocks computed at compile time, so filtering and parsing fixes only reached the crew after a re-fetch — on the Tactical route view the console still showed the pre-fix boilerplate while the freshly compiled conditions-here view was already clean. The `/api/briefing` serve path now recomputes the merged bulletin console from the bulletin cache against the payload's track on every serve (route and here mode alike, subsuming the old splice-when-missing logic): parsing and filtering improvements apply to cached briefings on the next page load, a payload compiled before a fresher bulletin arrived picks the newer merged view, and a payload whose bulletin cache is gone keeps its own compile-time console.
