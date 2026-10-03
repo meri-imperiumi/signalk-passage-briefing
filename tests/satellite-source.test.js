@@ -22,6 +22,22 @@ describe("satellite passes (doc #3 Phase 2)", () => {
     assert.deepEqual(S.parseTLEs("garbage\n1 25544U\n2 25544"), []);
   });
 
+  test("parseTLEs collapses a station's modules into one element set", () => {
+    // CelesTrak lists every docked module separately; ISS (NAUKA)
+    // sorts before the core (ZARYA), which must still win
+    const tles = S.parseTLEs(
+      `ISS (NAUKA)\n1 48274U 21035A   23001.00000000  .00000000  00000-0  00000-0 0  9990\n2 48274  41.4730 100.0000 0001000 000.0000 000.0000 15.90000000000000\nISS (ZARYA)\n${ISS_TLE.slice(ISS_TLE.indexOf("1 25544"))}\nCSS (TIANHE)\n1 48274U 21035A   23001.00000000  .00000000  00000-0  00000-0 0  9990\n2 48274  41.4730 100.0000 0001000 000.0000 000.0000 15.90000000000000\nCSS (WENTIAN)\n1 48274U 21035A   23001.00000000  .00000000  00000-0  00000-0 0  9990\n2 48274  41.4730 100.0000 0001000 000.0000 000.0000 15.90000000000000`,
+    );
+    assert.deepEqual(
+      tles.map((t) => t.name),
+      ["ISS (ZARYA)", "CSS (TIANHE)"],
+    );
+    assert.deepEqual(
+      tles.map((t) => t.displayName),
+      ["ISS", "Tiangong"],
+    );
+  });
+
   test("magnitude estimate reads −1.0 overhead and dims with range", () => {
     assert.equal(S.magnitudeEstimate(420), -1.0);
     assert.ok(Math.abs(S.magnitudeEstimate(420 * 2) - 0.505) < 0.01);

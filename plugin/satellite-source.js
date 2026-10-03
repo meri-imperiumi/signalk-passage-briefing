@@ -39,6 +39,17 @@ const TRACKED_PREFIXES = ["ISS", "CSS"];
 const DISPLAY_NAMES = { ISS: "ISS", CSS: "Tiangong" };
 
 /**
+ * Preferred module per display name (work doc #3): the CelesTrak
+ * stations group lists several catalog entries per station — ISS
+ * (ZARYA) and ISS (NAUKA), CSS (TIANHE), CSS (WENTIAN), CSS
+ * (MENGTIAN) — all docked to the same hull and sharing its orbit.
+ * Propagating every entry would report each pass two or three times,
+ * so one element set per station is kept: the core module's when
+ * listed, the first entry otherwise.
+ */
+const PREFERRED_MODULE = { ISS: "ZARYA", CSS: "TIANHE" };
+
+/**
  * Pass search step (ms). 30 s resolves a 15° gate against a pass
  * moving about 1°/s at zenith well enough for a briefing alert.
  */
@@ -75,6 +86,7 @@ function parseTLEs(text, { prefixes = TRACKED_PREFIXES } = {}) {
     const prefix = prefixes.find((p) => name.startsWith(p));
     if (prefix) {
       tles.push({
+        prefix,
         name,
         displayName: DISPLAY_NAMES[prefix] ?? name,
         line1,
@@ -82,7 +94,17 @@ function parseTLEs(text, { prefixes = TRACKED_PREFIXES } = {}) {
       });
     }
   }
-  return tles;
+  // One element set per station: the core module's when present,
+  // the first entry otherwise
+  const preferred = new Map();
+  for (const tle of tles) {
+    const core = PREFERRED_MODULE[tle.prefix];
+    const existing = preferred.get(tle.displayName);
+    if (!existing || (core && tle.name.includes(core))) {
+      preferred.set(tle.displayName, tle);
+    }
+  }
+  return [...preferred.values()].map(({ prefix: _prefix, ...tle }) => tle);
 }
 
 /**
