@@ -667,6 +667,47 @@ function moonGlyphFor(timestamp, payload) {
 }
 
 /**
+ * Night test for a timeline item: the crew's position at that hour,
+ * interpolated along the simulated track, tested against the sun
+ * (the same sunset threshold the sail logic buckets by). One uniform
+ * answer to "does this happen at night", anchored at the payload's
+ * fetch time — the same base the `+Xh` labels use.
+ *
+ * @param {number} hoursFromNow - Item hour in the passage schedule
+ * @param {Array<{hoursFromNow: number, lat: number, lon: number}>} track
+ * @param {number} baseMs - Epoch ms the schedule is relative to
+ * @returns {boolean|null} Null when no track is available
+ */
+function trackNightAt(hoursFromNow, track, baseMs) {
+  if (!Array.isArray(track) || track.length === 0) {
+    return null;
+  }
+  let before = null;
+  let after = null;
+  for (const point of track) {
+    if (point.hoursFromNow <= hoursFromNow) {
+      before = point;
+    } else if (after == null) {
+      after = point;
+      break;
+    }
+  }
+  const reference = before ?? after;
+  if (!reference) {
+    return null;
+  }
+  let lat = reference.lat;
+  let lon = reference.lon;
+  if (before && after) {
+    const span = after.hoursFromNow - before.hoursFromNow;
+    const f = span > 0 ? (hoursFromNow - before.hoursFromNow) / span : 0;
+    lat = before.lat + f * (after.lat - before.lat);
+    lon = before.lon + f * (after.lon - before.lon);
+  }
+  return isNight(new Date(baseMs + hoursFromNow * 3600000), lat, lon);
+}
+
+/**
  * Formats a position for the timeline detail line: degrees and
  * minutes are overkill here — one decimal and a hemisphere letter.
  *
@@ -857,6 +898,21 @@ export function mergeTimeline(exceptions, payload = null) {
         .filter(Boolean)
         .join(" · "),
     });
+  }
+
+  // Night indicators for every dated item (work doc #17 session
+  // feedback): interpolate the crew's position at the item's hour
+  // from the simulated track and test the sun — one uniform answer
+  // to "does this happen at night", not just for sail changes. The
+  // sail events' own bucket (the reefing logic's authoritative one)
+  // is left untouched.
+  const track = summary.track ?? [];
+  const baseMs = fetchMs ?? Date.now();
+  for (const item of items) {
+    if (item.night || item.hoursFromNow == null) {
+      continue;
+    }
+    item.night = trackNightAt(item.hoursFromNow, track, baseMs) ?? false;
   }
 
   // Lines of interest (work doc #1): the traditional ceremonial

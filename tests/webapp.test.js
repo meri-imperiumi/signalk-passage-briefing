@@ -730,4 +730,44 @@ test("webapp view models", async (t) => {
       assert.equal(timeline[1].label, "Entering Fiji territorial waters");
     },
   );
+
+  await t.test("every dated timeline item carries a night indicator", () => {
+    // Sun truth at (-21, -175.2): 2026-10-04T09:00Z sits at solar
+    // altitude -45° (deep night), 2026-10-04T01:00Z at +62° (day).
+    // Base = fetchedAt 18:00Z: hour 15 -> 09:00Z night, hour 7 ->
+    // 01:00Z day. Same threshold the sail logic buckets by.
+    const timeline = mergeTimeline(
+      {
+        passageSummary: {
+          track: Array.from({ length: 24 }, (_, h) => ({
+            hoursFromNow: h,
+            lat: -21,
+            lon: -175.2,
+          })),
+          convectiveWarnings: [
+            {
+              hoursFromNow: 15,
+              timestamp: "2026-10-04T09:00:00.000Z",
+              cape: 1800,
+              kIndex: 30,
+            },
+          ],
+          zoneTransitions: [
+            {
+              kind: "leave",
+              territory: { name: "Tonga", iso_ter: "TON" },
+              hoursFromNow: 7,
+              timestamp: "2026-10-04T01:00:00.000Z",
+              distanceFromStartNm: 90,
+            },
+          ],
+        },
+      },
+      { metadata: { fetchedAt: "2026-10-03T18:00:00.000Z" } },
+    );
+    const convective = timeline.find((item) => item.kind === "convective");
+    const zone = timeline.find((item) => item.kind === "zone");
+    assert.equal(convective.night, true);
+    assert.equal(zone.night, false);
+  });
 });

@@ -1248,6 +1248,15 @@ export function filterExceptions(simulationResult) {
       // Territorial waters transitions with their simulated schedule
       // (work doc #17)
       zoneTransitions: simulationResult.zoneTransitions ?? [],
+      // The simulated track, compact: the timeline's night indicators
+      // interpolate the crew's position at each event's hour so every
+      // item — not only sail changes — can say whether it happens at
+      // night (work doc #17 session feedback)
+      track: (simulationResult.hourlyComfort ?? []).map((row) => ({
+        hoursFromNow: row.hoursFromNow,
+        lat: row.lat,
+        lon: row.lon,
+      })),
       // Anomalies merge into episodes (start hour, time range, peak
       // values) — a five-hour warning band reads as one timeline
       // event, not five lines
