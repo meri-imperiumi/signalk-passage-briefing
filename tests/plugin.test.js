@@ -1756,3 +1756,58 @@ test("hazard events: GDACS feed rides the online window into the payload and not
 
   plugin.stop();
 });
+
+test("zone transitions: briefing survives when zone tiles cannot download", async () => {
+  const { mockOpenMeteo } = require("./openmeteo-mock.js");
+  const app = createMockApp();
+  app.getSelfPath = (path) =>
+    path === "navigation.position"
+      ? { latitude: -18.658, longitude: -173.982 }
+      : null;
+  const plugin = pluginFactory(app);
+  plugin.start({});
+  plugin.registerWithRouter(app.router);
+  const feed = app.getDeltaHandlers()[0];
+  const call = async (path) => {
+    const r = app.getRoutes().find((x) => x.path === path);
+    const res = {
+      code: null,
+      payload: null,
+      status(c) {
+        this.code = c;
+        return this;
+      },
+      json(p) {
+        this.payload = p;
+      },
+    };
+    await r.handler({ query: {} }, res);
+    return res;
+  };
+
+  feed({
+    updates: [
+      { values: [{ path: "network.internet.state", value: "online" }] },
+    ],
+  });
+  const openMeteoFetch = mockOpenMeteo();
+  const originalFetch = globalThis.fetch;
+  // The maritime-zones package fetches its tiles over the global
+  // fetch too: the Open-Meteo mock answers the GitHub release URLs
+  // with weather JSON, so tile downloads fail their shape check and
+  // the zone features must degrade to absent, never fail the refresh
+  globalThis.fetch = openMeteoFetch;
+  try {
+    await call("/api/briefing/refresh");
+    const res = await call("/api/briefing");
+    assert.equal(res.code, null);
+    assert.ok(res.payload.payload.waypoints.length > 0);
+    // No tile data: no transitions field, no disclaimer
+    assert.equal(res.payload.payload.zoneTransitions, undefined);
+    assert.equal(res.payload.payload.zoneDisclaimer, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  plugin.stop();
+});

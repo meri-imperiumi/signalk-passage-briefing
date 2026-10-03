@@ -112,6 +112,11 @@ class PassageOutlook extends HTMLElement {
           letter-spacing: 0.1em; text-transform: uppercase;
           padding: 8px 12px; margin-bottom: 12px;
         }
+        footer {
+          margin-top: 12px;
+          font-size: 0.75em;
+          opacity: 0.7;
+        }
       </style>
       <header>
         <h1>Passage Briefing</h1>
@@ -125,6 +130,7 @@ class PassageOutlook extends HTMLElement {
       </div>
       <main id="view"></main>
       ${this.embedded ? "" : "<backfill-controls></backfill-controls>"}
+      <footer id="disclaimer" hidden></footer>
     `;
 
     this._routeSelect = this.shadowRoot.getElementById("route");
@@ -134,6 +140,7 @@ class PassageOutlook extends HTMLElement {
     this._tabTactical = this.shadowRoot.getElementById("tab-tactical");
     this._tabStrategic = this.shadowRoot.getElementById("tab-strategic");
     this._view = this.shadowRoot.getElementById("view");
+    this._disclaimerEl = this.shadowRoot.getElementById("disclaimer");
 
     // Embed mode (work doc #8): compact chrome for a plotter dialog
     if (this.embedded) {
@@ -515,6 +522,7 @@ class PassageOutlook extends HTMLElement {
     if (here && this._briefing?.payload) {
       here.setHere(this._briefing.payload, this._config ?? {});
     }
+    this.renderDisclaimer();
   }
 
   /** Pushes the latest exceptions into the active screen. */
@@ -537,6 +545,22 @@ class PassageOutlook extends HTMLElement {
         target.setPayload?.(this._briefing.payload);
       }
     }
+    this.renderDisclaimer();
+  }
+
+  /**
+   * Data-source attribution footer (work doc #17): the Marine Regions
+   * CC-BY notice rides the payload and renders app-wide — wherever
+   * zones show, the license and no-navigation notice say so. The app
+   * footer carries it once, not per card.
+   */
+  renderDisclaimer() {
+    if (!this._disclaimerEl) {
+      return; // Not yet connected
+    }
+    const text = this._briefing?.payload?.zoneDisclaimer ?? "";
+    this._disclaimerEl.textContent = text;
+    this._disclaimerEl.hidden = !text;
   }
 
   /**

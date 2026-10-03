@@ -117,6 +117,14 @@ class ConditionsHere extends HTMLElement {
         <h3>Celestial &amp; space events</h3>
         <div id="events"></div>
       </section>
+      <section class="sk-card" id="hazards-card" hidden>
+        <h3>Hazard events</h3>
+        <div id="hazards"></div>
+      </section>
+      <section class="sk-card" id="zones-card" hidden>
+        <h3>Waters you are in</h3>
+        <div id="zones"></div>
+      </section>
     `;
     this._posEl = this.shadowRoot.getElementById("pos");
     this._tierEl = this.shadowRoot.getElementById("tier");
@@ -130,6 +138,10 @@ class ConditionsHere extends HTMLElement {
     this._warningsEl = this.shadowRoot.getElementById("warnings");
     this._eventsCard = this.shadowRoot.getElementById("events-card");
     this._eventsEl = this.shadowRoot.getElementById("events");
+    this._hazardsCard = this.shadowRoot.getElementById("hazards-card");
+    this._hazardsEl = this.shadowRoot.getElementById("hazards");
+    this._zonesCard = this.shadowRoot.getElementById("zones-card");
+    this._zonesEl = this.shadowRoot.getElementById("zones");
     if (this._payload) {
       this.setHere(this._payload, this._config);
     }
@@ -223,6 +235,44 @@ class ConditionsHere extends HTMLElement {
       el.textContent =
         `${event.stamp ?? event.timestamp ?? ""} ${event.description ?? event.kind ?? ""}`.trim();
       this._eventsEl.appendChild(el);
+    }
+
+    // GDACS hazard events (work doc #22): earthquakes, cyclones,
+    // floods near the vessel — critical while stationary too, so the
+    // here view carries them alongside the passage timeline
+    const hazards = payload?.hazardEvents ?? [];
+    this._hazardsCard.hidden = hazards.length === 0;
+    this._hazardsEl.innerHTML = "";
+    for (const hazard of hazards) {
+      const el = document.createElement("div");
+      const level = String(hazard.alertLevel ?? "").toLowerCase();
+      if (level === "red") {
+        el.className = "severe";
+      }
+      const where =
+        hazard.distanceNm != null
+          ? `${hazard.distanceNm} nm @ ${hazard.bearingDeg ?? "?"}°`
+          : null;
+      el.textContent = [
+        level === "red" ? "RED" : level === "orange" ? "ORANGE" : null,
+        hazard.title ?? hazard.type ?? "Hazard event",
+        where,
+      ]
+        .filter(Boolean)
+        .join(" — ");
+      this._hazardsEl.appendChild(el);
+    }
+
+    // Waters the vessel sits in (work doc #17): here mode reports the
+    // current zones instead of transitions; the Marine Regions
+    // attribution renders app-wide in the root's footer
+    const zones = payload?.zonesHere ?? [];
+    this._zonesCard.hidden = zones.length === 0;
+    this._zonesEl.innerHTML = "";
+    if (zones.length > 0) {
+      const el = document.createElement("div");
+      el.textContent = zones.map((z) => z.name).join(", ");
+      this._zonesEl.appendChild(el);
     }
   }
 }

@@ -966,6 +966,91 @@ function energySummary(energyHourly, startTime) {
 }
 
 /**
+ * Places territorial-waters transitions on the passage schedule (work
+ * doc #17): each crossing's `distanceFromStartNm` interpolates
+ * against the simulated hourly rows' distance made good, giving the
+ * transition its `hoursFromNow` and timestamp — the same schedule the
+ * ETA percentiles come from. Crossings beyond the simulated horizon
+ * (or a payload without the enrichment) stay undated.
+ *
+ * @param {Array<{distanceFromStartNm: number, kind: string,
+ *   territory: object}>} transitions - Plugin-detected transitions
+ * @param {Array<{hoursFromNow: number, timestamp: string,
+ *   distanceFromStartNm: number}>} rows - Simulated hourly rows
+ * @returns {Array<object>} Transitions with `hoursFromNow` and
+ *   `timestamp` (nulls when undatable), chronological where dated
+ */
+function timestampZoneTransitions(transitions, rows) {
+  // The simulated rows start at hour 1 (~7 nm made good at passage
+  // speed): prepend the departure itself so crossings inside the
+  // first hour interpolate instead of going undated
+  const track =
+    rows.length > 0
+      ? [
+          {
+            hoursFromNow: 0,
+            timestamp: new Date(
+              new Date(rows[0].timestamp).getTime() -
+                rows[0].hoursFromNow * 3600000,
+            ).toISOString(),
+            distanceFromStartNm: 0,
+          },
+          ...rows,
+        ]
+      : rows;
+  const timed = (transitions ?? []).map((transition) => {
+    if (!Number.isFinite(transition?.distanceFromStartNm) || track.length < 2) {
+      return { ...transition, hoursFromNow: null, timestamp: null };
+    }
+    let before = null;
+    let after = null;
+    for (const row of track) {
+      if (row.distanceFromStartNm <= transition.distanceFromStartNm) {
+        before = row;
+      } else if (after == null) {
+        after = row;
+        break;
+      }
+    }
+    if (!before || !after) {
+      // Beyond the horizon in either direction
+      return { ...transition, hoursFromNow: null, timestamp: null };
+    }
+    const span = after.distanceFromStartNm - before.distanceFromStartNm;
+    if (span <= 0) {
+      return {
+        ...transition,
+        hoursFromNow: before.hoursFromNow,
+        timestamp: before.timestamp,
+      };
+    }
+    const f =
+      (transition.distanceFromStartNm - before.distanceFromStartNm) / span;
+    return {
+      ...transition,
+      hoursFromNow:
+        Math.round(
+          (before.hoursFromNow +
+            f * (after.hoursFromNow - before.hoursFromNow)) *
+            10,
+        ) / 10,
+      timestamp: new Date(
+        new Date(before.timestamp).getTime() +
+          f *
+            (new Date(after.timestamp).getTime() -
+              new Date(before.timestamp).getTime()),
+      ).toISOString(),
+    };
+  });
+  return timed.sort((a, b) => {
+    if (a.hoursFromNow == null || b.hoursFromNow == null) {
+      return a.hoursFromNow == null ? 1 : -1;
+    }
+    return a.hoursFromNow - b.hoursFromNow;
+  });
+}
+
+/**
  * Full passage simulation: the nominal run plus wind-perturbed runs
  * for the ETA percentiles, assembled into the shape the webapp's
  * `filterExceptions` consumes (SPEC §6.2).
@@ -1024,6 +1109,16 @@ export function simulatePassage({
   const linesOfInterest = simCfg.lines_of_interest_enabled
     ? detectLineCrossings(nominal.hourly ?? [])
     : [];
+
+  // Territorial waters transitions (work doc #17): the plugin walks
+  // the 1 nm-resampled route for boundary crossings; the simulation
+  // gives them their place in the passage schedule by interpolating
+  // each crossing's distance from start against the hourly rows —
+  // the same schedule the ETA percentiles come from
+  const zoneTransitions = timestampZoneTransitions(
+    payload?.zoneTransitions ?? [],
+    nominal.hourly ?? [],
+  );
 
   const etas = runs.map((run) => run.etaHours).sort((a, b) => a - b);
   const pctHours = (p) =>
@@ -1102,6 +1197,10 @@ export function simulatePassage({
           : event;
       })
       .sort((x, y) => x.hoursFromNow - y.hoursFromNow),
+    // Territorial waters transitions with their place in the passage
+    // schedule (work doc #17); undated when the crossing lies beyond
+    // the simulated horizon
+    zoneTransitions,
     hazardAlerts: nominal.hazardAlerts,
     seaStateAnomalies: nominal.seaStateAnomalies,
     upperAirAnomalies: nominal.upperAirAnomalies,
@@ -1146,6 +1245,9 @@ export function filterExceptions(simulationResult) {
       hazards: simulationResult.hazardAlerts ?? [],
       // Ceremonial line crossings (work doc #1)
       linesOfInterest: simulationResult.linesOfInterest ?? [],
+      // Territorial waters transitions with their simulated schedule
+      // (work doc #17)
+      zoneTransitions: simulationResult.zoneTransitions ?? [],
       // Anomalies merge into episodes (start hour, time range, peak
       // values) — a five-hour warning band reads as one timeline
       // event, not five lines

@@ -57,6 +57,7 @@ const {
   publishHazardNotes,
 } = require("./notes-publisher.js");
 const hazardSource = require("./hazard-source.js");
+const maritimeZones = require("./maritime-zones-source.js");
 const {
   backfillSailEvents,
   createHistoryWindStats,
@@ -640,6 +641,22 @@ module.exports = (app) => {
       lon: position.lon,
     });
     await attachHazardEvents(payload, position, waypoints);
+    // Here mode reports the waters the vessel is in right now instead
+    // of transitions (work doc #17); the disclaimer rides along and
+    // everything caches together
+    try {
+      const zones = await maritimeZones.positionZones({
+        dataDir: app.getDataDirPath(),
+        lat: position.lat,
+        lon: position.lon,
+      });
+      if (zones) {
+        payload.zonesHere = zones;
+        payload.zoneDisclaimer = maritimeZones.ZONE_DISCLAIMER;
+      }
+    } catch (error) {
+      app.debug?.(`Zones-here failed: ${error.message}`);
+    }
     const dir = join(app.getDataDirPath(), "weather");
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "here.json"), JSON.stringify(payload));
@@ -760,6 +777,31 @@ module.exports = (app) => {
       lat: waypoints[0].lat,
       lon: waypoints[0].lon,
     });
+    // Territorial waters transitions (work doc #17): corridor tiles
+    // download during the online window; the boundary walk resamples
+    // the route at ~1 nm so a short territorial hop is not missed.
+    // Missing tiles, older Node or a failed download degrade to no
+    // transitions — never a failed briefing.
+    try {
+      await maritimeZones.prefetchCorridor({
+        dataDir: app.getDataDirPath(),
+        waypoints,
+      });
+      const dense = sampleRoutePoints(
+        coordinates,
+        maritimeZones.SAMPLE_INTERVAL_NM,
+      );
+      const transitions = await maritimeZones.detectTransitions({
+        dataDir: app.getDataDirPath(),
+        waypoints: dense,
+      });
+      if (transitions) {
+        payload.zoneTransitions = transitions;
+        payload.zoneDisclaimer = maritimeZones.ZONE_DISCLAIMER;
+      }
+    } catch (error) {
+      app.debug?.(`Zone transitions failed: ${error.message}`);
+    }
     await attachHazardEvents(payload, vesselPosition(), waypoints);
     await savePayload(app.getDataDirPath(), routeId, payload);
     await writeFile(

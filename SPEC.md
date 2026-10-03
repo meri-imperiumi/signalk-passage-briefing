@@ -205,6 +205,21 @@ interface UnifiedWeatherPayload {
     bearingDeg: number;         // degrees true from the same reference
     link: string | null;        // GDACS event page
   }[];
+  zoneTransitions?: {
+    kind: 'enter' | 'leave';    // boundary crossing direction
+    territory: { name: string; iso_ter: string };
+    lat: number;                // crossing position
+    lon: number;
+    distanceFromStartNm: number;
+    connectivity?: 'ocean';     // leave events: metered-ocean rules beyond
+  }[];
+  zonesHere?: {                 // here mode: waters the vessel sits in
+    layer: string;              // 'internal' | 'archipelagic' | '12nm'
+    name: string;
+    iso_ter: string;
+    territory: string;
+  }[];
+  zoneDisclaimer?: string;      // Marine Regions attribution + no-navigation notice
 }
 
 interface TimeStepForecast {

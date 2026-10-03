@@ -925,3 +925,50 @@ test("slatting regime forces rough and tags hourly rows (work doc #14)", async (
     assert.equal(block.comfortLevel, "rough");
   }
 });
+
+test("zone transitions ride the simulated schedule (work doc #17)", async () => {
+  const { filterExceptions, simulatePassage } = await simPromise;
+  const startTime = new Date("2026-06-21T06:00:00Z");
+  const payload = buildPayload({
+    route: [
+      [179, -1],
+      [179, 1],
+    ],
+  });
+  payload.zoneTransitions = [
+    {
+      kind: "leave",
+      territory: { name: "Tonga", iso_ter: "TON" },
+      lat: -0.5,
+      lon: 179,
+      distanceFromStartNm: 30,
+      connectivity: "ocean",
+    },
+    {
+      kind: "enter",
+      territory: { name: "Fiji", iso_ter: "FJI" },
+      lat: 0.5,
+      lon: 179,
+      // Beyond the simulated horizon: stays undated
+      distanceFromStartNm: 50000,
+    },
+  ];
+  const exceptions = filterExceptions(simulatePassage({ payload, startTime }));
+  const transitions = exceptions.passageSummary.zoneTransitions;
+  assert.equal(transitions.length, 2);
+  const [leave, enter] = transitions;
+  assert.equal(leave.kind, "leave");
+  assert.ok(
+    leave.hoursFromNow > 0 && leave.hoursFromNow < 10,
+    `hoursFromNow ${leave.hoursFromNow}`,
+  );
+  const stamp = new Date(leave.timestamp).getTime();
+  assert.ok(
+    stamp > startTime.getTime() &&
+      stamp <= new Date(exceptions.passageSummary.etaP90).getTime(),
+    `timestamp ${leave.timestamp}`,
+  );
+  // Beyond the simulated horizon: undated
+  assert.equal(enter.hoursFromNow, null);
+  assert.equal(enter.timestamp, null);
+});

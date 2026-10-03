@@ -555,7 +555,7 @@ test("webapp view models", async (t) => {
       "Aurora possible: Kp 6 predicted tonight. Look north.",
     );
     assert.equal(timeline[3].label, "Leaving Finland territorial waters");
-    assert.equal(timeline[3].detail, "180 nm");
+    assert.equal(timeline[3].detail, "180 nm from departure");
   });
 
   await t.test("mergeTimeline sorts undated space events last", () => {
@@ -690,4 +690,44 @@ test("webapp view models", async (t) => {
     assert.match(timeline[0].detail, /24 h/);
     assert.equal(timeline[1].label, "Tropic of Capricorn");
   });
+
+  await t.test(
+    "mergeTimeline prefers the simulated zone schedule and carries connectivity",
+    () => {
+      const timeline = mergeTimeline(
+        {
+          passageSummary: {
+            zoneTransitions: [
+              {
+                kind: "leave",
+                territory: { name: "Tonga", iso_ter: "TON" },
+                hoursFromNow: 8.5,
+                timestamp: "2026-06-21T14:30:00.000Z",
+                distanceFromStartNm: 62.4,
+                connectivity: "ocean",
+              },
+              {
+                // Payload fallback keeps undated transitions visible
+                kind: "enter",
+                territory: { name: "Fiji", iso_ter: "FJI" },
+                distanceFromStartNm: 640,
+              },
+            ],
+          },
+        },
+        { metadata: { fetchedAt: "2026-06-21T06:00:00.000Z" } },
+      );
+      assert.deepEqual(
+        timeline.map((item) => [item.kind, item.hoursFromNow]),
+        [
+          ["zone", 8.5],
+          ["zone", null],
+        ],
+      );
+      assert.equal(timeline[0].label, "Leaving Tonga territorial waters");
+      assert.match(timeline[0].detail, /ocean data rules beyond this point/);
+      assert.match(timeline[0].detail, /62 nm/);
+      assert.equal(timeline[1].label, "Entering Fiji territorial waters");
+    },
+  );
 });

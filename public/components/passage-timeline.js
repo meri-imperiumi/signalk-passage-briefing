@@ -107,7 +107,7 @@ class PassageTimeline extends HTMLElement {
       when.className = "when";
       const hours = item.hoursFromNow != null ? `+${item.hoursFromNow}h` : "—";
       when.textContent =
-        `${item.night ? `${item.moon || "☾"} ` : ""}${hours} ${item.stamp || ""}`.trim();
+        `${hours} ${item.stamp || ""}${item.night ? ` ${item.moon || "☾"}` : ""}`.trim();
 
       const glyph = document.createElement("span");
       glyph.className = "glyph";

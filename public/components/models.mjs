@@ -833,10 +833,12 @@ export function mergeTimeline(exceptions, payload = null) {
     });
   }
 
-  // Territorial waters transitions (work doc #17): the source object
-  // carries `enter`/`leave` in its own `kind`; the timeline kind is
-  // always `zone`
-  for (const z of payload?.zoneTransitions ?? []) {
+  // Territorial waters transitions (work doc #17): the simulation
+  // timestamps the plugin's crossings against the passage schedule
+  // (summary), falling back to the payload's undated transitions;
+  // the timeline kind is always `zone`. Leaving territorial waters
+  // carries the connectivity note — the metered-ocean boundary.
+  for (const z of summary.zoneTransitions ?? payload?.zoneTransitions ?? []) {
     const territory = z.territory?.name ?? "?";
     push({
       hoursFromNow: z.hoursFromNow ?? relHours(z.timestamp, fetchMs),
@@ -844,10 +846,16 @@ export function mergeTimeline(exceptions, payload = null) {
       kind: "zone",
       severity: "info",
       label: `${z.kind === "leave" ? "Leaving" : "Entering"} ${territory} territorial waters`,
-      detail:
+      detail: [
+        z.connectivity === "ocean"
+          ? "ocean data rules beyond this point"
+          : null,
         z.distanceFromStartNm != null
-          ? `${Math.round(z.distanceFromStartNm)} nm`
-          : "",
+          ? `${Math.round(z.distanceFromStartNm)} nm from departure`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
     });
   }
 
@@ -865,7 +873,7 @@ export function mergeTimeline(exceptions, payload = null) {
         formatCoord(l.lat, l.lon),
         l.note ?? null,
         l.distanceFromStartNm != null
-          ? `${Math.round(l.distanceFromStartNm)} nm`
+          ? `${Math.round(l.distanceFromStartNm)} nm from departure`
           : null,
       ]
         .filter(Boolean)
