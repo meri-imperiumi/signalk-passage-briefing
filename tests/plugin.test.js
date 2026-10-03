@@ -1289,7 +1289,16 @@ describe("plugin", () => {
       const res2 = await call("/api/briefing/refresh");
       assert.equal(res2.code, null);
       const res3 = await call("/api/briefing");
-      assert.deepEqual(res3.payload.payload.spaceEvents, []);
+      // Fetched sources degrade to none; local ephemeris events are
+      // wall-clock dependent, so assert on the fetched kinds only
+      const degraded = res3.payload.payload.spaceEvents ?? [];
+      assert.ok(degraded.every((e) => !["aurora", "comet"].includes(e.kind)));
+      // Nightly moon/twilight context rides the payload regardless
+      const nights = res3.payload.payload.celestialNights ?? [];
+      assert.ok(nights.length > 0);
+      assert.ok(
+        nights.every((n) => n.moonIllumination >= 0 && n.moonIllumination <= 1),
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }

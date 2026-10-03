@@ -144,6 +144,23 @@ interface UnifiedWeatherPayload {
     issuedAt: string;
     bulletinText: string;
   };
+  spaceEvents?: {
+    kind: string;               // 'aurora' | 'comet' | 'conjunction' | 'opposition' | 'meteor'
+    timestamp: string;          // ISO timestamp
+    tactical: boolean;          // 24h dashboard banner vs strategic sky note
+    description: string;
+  }[];
+  celestialNights?: {
+    timestamp: string;          // ISO timestamp (night anchor)
+    moonPhaseDeg: number;       // 0 = new, 90 = first quarter, 180 = full, 270 = third quarter
+    moonIllumination: number;   // fraction 0-1
+    civilDusk: string | null;   // ISO timestamps, null beyond polar day/night
+    nauticalDusk: string | null;
+    astronomicalDusk: string | null;
+    astronomicalDawn: string | null;
+    nauticalDawn: string | null;
+    civilDawn: string | null;
+  }[];
 }
 
 interface TimeStepForecast {
@@ -152,6 +169,7 @@ interface TimeStepForecast {
     tws: number;                // knots
     twd: number;                // degrees true
     mslp: number;               // hPa
+    cloudCover: number | null;  // percent (0-100); null when the source carries none
   };
   marine: {
     hsCombined: number;         // meters

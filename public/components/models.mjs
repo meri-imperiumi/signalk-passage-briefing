@@ -615,9 +615,55 @@ function episodeDetail(episode, parts) {
  * @param {object|null} exceptions - Worker exception view
  * @param {object|null} payload - Briefing payload
  *   (UnifiedWeatherPayload; optional `spaceEvents`,
- *   `zoneTransitions`)
- * @returns {Array<{hoursFromNow: number|null, timestamp: string|null, stamp: string, kind: string, severity: string, label: string, detail: string, night: boolean}>}
+ *   `zoneTransitions`, `celestialNights`)
+ * @returns {Array<{hoursFromNow: number|null, timestamp: string|null, stamp: string, kind: string, severity: string, label: string, detail: string, night: boolean, moon: string|null}>}
  */
+/**
+ * Night glyph for a moon phase angle (work doc #3: the actual moon
+ * phase instead of a fixed crescent). 0° = new, 90° = first quarter,
+ * 180° = full, 270° = third quarter.
+ *
+ * @param {number} phaseDeg - Moon phase angle in degrees
+ * @returns {string} One of the eight moon-phase glyphs
+ */
+export function moonGlyph(phaseDeg) {
+  const sector = Math.floor(((((phaseDeg % 360) + 360) % 360) + 22.5) / 45) % 8;
+  return ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"][sector];
+}
+
+/**
+ * Night glyph for an instant from the payload's `celestialNights`
+ * (nearest nightly entry), or null when the payload predates the
+ * field or carries no timestamp.
+ *
+ * @param {string|null} timestamp - Event instant (ISO)
+ * @param {object|null} payload - Briefing payload
+ * @returns {string|null}
+ */
+function moonGlyphFor(timestamp, payload) {
+  const nights = payload?.celestialNights;
+  if (timestamp == null || !Array.isArray(nights) || nights.length === 0) {
+    return null;
+  }
+  const t = new Date(timestamp).getTime();
+  if (!Number.isFinite(t)) {
+    return null;
+  }
+  const nearest = nights.reduce((best, entry) => {
+    const et = new Date(entry.timestamp).getTime();
+    if (!Number.isFinite(et)) {
+      return best;
+    }
+    const distance = Math.abs(et - t);
+    return best == null || distance < best.distance
+      ? { distance, entry }
+      : best;
+  }, null);
+  return nearest && Number.isFinite(nearest.entry.moonPhaseDeg)
+    ? moonGlyph(nearest.entry.moonPhaseDeg)
+    : null;
+}
+
 export function mergeTimeline(exceptions, payload = null) {
   const summary = exceptions?.passageSummary ?? {};
   const fetchMs = payload?.metadata?.fetchedAt
@@ -633,6 +679,7 @@ export function mergeTimeline(exceptions, payload = null) {
       night: false,
       ...item,
       stamp: fmtShip(item.timestamp),
+      moon: moonGlyphFor(item.timestamp, payload),
     });
   };
 

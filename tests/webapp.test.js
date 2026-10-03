@@ -18,6 +18,7 @@ test("webapp view models", async (t) => {
     fmtKn,
     fmtUtc,
     mergeTimeline,
+    moonGlyph,
     sailStateLabel,
     sparklineColumns,
     splitSevere,
@@ -534,5 +535,75 @@ test("webapp view models", async (t) => {
     assert.equal(timeline[0].hoursFromNow, 6);
     assert.equal(timeline[1].label, "undated");
     assert.equal(timeline[1].hoursFromNow, null);
+  });
+
+  await t.test("mergeTimeline night stamps carry the actual moon glyph", () => {
+    // The payload's celestialNights drive the glyph (work doc #3:
+    // real moon phase instead of a fixed crescent); full moon the
+    // night of the event, so the timeline shows 🌕 where it used to
+    // show ☾
+    const timeline = mergeTimeline(
+      {
+        passageSummary: {
+          sailChanges: [
+            {
+              hoursFromNow: 10,
+              timestamp: "2026-06-21T16:00:00.000Z",
+              sailState: "MAIN_1_REEF",
+              night: true,
+            },
+          ],
+        },
+      },
+      {
+        metadata: { fetchedAt: "2026-06-21T06:00:00.000Z" },
+        celestialNights: [
+          {
+            timestamp: "2026-06-21T20:00:00.000Z",
+            moonPhaseDeg: 178,
+            moonIllumination: 1,
+          },
+          {
+            timestamp: "2026-06-22T20:00:00.000Z",
+            moonPhaseDeg: 210,
+            moonIllumination: 0.9,
+          },
+        ],
+      },
+    );
+    assert.equal(timeline[0].night, true);
+    assert.equal(timeline[0].moon, "🌕");
+  });
+
+  await t.test("moonGlyph covers the eight phase sectors", () => {
+    assert.equal(moonGlyph(0), "🌑");
+    assert.equal(moonGlyph(45), "🌒");
+    assert.equal(moonGlyph(90), "🌓");
+    assert.equal(moonGlyph(135), "🌔");
+    assert.equal(moonGlyph(180), "🌕");
+    assert.equal(moonGlyph(225), "🌖");
+    assert.equal(moonGlyph(270), "🌗");
+    assert.equal(moonGlyph(315), "🌘");
+    assert.equal(moonGlyph(359), "🌑");
+    assert.equal(moonGlyph(-45), "🌘");
+  });
+
+  await t.test("timeline falls back to ☾ without celestialNights", () => {
+    const timeline = mergeTimeline(
+      {
+        passageSummary: {
+          sailChanges: [
+            {
+              hoursFromNow: 10,
+              timestamp: "2026-06-21T16:00:00.000Z",
+              sailState: "MAIN_1_REEF",
+              night: true,
+            },
+          ],
+        },
+      },
+      { metadata: { fetchedAt: "2026-06-21T06:00:00.000Z" } },
+    );
+    assert.equal(timeline[0].moon, null);
   });
 });

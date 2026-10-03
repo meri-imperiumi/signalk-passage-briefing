@@ -153,6 +153,7 @@ describe("fetchWeatherAlongTrack", () => {
       twd: 45,
       mslp: 1013,
       gust: 18,
+      cloudCover: 25,
     });
     assert.deepEqual(step.marine, {
       hsCombined: 1.2,

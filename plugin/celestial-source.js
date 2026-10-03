@@ -1,7 +1,7 @@
 /**
- * Celestial & space weather source (work doc #3, Phase 1):
- * ultra-lightweight fetch-driven events with coarse gating —
+ * Celestial & space weather source (work doc #3).
  *
+ * Phase 1 (fetch-driven, coarse):
  * - Aurora: NOAA SWPC 3-day planetary K-index forecast; an alert is
  *   emitted when the predicted Kp reaches storm level (≥ 5) and the
  *   vessel's magnetic latitude is far enough south/north for that Kp
@@ -9,14 +9,20 @@
  * - Naked-eye comets: JPL Small-Body Database query for comets with
  *   predicted apparent magnitude brighter than 6.0.
  *
- * Everything else (twilight, moon, planets, meteors, satellite
- * passes) is Phase 2 and deliberately not attempted here.
+ * Phase 2 (offline, `celestial-ephemeris.js`): planetary
+ * conjunctions, oppositions and meteor-shower peaks, computed locally
+ * with astronomy-engine. `fetchSpaceEvents` merges both sources; the
+ * Phase-1 aurora gate is upgraded to the full tactical visibility
+ * gate (nautical night, moon set or crescent, cloud cover under
+ * 30 %) that the ephemeris events already pass.
  *
- * Both endpoints degrade independently: a failure nulls its half, so
- * a blocked JPL host never costs the aurora alert.
+ * Both fetched endpoints degrade independently: a failure nulls its
+ * half, so a blocked JPL host never costs the aurora alert.
  *
  * @file celestial-source.js
  */
+
+const ephemeris = require("./celestial-ephemeris.js");
 
 /**
  * Kp at which a geomagnetic storm (and mid-latitude aurora chance)
@@ -249,8 +255,12 @@ function sbdbCometsUrl(fields) {
  * @param {number} params.lat - Vessel latitude
  * @param {number} params.lon - Vessel longitude
  * @param {Date} [params.now]
- * @param {(date: Date, lat: number, lon: number) => boolean} [params.isNightFn]
- *   Night test (default: the shared Sereno solar geometry)
+ * @param {(date: Date, lat: number, lon: number) => boolean} [params.nightFn]
+ *   Nautical-night test (default: the ephemeris module's)
+ * @param {((timestamp: string) => number|null)|undefined} [params.cloudCoverAt]
+ *   Forecast cloud-cover lookup (percent); absent → gate stays open
+ * @param {(date: Date) => boolean} [params.moonGateFn]
+ *   Moon set-or-crescent test (default: the ephemeris module's)
  * @returns {Array<{kind: string, timestamp: string, tactical: boolean, description: string, kp?: number, name?: string, magnitude?: number}>}
  */
 async function buildSpaceEvents({
@@ -259,14 +269,18 @@ async function buildSpaceEvents({
   lat,
   lon,
   now = new Date(),
-  isNightFn,
+  nightFn,
+  cloudCoverAt,
+  moonGateFn,
 }) {
   const isNight =
-    isNightFn ?? (await import("../public/sereno-physics.mjs")).isNight;
+    nightFn ??
+    ((date, nlat, nlon) => ephemeris.isNauticalNight(date, nlat, nlon));
+  const moonOk = moonGateFn ?? ephemeris.passesMoonGate;
   const events = [];
 
   // Aurora: strongest predicted Kp in the window, gated by magnetic
-  // latitude and a local-night check at the vessel
+  // latitude and the full tactical visibility gate
   const peak = kpEntries.reduce(
     (best, e) => (best == null || e.kp > best.kp ? e : best),
     null,
@@ -275,7 +289,14 @@ async function buildSpaceEvents({
     const magLat = magneticLatitudeDeg(lat, lon);
     if (Math.abs(magLat) >= auroraMagLatThreshold(peak.kp)) {
       const look = lat >= 0 ? "north" : "south";
-      if (isNight(new Date(peak.timestamp), lat, lon)) {
+      const peakDate = new Date(peak.timestamp);
+      // Full tactical visibility gate (Phase 2): nautical night, the
+      // moon set or a crescent (faint auroras), clear enough sky
+      if (
+        isNight(peakDate, lat, lon) &&
+        moonOk(peakDate, lat, lon) &&
+        ephemeris.passesCloudGate(peak.timestamp, cloudCoverAt)
+      ) {
         events.push({
           kind: "aurora",
           timestamp: peak.timestamp,
@@ -314,8 +335,15 @@ async function buildSpaceEvents({
  * @param {Date} [params.now]
  * @param {typeof fetch} [params.fetchImpl]
  * @param {number} [params.timeoutMs]
- * @param {(date: Date, lat: number, lon: number) => boolean} [params.isNightFn]
- *   Night test override (tests)
+ * @param {(date: Date, lat: number, lon: number) => boolean} [params.nightFn]
+ *   Nautical-night test override (tests)
+ * @param {((timestamp: string) => number|null)|undefined} [params.cloudCoverAt]
+ *   Forecast cloud-cover lookup for the visibility gate
+ * @param {(date: Date) => boolean} [params.moonGateFn]
+ *   Moon set-or-crescent test override (tests)
+ * @param {boolean} [params.ephemeris=true]
+ *   Include Phase-2 ephemeris events (tests disable to isolate the
+ *   fetched sources)
  * @returns {Promise<Array<object>>} Space events (possibly empty)
  */
 /**
@@ -367,8 +395,29 @@ async function fetchSpaceEvents({
   now = new Date(),
   fetchImpl = fetch,
   timeoutMs = 15000,
-  isNightFn,
+  nightFn,
+  cloudCoverAt,
+  moonGateFn,
+  ephemeris: withEphemeris = true,
 }) {
+  // Phase 2 ephemeris events are computed first: they need no
+  // network, and a failure in the local math degrades to no events
+  // without costing the fetched sources their window
+  let localEvents = [];
+  if (withEphemeris) {
+    try {
+      localEvents = ephemeris.buildEphemerisEvents({
+        lat,
+        lon,
+        from: now,
+        hours: 24,
+        cloudCoverAt,
+      });
+    } catch (_error) {
+      localEvents = [];
+    }
+  }
+
   const grab = async (url) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -392,19 +441,22 @@ async function fetchSpaceEvents({
   const kpEntries = kpJson ? parseKpForecast(kpJson, { from: now }) : [];
   const comets = cometJson ? parseComets(cometJson) : [];
   if (kpEntries.length === 0 && comets.length === 0) {
-    return [];
+    return localEvents;
   }
   try {
-    return await buildSpaceEvents({
+    const fetched = await buildSpaceEvents({
       kpEntries,
       comets,
       lat,
       lon,
       now,
-      isNightFn,
+      nightFn,
+      cloudCoverAt,
+      moonGateFn,
     });
+    return [...localEvents, ...fetched];
   } catch (_error) {
-    return [];
+    return localEvents;
   }
 }
 

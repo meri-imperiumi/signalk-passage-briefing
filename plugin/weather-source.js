@@ -95,6 +95,9 @@ function weatherDataToTimeStep(item) {
       twd: radToDeg(item.wind?.directionTrue),
       mslp: paToHpa(item.outside?.pressure),
       gust: msToKn(item.wind?.gust),
+      // The provider publishes no cloud cover; the celestial
+      // visibility gate stays open (work doc #3 Phase 2)
+      cloudCover: null,
     },
     marine: {
       hsCombined: Number.isFinite(item.water?.waveSignificantHeight)

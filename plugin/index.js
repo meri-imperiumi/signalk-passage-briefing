@@ -47,6 +47,7 @@ const {
   ukhoWarningsUrl,
 } = require("./zone-source.js");
 const { fetchSpaceEvents } = require("./celestial-source.js");
+const ephemeris = require("./celestial-ephemeris.js");
 const { registerPlotterExtension } = require("./brief-ext.js");
 const { registerStatusTileExamples } = require("./statustilesexamples.js");
 const { createNotesStore, registerNotesProvider } = require("./notes-store.js");
@@ -561,8 +562,17 @@ module.exports = (app) => {
     }
     await publishNotesFor("here", bulletin, waypoints);
     // Space weather rides the same online window (work doc #3);
-    // degrades to an absent field when the endpoints fail
+    // degrades to an absent field when the endpoints fail. Phase-2
+    // ephemeris events are local computation; the visibility gate
+    // reads cloud cover from the payload just fetched.
     payload.spaceEvents = await fetchSpaceEvents({
+      lat: position.lat,
+      lon: position.lon,
+      cloudCoverAt: ephemeris.cloudCoverLookup(payload),
+    });
+    payload.celestialNights = ephemeris.celestialNights({
+      from: new Date(payload.metadata.fetchedAt),
+      days: 2,
       lat: position.lat,
       lon: position.lon,
     });
@@ -671,8 +681,18 @@ module.exports = (app) => {
       payload.metareaBulletin = bulletin;
     }
     await publishNotesFor("route", bulletin, waypoints);
-    // Space weather for the departure position (work doc #3 Phase 1)
+    // Space weather for the departure position (work doc #3):
+    // fetched Phase-1 sources plus local Phase-2 ephemeris events,
+    // all gated on the payload's own cloud cover; nightly moon and
+    // twilight context rides along for the timeline's night glyphs
     payload.spaceEvents = await fetchSpaceEvents({
+      lat: waypoints[0].lat,
+      lon: waypoints[0].lon,
+      cloudCoverAt: ephemeris.cloudCoverLookup(payload),
+    });
+    payload.celestialNights = ephemeris.celestialNights({
+      from: new Date(payload.metadata.fetchedAt),
+      days: forecastDays,
       lat: waypoints[0].lat,
       lon: waypoints[0].lon,
     });

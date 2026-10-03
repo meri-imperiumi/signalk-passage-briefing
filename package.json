@@ -44,6 +44,7 @@
     "node": ">=22.5.0"
   },
   "dependencies": {
+    "astronomy-engine": "^2.1.19",
     "yaml": "^2.9.0"
   },
   "devDependencies": {

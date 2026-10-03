@@ -73,6 +73,7 @@ const FORECAST_HOURLY = [
   "relative_humidity_850hPa",
   "relative_humidity_700hPa",
   "wind_speed_850hPa",
+  "cloud_cover",
 ].join(",");
 
 const WAVE_HOURLY = [
@@ -443,6 +444,7 @@ function buildTimeSteps(surfaceMap, marineMap, currentMap) {
         twd: num(surface.wind_direction_10m),
         mslp: num(surface.pressure_msl),
         gust,
+        cloudCover: num(surface.cloud_cover),
       },
       marine: {
         hsCombined: num(marine.wave_height),
@@ -530,6 +532,7 @@ async function fetchWeatherAlongTrack({
       "relative_humidity_850hPa",
       "relative_humidity_700hPa",
       "wind_speed_850hPa",
+      "cloud_cover",
     ]);
     const marineMap = hourlyLookup(waveBlocks[index], [
       "wave_height",

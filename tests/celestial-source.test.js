@@ -168,7 +168,7 @@ describe("celestial & space weather (doc #3 Phase 1)", () => {
       comets,
       lat: -21.1,
       lon: -175.2,
-      isNightFn: NIGHT,
+      nightFn: NIGHT,
     });
     assert.ok(tonga.every((e) => e.kind !== "aurora"));
     assert.equal(tonga.length, 1); // The comet
@@ -176,7 +176,9 @@ describe("celestial & space weather (doc #3 Phase 1)", () => {
     assert.equal(tonga[0].tactical, false);
 
     // Subantarctic south (−54): inside the Kp 6.33 → 55°? No: 68 mag
-    // lat threshold at 6.33... use a Kp 9 window instead
+    // lat threshold at 6.33... use a Kp 9 window instead. Moon and
+    // cloud gates pinned clear so the Kp/magnetic-latitude pair is
+    // what the test exercises (both gates unit-tested separately).
     const storm = [
       { timestamp: "2026-09-27T12:00:00.000Z", kp: 9, predicted: true },
     ];
@@ -185,7 +187,9 @@ describe("celestial & space weather (doc #3 Phase 1)", () => {
       comets: [],
       lat: -50,
       lon: 170,
-      isNightFn: NIGHT,
+      nightFn: NIGHT,
+      moonGateFn: () => true,
+      cloudCoverAt: () => 10,
     });
     assert.equal(farSouth.length, 1);
     assert.equal(farSouth[0].kind, "aurora");
@@ -198,7 +202,7 @@ describe("celestial & space weather (doc #3 Phase 1)", () => {
       comets: [],
       lat: -50,
       lon: 170,
-      isNightFn: DAY,
+      nightFn: DAY,
     });
     assert.equal(daytime.length, 0);
 
@@ -208,7 +212,9 @@ describe("celestial & space weather (doc #3 Phase 1)", () => {
       comets: [],
       lat: 55,
       lon: 20,
-      isNightFn: NIGHT,
+      nightFn: NIGHT,
+      moonGateFn: () => true,
+      cloudCoverAt: () => 10,
     });
     assert.match(north[0].description, /Look north/);
 
@@ -218,9 +224,51 @@ describe("celestial & space weather (doc #3 Phase 1)", () => {
       comets: [],
       lat: -50,
       lon: 170,
-      isNightFn: NIGHT,
+      nightFn: NIGHT,
     });
     assert.equal(quiet.length, 0);
+  });
+
+  test("aurora passes the full Phase-2 visibility gate", async () => {
+    const storm = [{ timestamp: "2026-09-27T12:00:00.000Z", kp: 9 }];
+    const base = {
+      kpEntries: storm,
+      comets: [],
+      lat: -50,
+      lon: 170,
+      nightFn: NIGHT,
+    };
+
+    // Moonlit night suppresses faint auroras (moon above horizon,
+    // not a crescent)
+    const moonlit = await cs.buildSpaceEvents({
+      ...base,
+      moonGateFn: () => false,
+    });
+    assert.ok(moonlit.every((e) => e.kind !== "aurora"));
+
+    // Overcast sky suppresses the alert when the lookup answers
+    const overcast = await cs.buildSpaceEvents({
+      ...base,
+      cloudCoverAt: () => 80,
+    });
+    assert.ok(overcast.every((e) => e.kind !== "aurora"));
+
+    // Clear, dark, moonless: the alert fires
+    const clear = await cs.buildSpaceEvents({
+      ...base,
+      moonGateFn: () => true,
+      cloudCoverAt: () => 10,
+    });
+    assert.equal(clear.filter((e) => e.kind === "aurora").length, 1);
+
+    // No cloud lookup available (Weather API path): gate stays open
+    const noLookup = await cs.buildSpaceEvents({
+      ...base,
+      moonGateFn: () => true,
+      cloudCoverAt: () => null,
+    });
+    assert.equal(noLookup.filter((e) => e.kind === "aurora").length, 1);
   });
 
   test("fetchSpaceEvents degrades per source and on total failure", async () => {
@@ -237,7 +285,8 @@ describe("celestial & space weather (doc #3 Phase 1)", () => {
         lat: -50,
         lon: 170,
         now: new Date("2026-09-27T06:00:00Z"),
-        isNightFn: NIGHT,
+        nightFn: NIGHT,
+        ephemeris: false,
       });
       assert.ok(events.every((e) => ["aurora", "comet"].includes(e.kind)));
 
@@ -249,6 +298,7 @@ describe("celestial & space weather (doc #3 Phase 1)", () => {
         lat: -50,
         lon: 170,
         now: new Date("2026-09-27T06:00:00Z"),
+        ephemeris: false,
       });
       assert.deepEqual(none, []);
     } finally {
