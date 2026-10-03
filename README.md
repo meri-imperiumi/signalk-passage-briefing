@@ -68,11 +68,25 @@ fields the Weather API providers don't publish.
   — geomagnetic activity behind the aurora advisories
 - [JPL SBDB query API](https://ssd-api.jpl.nasa.gov/doc/sbdb_query.html)
   — comet brightness parameters (M1/K1) behind the Sky Notes comets
+- [CelesTrak](https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle)
+  — two-line elements for the crewed stations (ISS, Tiangong); bright
+  satellite passes are propagated locally from the fetched TLEs with
+  SGP4, gated to nautical night, clear sky and a 15° haze line
 - [NOAA TGFTP radiofax tree](https://tgftp.nws.noaa.gov/fax/) and the
   [BoM difacs charts](http://www.bom.gov.au/difacs/) — synoptic
   surface-analysis charts per METAREA zone (work doc #11), per the
   schedule in
   [otherfax.txt](https://tgftp.nws.noaa.gov/fax/otherfax.txt)
+- [UKHO Admiralty MSI API](https://msi.admiralty.co.uk/) — structured
+  NAVAREA navigational warnings for the resolved zone; the third rung
+  of the GMDSS bulletin fetch ladder (TGFTP raw text, WMO GMDSS
+  portal, then UKHO MSI JSON) and also accepted verbatim as a
+  `bulletin_urls` source
+- [GDACS RSS](https://www.gdacs.org/xml/rss.xml) — EU JRC global
+  disaster alerts (earthquakes, tropical cyclones, floods, volcanic
+  activity), filtered route-relative by alert level and corridor
+  distance: they ride the unified passage timeline and publish as
+  georeferenced chart notes (work doc #22)
 - [Open-Meteo Marine API](https://open-meteo.com/en/docs) —
   NOAA GFS-Wave 0.25° combined sea/wind sea/swell partitions, and
   Météo-France SMOC surface currents
