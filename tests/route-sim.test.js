@@ -465,6 +465,14 @@ describe("simulatePassage", () => {
       assert.ok(hours[i - 1] <= hours[i], "sailEvents sorted");
     }
 
+    // Every event carries the forecast conditions at the change
+    // point: the crew is rigging into 10 kn TWS on this payload
+    for (const event of result.sailEvents) {
+      assert.ok(event.conditions, "conditions attached");
+      assert.equal(event.conditions.twsKnots, 10);
+      assert.ok(event.conditions.comfortLevel != null);
+    }
+
     const exceptions = filterExceptions(result);
     assert.ok(exceptions.passageSummary.sailChanges.length >= 1);
     assert.ok(

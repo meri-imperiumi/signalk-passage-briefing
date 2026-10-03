@@ -321,9 +321,39 @@ test("webapp view models", async (t) => {
     assert.equal(timeline[1].kind, "maneuver");
     assert.equal(timeline[1].severity, "warn");
     assert.equal(timeline[1].label, "Tack to port");
-    assert.equal(timeline[1].detail, "32 nm · 12.2 kn");
+    assert.equal(timeline[1].detail, "32 nm · 12.2 kn TWS");
     assert.equal(timeline[2].label, "No sails - drifting");
     assert.deepEqual(mergeTimeline(null, null), []);
+  });
+
+  await t.test("mergeTimeline details the conditions at sail changes", () => {
+    const timeline = mergeTimeline({
+      passageSummary: {
+        sailChanges: [
+          {
+            hoursFromNow: 6,
+            timestamp: "2026-06-21T12:00:00.000Z",
+            sailState: "MAIN_1_REEF",
+            conditions: {
+              twsKnots: 14.2,
+              awsKnots: 18.4,
+              hsMeters: 1.5,
+              tpSeconds: 8,
+              comfortLevel: "coffee",
+            },
+          },
+          {
+            hoursFromNow: 12,
+            timestamp: "2026-06-21T18:00:00.000Z",
+            sailState: "MAIN_FULL",
+            conditions: { twsKnots: 8, comfortLevel: "champagne" },
+          },
+        ],
+      },
+    });
+    assert.equal(timeline[0].detail, "14.2 kn TWS · Hs 1.5 m · coffee");
+    // Missing sea state degrades without inventing values
+    assert.equal(timeline[1].detail, "8.0 kn TWS · champagne");
   });
 
   await t.test("mergeTimeline maps sea, convective and hazard sources", () => {

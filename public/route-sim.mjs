@@ -541,6 +541,8 @@ export function simulateRun({
       azMs2: comfort.acceleration.value,
       comfortLevel: comfort.comfort,
       twsKnots: tws,
+      hsMeters: hs ?? null,
+      tpSeconds: tp ?? null,
       stwKnots: stw,
       sogKnots: sog,
       sailState,
@@ -743,11 +745,38 @@ export function simulatePassage({
     fuelConsumptionLiters: nominal.fuelLiters,
     hourlyComfort: nominal.hourly,
     // Tacks and gybes the plan implies, merged into the sail-change
-    // queue alongside the recommendation-driven changes (work doc #5)
+    // queue alongside the recommendation-driven changes (work doc
+    // #5); every event carries the forecast conditions at the change
+    // point (nearest hourly step) so the timeline can say what the
+    // crew is rigging into
     sailEvents: [
       ...(nominal.sailEvents ?? []),
       ...detectManeuvers(nominal.hourly),
-    ].sort((x, y) => x.hoursFromNow - y.hoursFromNow),
+    ]
+      .map((event) => {
+        let row = null;
+        let bestDelta = Infinity;
+        for (const hour of nominal.hourly ?? []) {
+          const delta = Math.abs(hour.hoursFromNow - event.hoursFromNow);
+          if (delta < bestDelta) {
+            bestDelta = delta;
+            row = hour;
+          }
+        }
+        return row
+          ? {
+              ...event,
+              conditions: {
+                twsKnots: row.twsKnots ?? null,
+                awsKnots: row.awsKnots ?? null,
+                hsMeters: row.hsMeters ?? null,
+                tpSeconds: row.tpSeconds ?? null,
+                comfortLevel: row.comfortLevel ?? null,
+              },
+            }
+          : event;
+      })
+      .sort((x, y) => x.hoursFromNow - y.hoursFromNow),
     hazardAlerts: nominal.hazardAlerts,
     seaStateAnomalies: nominal.seaStateAnomalies,
     upperAirAnomalies: nominal.upperAirAnomalies,

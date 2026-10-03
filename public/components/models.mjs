@@ -618,19 +618,30 @@ export function mergeTimeline(exceptions, payload = null) {
     const maneuver = e.maneuver === "tack" || e.maneuver === "gybe";
     const state = String(e.sailState ?? "?");
     const [, tack] = state.split("@");
+    const label = maneuver
+      ? `${e.maneuver === "tack" ? "Tack" : "Gybe"} to ${e.toTack ?? tack ?? "?"}`
+      : sailEventLabel(e) || state;
+    // Conditions at the change point (work doc #18): what the crew
+    // is rigging into — true wind, sea state, comfort tier. Falls
+    // back to the bare maneuver TWS for payloads without the
+    // enriched conditions block.
+    const conditions = e.conditions ?? null;
+    const tws = conditions?.twsKnots ?? e.twsAtManeuver ?? null;
     push({
       hoursFromNow: e.hoursFromNow ?? null,
       timestamp: e.timestamp ?? null,
       kind: maneuver ? "maneuver" : "sail",
       severity: maneuver ? "warn" : "info",
-      label: maneuver
-        ? `${e.maneuver === "tack" ? "Tack" : "Gybe"} to ${e.toTack ?? tack ?? "?"}`
-        : sailEventLabel(e) || state,
+      label,
       detail: [
         e.distanceFromStartNm != null
           ? `${Math.round(e.distanceFromStartNm)} nm`
           : null,
-        e.twsAtManeuver != null ? fmtKn(e.twsAtManeuver) : null,
+        tws != null ? `${fmtKn(tws)} TWS` : null,
+        conditions?.hsMeters != null
+          ? `Hs ${conditions.hsMeters.toFixed(1)} m`
+          : null,
+        conditions?.comfortLevel ?? null,
       ]
         .filter(Boolean)
         .join(" · "),

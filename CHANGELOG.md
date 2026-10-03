@@ -16,6 +16,11 @@
   the whole-route hazard list in `passageSummary.hazards` (the 24 h
   `next24h.sailChanges` and `next24h.hazards` slices are gone — the
   timeline slices itself).
+- Sail-change events in the timeline carry the forecast conditions
+  at the change point (nearest simulated hour): true wind, sea state
+  and Sereno comfort tier — "Main 1 reef — 14.2 kn TWS · Hs 1.5 m ·
+  coffee" — so the crew knows what they are rigging into. The
+  simulation's hourly rows now include wave height and period.
 - Ship's time display: the webapp reads the vessel's published
   timezone (`environment.time.timezoneOffset` / `.timezoneRegion`, as
   served by signalk-ships-time) over the REST API and the delta
