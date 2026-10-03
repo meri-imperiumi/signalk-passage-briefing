@@ -827,29 +827,28 @@ export function mergeTimeline(exceptions, payload = null) {
 /**
  * View model for the strategic ETA table.
  *
- * @param {object|null} exceptions
- * @returns {{rows: Array<{label: string, stamp: string}>, motorHours: string, fuel: string}}
+ * @param {object|null} exceptions - Worker exception view
+ * @param {object|null} [payload] - Briefing payload; its
+ *   `celestialNights` give night arrivals their moon-phase glyph
+ * @returns {{rows: Array<{label: string, stamp: string, night: boolean, moon: string|null}>, motorHours: string, fuel: string}}
  */
-export function etaTable(exceptions) {
+export function etaTable(exceptions, payload = null) {
   const summary = exceptions?.passageSummary ?? {};
   const night = summary.etaNight ?? {};
+  const row = (label, timestamp, isNight) => ({
+    label,
+    stamp: fmtShip(timestamp),
+    night: isNight === true,
+    // Actual moon phase for night arrivals (work doc #3); null when
+    // the payload predates celestialNights — the renderer falls back
+    // to the fixed crescent
+    moon: isNight === true ? moonGlyphFor(timestamp, payload) : null,
+  });
   return {
     rows: [
-      {
-        label: "P10",
-        stamp: fmtShip(summary.etaP10),
-        night: night.p10 === true,
-      },
-      {
-        label: "P50",
-        stamp: fmtShip(summary.etaP50),
-        night: night.p50 === true,
-      },
-      {
-        label: "P90",
-        stamp: fmtShip(summary.etaP90),
-        night: night.p90 === true,
-      },
+      row("P10", summary.etaP10, night.p10),
+      row("P50", summary.etaP50, night.p50),
+      row("P90", summary.etaP90, night.p90),
     ],
     motorHours:
       summary.totalMotorHours != null ? fmtHours(summary.totalMotorHours) : "",

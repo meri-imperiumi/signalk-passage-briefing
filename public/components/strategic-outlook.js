@@ -111,7 +111,7 @@ class StrategicOutlook extends HTMLElement {
     if (!this._etaBody) {
       return; // Not yet connected
     }
-    const table = etaTable(exceptions);
+    const table = etaTable(exceptions, this._payload ?? null);
     this._etaBody.innerHTML = "";
     for (const row of table.rows) {
       const tr = document.createElement("tr");
@@ -120,7 +120,7 @@ class StrategicOutlook extends HTMLElement {
       tdLabel.textContent = row.label;
       const tdStamp = document.createElement("td");
       tdStamp.textContent = row.night
-        ? `${row.stamp || "—"} ☾`
+        ? `${row.stamp || "—"} ${row.moon || "☾"}`
         : row.stamp || "—";
       if (row.night) {
         tdStamp.title = "Night arrival at destination";

@@ -284,7 +284,33 @@ test("webapp view models", async (t) => {
       table.rows.map((row) => row.night),
       [false, true, true],
     );
+    assert.deepEqual(
+      table.rows.map((row) => row.moon),
+      [null, null, null],
+    );
     assert.equal(etaTable(null).motorHours, "");
+  });
+
+  await t.test("etaTable night arrivals carry the actual moon glyph", () => {
+    const table = etaTable(
+      {
+        passageSummary: {
+          etaP50: "2026-06-22T13:00:00Z",
+          etaNight: { p50: true },
+        },
+      },
+      {
+        celestialNights: [
+          {
+            timestamp: "2026-06-22T20:00:00.000Z",
+            moonPhaseDeg: 178,
+            moonIllumination: 1,
+          },
+        ],
+      },
+    );
+    assert.equal(table.rows[1].night, true);
+    assert.equal(table.rows[1].moon, "🌕");
   });
 
   await t.test("mergeTimeline maps sail work and maneuvers (doc #18)", () => {

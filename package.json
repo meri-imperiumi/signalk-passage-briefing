@@ -45,6 +45,7 @@
   },
   "dependencies": {
     "astronomy-engine": "^2.1.19",
+    "satellite.js": "^7.1.0",
     "yaml": "^2.9.0"
   },
   "devDependencies": {

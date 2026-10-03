@@ -11,10 +11,12 @@
  *
  * Phase 2 (offline, `celestial-ephemeris.js`): planetary
  * conjunctions, oppositions and meteor-shower peaks, computed locally
- * with astronomy-engine. `fetchSpaceEvents` merges both sources; the
- * Phase-1 aurora gate is upgraded to the full tactical visibility
- * gate (nautical night, moon set or crescent, cloud cover under
- * 30 %) that the ephemeris events already pass.
+ * with astronomy-engine, plus bright station passes (ISS, Tiangong)
+ * propagated locally from CelesTrak TLEs (`satellite-source.js`).
+ * `fetchSpaceEvents` merges all sources; the Phase-1 aurora gate is
+ * upgraded to the full tactical visibility gate (nautical night, moon
+ * set or crescent, cloud cover under 30 %) that the other events
+ * already pass.
  *
  * Both fetched endpoints degrade independently: a failure nulls its
  * half, so a blocked JPL host never costs the aurora alert.
@@ -23,6 +25,7 @@
  */
 
 const ephemeris = require("./celestial-ephemeris.js");
+const satelliteSource = require("./satellite-source.js");
 
 /**
  * Kp at which a geomagnetic storm (and mid-latitude aurora chance)
@@ -434,12 +437,35 @@ async function fetchSpaceEvents({
     }
   };
 
-  const [kpJson, cometJson] = await Promise.all([
+  const [kpJson, cometJson, tles] = await Promise.all([
     grab(SWPC_KP_URL),
     fetchComets({ fetchImpl, timeoutMs }),
+    withEphemeris
+      ? satelliteSource.fetchTrackedTLEs({ fetchImpl, timeoutMs })
+      : Promise.resolve(null),
   ]);
   const kpEntries = kpJson ? parseKpForecast(kpJson, { from: now }) : [];
   const comets = cometJson ? parseComets(cometJson) : [];
+  // Satellite passes: local SGP4 propagation of the fetched elements,
+  // gated like every other Phase-2 event; a bad element set degrades
+  // to no events, never a failed briefing
+  if (tles) {
+    try {
+      localEvents = [
+        ...localEvents,
+        ...satelliteSource.computeSatelliteEvents({
+          tles,
+          lat,
+          lon,
+          from: now,
+          hours: 24,
+          cloudCoverAt,
+        }),
+      ];
+    } catch (_error) {
+      // Satellite events degrade independently of everything else
+    }
+  }
   if (kpEntries.length === 0 && comets.length === 0) {
     return localEvents;
   }
