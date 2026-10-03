@@ -466,6 +466,9 @@ class PassageOutlook extends HTMLElement {
         polar: this._polar?.table ?? null,
         performanceFactor: this._polar?.performanceFactor,
         notes: this._notes ?? [],
+        // Running watch schedule (signalk-watch-schedule): sail
+        // changes anchor to watch changes while it runs
+        watch: this._watch ?? null,
         // The payload covers the fetch window forward; hours are read
         // from its own timestamps
         startTime: payload.metadata?.fetchedAt ?? new Date().toISOString(),

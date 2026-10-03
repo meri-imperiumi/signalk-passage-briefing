@@ -132,6 +132,47 @@ export function createStream({ onMode, onTime, onConnection }) {
 }
 
 /**
+ * The running watch schedule from signalk-watch-schedule (best
+ * effort): shift boundaries for sail-work anchoring (route-sim),
+ * extrapolated to the simulation horizon by rotation cycle in the
+ * worker. Null when the plugin is absent or no watch is running —
+ * the briefing then anchors canvas work to sunrise/sunset instead.
+ *
+ * @returns {Promise<{active: true, startedAt: number, cycleMs:
+ *   number|null, shifts: Array<{startTime: number, endTime:
+ *   number}>}|null>}
+ */
+export async function fetchWatchSchedule() {
+  try {
+    const state = await fetchJson(
+      "/plugins/signalk-watch-schedule/api/state",
+      8000,
+    );
+    if (state?.state?.onWatch !== true) {
+      return null;
+    }
+    const cycleMin = state?.system?.cycleDuration;
+    const shifts = (state?.schedule ?? [])
+      .map((shift) => ({
+        startTime: shift?.startTime,
+        endTime: shift?.endTime,
+      }))
+      .filter((shift) => Number.isFinite(shift.startTime));
+    if (shifts.length === 0) {
+      return null;
+    }
+    return {
+      active: true,
+      startedAt: state.state.startedAt ?? null,
+      cycleMs: Number.isFinite(cycleMin) ? cycleMin * 60000 : null,
+      shifts,
+    };
+  } catch {
+    return null; // No watch plugin or no running watch
+  }
+}
+
+/**
  * The vessel's published timezone from the REST API (signalk-ships-time),
  * best effort: null when the server has none — the stream subscription
  * covers late arrivals. Leaf values arrive wrapped (`{value, ...}`)

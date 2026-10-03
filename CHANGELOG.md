@@ -4,6 +4,16 @@
 
 ### Added
 
+- Sail changes are scheduled when the crew can act on them:
+  recommendation-driven canvas changes anchor to the *previous watch
+  handover* when a watch schedule is running (signalk-watch-schedule;
+  boundaries are extrapolated across the forecast horizon from the
+  rotation cycle, and the watch boundary wins over sunlight),
+  otherwise to the next sunrise/sunset. Several detections between
+  boundaries collapse into one change carrying the last suggested
+  state, no-op re-rigs are dropped, and the timeline says which
+  anchor applied ("watch change" / "at dusk" / "at dawn"). Tacks and
+  gybes stay at their tactical times.
 - Unified passage timeline: a new `<passage-timeline>` component and
   `mergeTimeline()` view model render every event source — sail
   changes, planned tacks and gybes, convective risk, macro sea state,

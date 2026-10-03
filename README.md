@@ -33,6 +33,17 @@ and [@meri-imperiumi/signalk-logbook](https://github.com/meri-imperiumi/signalk-
 - [signalk-logbook](https://github.com/meri-imperiumi/signalk-logbook)
   store — crewed sail events (reefs, sail changes) that train the
   preference matrix
+- [signalk-ships-time](https://github.com/meri-imperiumi/signalk-ships-time)
+  — `environment.time.timezoneOffset` / `.timezoneRegion`, the
+  vessel's published timezone: briefing stamps render in ship's time
+  when available (the offset rides on every stamp), falling back to
+  UTC `Z` when nothing is published
+- [signalk-watch-schedule](https://github.com/hoeken/signalk-watch-schedule)
+  — `watch.state.onWatch`, `watch.state.startedAt`, `watch.system` and
+  `watch.schedule`: the running watch rotation. While a watch is
+  running, planned sail changes anchor to the previous watch handover
+  (both teams awake) instead of sunrise/sunset; boundaries are
+  extrapolated across the forecast horizon from the rotation cycle
 - [@signalk/sailsconfiguration](https://www.npmjs.com/package/@signalk/sailsconfiguration)
   — sail inventory used to filter free-text noise out of log entries
 - Weather API (`app.weatherApi`) — waypoint forecasts from the
@@ -81,6 +92,19 @@ directory, so the last payloads survive the offline hours.
 
 [signalk-weather-router-plus](https://github.com/motamman/signalk-weather-router-plus)
 plans the passage: isochrone routing against the vessel's polar on the ECMWF open-data run it keeps decoded on disk, with map overlays, tides and currents. Activate the route it publishes to the Resources API, and this plugin briefs it — `navigation.course.activeRoute` wins over the last briefed route at the next fetch window, and with `weather_source: auto` (the default) the briefing reads its forecasts from the router's Weather API provider. One forecast on board, planner and briefing in agreement: the router for planning and visualization, the briefing for the underway daily routine (comfort, sail changes, bulletins, energy).
+
+## Pairing with Watch Schedule
+
+[signalk-watch-schedule](https://github.com/hoeken/signalk-watch-schedule)
+runs the crew's watch rotation and publishes it under `watch.*`. When a
+watch is running, this plugin reads the schedule at app load and moves
+planned sail changes (reefs, canvas work) to the *previous* watch
+handover — the moment both teams are awake on deck — rather than
+sunrise/sunset; tacks and gybes stay at their tactical times, since
+course work can't wait for a handover. The watch boundary wins over
+sunlight. Without a running watch, canvas work anchors to the next
+sunrise/sunset. Webapp-side only: no configuration, and the briefing
+works unchanged when the plugin is absent.
 
 ## Acknowledgments
 

@@ -595,3 +595,159 @@ describe("antimeridian", () => {
     assert.ok(lastLon < 0, `last lon ${lastLon}`);
   });
 });
+
+describe("anchorSailChanges", () => {
+  const HOUR = 3600000;
+
+  /** Hourly rows with night falling 18:00–06:00, 48 hours long. */
+  function buildRows() {
+    const rows = [];
+    for (let h = 0; h <= 48; h++) {
+      const hourOfDay = (6 + h) % 24; // starts 06:00 local-ish
+      rows.push({
+        hoursFromNow: h,
+        timestamp: new Date(Date.UTC(2026, 5, 21, 6) + h * HOUR).toISOString(),
+        night: hourOfDay >= 12,
+        sailState: "MAIN_FULL",
+      });
+    }
+    return rows;
+  }
+
+  test("watchBoundaries extrapolates rotation cycles both ways", async () => {
+    const { watchBoundaries } = await simPromise;
+    const watch = {
+      active: true,
+      startedAt: Date.UTC(2026, 5, 20, 0),
+      cycleMs: 4 * HOUR,
+      shifts: [{ startTime: Date.UTC(2026, 5, 21, 12), endTime: 0 }],
+    };
+    const from = Date.UTC(2026, 5, 21, 0);
+    const until = Date.UTC(2026, 5, 23, 0);
+    const boundaries = watchBoundaries(watch, from, until);
+    // Every 4 h across the window, none before the watch started
+    assert.equal(boundaries.length, 13); // 00:00..48:00 step 4h
+    assert.equal(boundaries[0], from);
+    assert.equal(boundaries[1], from + 4 * HOUR);
+    for (const b of boundaries) {
+      assert.ok(b >= watch.startedAt, "no boundary before watch start");
+    }
+    // No cycle info: only published shifts inside the window
+    assert.deepEqual(
+      watchBoundaries({ ...watch, cycleMs: null }, from, until),
+      [Date.UTC(2026, 5, 21, 12)],
+    );
+    // Inactive watch: no boundaries at all
+    assert.deepEqual(
+      watchBoundaries({ ...watch, active: false }, from, until),
+      [],
+    );
+  });
+
+  test("twilight mode anchors detections to the next night flip", async () => {
+    const { anchorSailChanges } = await simPromise;
+    const rows = buildRows();
+    // Night falls at row 12 (18:00) and lifts at row 24 (06:00)
+    const events = [
+      {
+        hoursFromNow: 2,
+        timestamp: rows[2].timestamp,
+        sailState: "MAIN_1_REEF",
+        previousSailState: "MAIN_FULL",
+      },
+      {
+        hoursFromNow: 3,
+        timestamp: rows[3].timestamp,
+        sailState: "MAIN_2_REEFS",
+        previousSailState: "MAIN_1_REEF",
+      },
+      {
+        hoursFromNow: 14,
+        timestamp: rows[14].timestamp,
+        sailState: "MAIN_2_REEFS",
+        previousSailState: "MAIN_2_REEFS",
+      },
+      {
+        hoursFromNow: 7,
+        timestamp: rows[7].timestamp,
+        sailState: "MAIN_FULL",
+        previousSailState: "MAIN_2_REEFS",
+        maneuver: "tack",
+      },
+    ];
+    const anchored = anchorSailChanges(events, rows);
+    // First two collapse onto the row-6 boundary (night falls there)
+    // with the last state; the third re-rigs the same canvas at the
+    // next boundary (dawn, row 18) and is dropped; the maneuver is
+    // untouched
+    assert.equal(anchored.length, 2);
+    assert.equal(anchored[0].hoursFromNow, 6);
+    assert.equal(anchored[0].sailState, "MAIN_2_REEFS");
+    assert.equal(anchored[0].anchor, "dusk");
+    assert.equal(anchored[0].night, true);
+    assert.equal(anchored[1].hoursFromNow, 7);
+    assert.equal(anchored[1].maneuver, "tack");
+    assert.equal(anchored[1].anchor, undefined);
+    // Rows rewritten to the anchored schedule
+    assert.equal(rows[2].sailState, "MAIN_FULL");
+    assert.equal(rows[6].sailState, "MAIN_2_REEFS");
+    assert.equal(rows[7].sailState, "MAIN_2_REEFS");
+  });
+
+  test("watch mode anchors to the previous watch change", async () => {
+    const { anchorSailChanges } = await simPromise;
+    const rows = buildRows();
+    const watch = {
+      active: true,
+      startedAt: Date.UTC(2026, 5, 20, 0),
+      cycleMs: 4 * HOUR,
+      shifts: [{ startTime: Date.UTC(2026, 5, 21, 12), endTime: 0 }],
+    };
+    const events = [
+      {
+        hoursFromNow: 2,
+        timestamp: rows[2].timestamp,
+        sailState: "MAIN_1_REEF",
+        previousSailState: "MAIN_FULL",
+      },
+      {
+        hoursFromNow: 3.5,
+        timestamp: rows[3].timestamp,
+        sailState: "MAIN_2_REEFS",
+        previousSailState: "MAIN_1_REEF",
+      },
+    ];
+    const anchored = anchorSailChanges(events, rows, watch);
+    // Boundaries repeat every 4 h from 12:00 UTC; both detections
+    // land after the hour-2 handover, so one change at that handover
+    // carries the last suggested state
+    assert.equal(anchored.length, 1);
+    assert.equal(anchored[0].sailState, "MAIN_2_REEFS");
+    assert.equal(anchored[0].anchor, "watch");
+    assert.ok(anchored[0].hoursFromNow <= 2, "anchored before detection");
+    assert.ok(anchored[0].hoursFromNow > 0, "still in the future");
+    // Rows at or after the handover carry the new rig
+    assert.equal(
+      rows[Math.round(anchored[0].hoursFromNow)].sailState,
+      "MAIN_2_REEFS",
+    );
+    assert.equal(rows[1].sailState, "MAIN_FULL");
+  });
+
+  test("unanchored detections keep their time when no boundary is in reach", async () => {
+    const { anchorSailChanges } = await simPromise;
+    // Constant night: no flips, no watch — events pass through
+    const rows = buildRows().map((row) => ({ ...row, night: true }));
+    const events = [
+      {
+        hoursFromNow: 4,
+        timestamp: rows[4].timestamp,
+        sailState: "MAIN_1_REEF",
+        previousSailState: "MAIN_FULL",
+      },
+    ];
+    const anchored = anchorSailChanges(events, rows);
+    assert.equal(anchored.length, 1);
+    assert.equal(anchored[0].hoursFromNow, 4);
+  });
+});

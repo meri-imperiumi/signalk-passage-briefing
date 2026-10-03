@@ -348,6 +348,221 @@ export function hazardAlerts(notes, positions, radiusNm = HAZARD_RADIUS_NM) {
 }
 
 /**
+ * Watch-change boundaries for a time window, from a running watch
+ * schedule (signalk-watch-schedule `/api/state`): every published
+ * shift start extrapolated by whole rotation cycles in both
+ * directions — the rotation repeats, so the horizon needs no server
+ * paging — clamped to the window and to the watch's own start.
+ *
+ * @param {object|null} watch - `{active, startedAt, cycleMs, shifts:
+ *   [{startTime, endTime}]}` from the watch plugin's REST state
+ * @param {number} fromMs - Window start (epoch ms, inclusive)
+ * @param {number} untilMs - Window end (epoch ms, inclusive)
+ * @returns {number[]} Sorted boundary instants (epoch ms)
+ */
+export function watchBoundaries(watch, fromMs, untilMs) {
+  if (!watch?.active || !Array.isArray(watch.shifts)) {
+    return [];
+  }
+  const starts = watch.shifts
+    .map((shift) => shift?.startTime)
+    .filter((start) => Number.isFinite(start))
+    .sort((a, b) => a - b);
+  if (starts.length === 0) {
+    return [];
+  }
+  const cycle = Number.isFinite(watch.cycleMs) ? watch.cycleMs : 0;
+  const startedAt = Number.isFinite(watch.startedAt) ? watch.startedAt : null;
+  const out = new Set();
+  for (const start of starts) {
+    if (cycle > 0) {
+      let k = Math.ceil((fromMs - start) / cycle);
+      for (; start + k * cycle <= untilMs; k++) {
+        const instant = start + k * cycle;
+        if (instant >= fromMs && (startedAt == null || instant >= startedAt)) {
+          out.add(instant);
+        }
+      }
+    } else if (
+      start >= fromMs &&
+      start <= untilMs &&
+      (startedAt == null || start >= startedAt)
+    ) {
+      out.add(start);
+    }
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+/**
+ * Anchors recommendation-driven sail changes to the moments the whole
+ * crew can act on them (work doc #5 follow-up). Two anchor sources,
+ * in order of preference:
+ *
+ * 1. **Watch changes** (when a watch schedule is running — the
+ *    boundary is stronger than sunlight): every change moves to the
+ *    *previous* watch change, where both watches are awake at
+ *    handover, so canvas comes down slightly early rather than going
+ *    late. Boundaries repeat with the rotation cycle, so the whole
+ *    forecast horizon is covered.
+ * 2. **Sunrise/sunset** (no watch running): the night flags on the
+ *    hourly rows are the app's own day/night boundaries, so each
+ *    night-flag flip between consecutive rows is a sunrise or sunset
+ *    at hourly resolution, and every change moves to the first such
+ *    boundary at or after its detection.
+ *
+ * Several detections before the same boundary collapse into one
+ * change carrying the last suggested state, and a change that would
+ * re-rig the same canvas is dropped. The hourly rows are rewritten to
+ * the anchored schedule (rows before the first boundary show the
+ * pre-change rig), so the plan's state column matches what the crew
+ * is actually asked to do and when. Tacks and gybes (`.maneuver`
+ * events) are navigation-driven and stay at their tactical times —
+ * canvas work waits for daylight or a handover, course work does not.
+ *
+ * Detections with no boundary in reach keep their detection time: an
+ * unanchored change still beats a dropped one. Each anchored event
+ * carries `anchor` (`"watch"`, `"dusk"`, `"dawn"`) so the timeline
+ * can say why the change sits where it sits.
+ *
+ * @param {Array<{hoursFromNow: number, sailState: string|null,
+ *   previousSailState?: string|null, maneuver?: string, [key: string]:
+ *   unknown}>} events - Recommendation-driven sail events
+ * @param {Array<{hoursFromNow: number, timestamp: string, night:
+ *   boolean, sailState: string|null}>} rows - Hourly rows (mutated:
+ *   `sailState` rewritten to the anchored schedule)
+ * @param {object|null} [watch] - Running watch schedule (see
+ *   {@link watchBoundaries})
+ * @returns {Array<object>} Anchored events, chronological
+ */
+export function anchorSailChanges(events, rows, watch = null) {
+  if (rows.length === 0) {
+    return [...events];
+  }
+
+  // Anchor candidates: watch changes when a schedule runs, else the
+  // sun's own boundaries from the rows' night flags
+  let usePrevious = false;
+  const boundaries = [];
+  if (watch?.active) {
+    const refMs =
+      new Date(rows[0].timestamp).getTime() - rows[0].hoursFromNow * 3600000;
+    const maxHours = rows[rows.length - 1].hoursFromNow;
+    const nightAt = (hours) => {
+      let best = null;
+      let bestDelta = Infinity;
+      for (const row of rows) {
+        const delta = Math.abs(row.hoursFromNow - hours);
+        if (delta < bestDelta) {
+          bestDelta = delta;
+          best = row;
+        }
+      }
+      return Boolean(best?.night);
+    };
+    for (const instant of watchBoundaries(
+      watch,
+      refMs,
+      refMs + maxHours * 3600000,
+    )) {
+      const hoursFromNow = (instant - refMs) / 3600000;
+      boundaries.push({
+        hoursFromNow,
+        timestamp: new Date(instant).toISOString(),
+        night: nightAt(hoursFromNow),
+        kind: "watch",
+      });
+    }
+    usePrevious = boundaries.length > 0;
+  }
+  if (boundaries.length === 0) {
+    for (let i = 1; i < rows.length; i++) {
+      if (Boolean(rows[i].night) !== Boolean(rows[i - 1].night)) {
+        boundaries.push({
+          hoursFromNow: rows[i].hoursFromNow,
+          timestamp: rows[i].timestamp,
+          night: Boolean(rows[i].night),
+          kind: rows[i].night ? "dusk" : "dawn",
+        });
+      }
+    }
+  }
+
+  // Anchor each detection, keeping the last suggested state per
+  // boundary
+  const anchoredByBoundary = new Map();
+  const unanchored = [];
+  for (const event of events) {
+    if (event.maneuver) {
+      unanchored.push(event);
+      continue;
+    }
+    const boundary = usePrevious
+      ? [...boundaries]
+          .reverse()
+          .find((candidate) => candidate.hoursFromNow <= event.hoursFromNow)
+      : boundaries.find(
+          (candidate) => candidate.hoursFromNow >= event.hoursFromNow,
+        );
+    if (!boundary) {
+      unanchored.push(event);
+      continue;
+    }
+    const existing = anchoredByBoundary.get(boundary.hoursFromNow);
+    anchoredByBoundary.set(boundary.hoursFromNow, {
+      ...event,
+      hoursFromNow: boundary.hoursFromNow,
+      timestamp: boundary.timestamp,
+      night: boundary.night,
+      anchor: boundary.kind,
+      // Collapsed detections keep the earliest prior state: the rows
+      // before the boundary rewind to the rig the plan started with
+      previousSailState: existing?.previousSailState ?? event.previousSailState,
+    });
+  }
+
+  const anchored = [...anchoredByBoundary.values()].sort(
+    (a, b) => a.hoursFromNow - b.hoursFromNow,
+  );
+
+  // Drop re-rigs of the canvas the schedule already carries; the
+  // first change is always kept — it differs from the initial rig by
+  // construction
+  const kept = [];
+  for (const event of anchored) {
+    const previous = kept.at(-1)?.sailState ?? event.previousSailState;
+    if (kept.length > 0 && event.sailState === previous) {
+      continue;
+    }
+    kept.push(event);
+  }
+
+  // Rewrite the rows to the anchored schedule: rows at or after a
+  // boundary carry that boundary's rig, rows before the first one
+  // show the pre-change rig
+  for (const row of rows) {
+    let applicable = null;
+    for (const event of kept) {
+      if (event.hoursFromNow <= row.hoursFromNow) {
+        applicable = event;
+      }
+    }
+    if (applicable) {
+      row.sailState = applicable.sailState;
+    } else if (kept.length > 0) {
+      const first = kept[0];
+      if (first.previousSailState != null) {
+        row.sailState = first.previousSailState;
+      }
+    }
+  }
+
+  return [...kept, ...unanchored].sort(
+    (a, b) => a.hoursFromNow - b.hoursFromNow,
+  );
+}
+
+/**
  * Runs the step-forward simulation once.
  *
  * @param {object} params
@@ -512,12 +727,15 @@ export function simulateRun({
             hours - pendingSailSince >= STEP_HOURS)
         ) {
           // First rig of the passage, or the suggestion held through a
-          // full step: a real change
+          // full step: a real change. The prior state rides along so
+          // twilight anchoring can restore the plan's pre-change rig.
+          const previousSailState = sailState;
           sailState = suggestedState;
           sailEvents.push({
             hoursFromNow: Math.round(hours * 10) / 10,
             timestamp: t.toISOString(),
             sailState,
+            previousSailState: previousSailState ?? null,
             night,
             propulsion,
           });
@@ -676,6 +894,9 @@ function energySummary(energyHourly, startTime) {
  * @param {object} [params.polar] - Polar table
  * @param {Array} [params.notes] - Hazard notes
  * @param {Array<{timestamp: string, solarWh?: number, loadWh?: number}>} [params.energyHourly]
+ * @param {object} [params.watch] - Running watch schedule
+ *   (signalk-watch-schedule): sail changes anchor to watch changes
+ *   while it runs
  * @param {Date} [params.startTime]
  * @returns {object} simulationResult
  */
@@ -687,6 +908,7 @@ export function simulatePassage({
   performanceFactor,
   notes,
   energyHourly,
+  watch = null,
   startTime = new Date(),
 }) {
   // Accept an ISO string (the payload stores fetchedAt as text) or a
@@ -730,6 +952,18 @@ export function simulatePassage({
     );
   };
 
+  // Tacks and gybes the plan implies (work doc #5): read off the
+  // raw hourly plan before twilight anchoring rewrites the rows.
+  // Recommendation-driven changes are then anchored to sunrise/sunset
+  // with conditions at the change point (nearest hourly step) so the
+  // timeline can say what the crew is rigging into
+  const maneuvers = detectManeuvers(nominal.hourly);
+  const sailPlan = anchorSailChanges(
+    nominal.sailEvents ?? [],
+    nominal.hourly ?? [],
+    watch,
+  );
+
   return {
     eta: {
       p10: pct(0),
@@ -744,15 +978,10 @@ export function simulatePassage({
     motoringHours: nominal.motoringHours,
     fuelConsumptionLiters: nominal.fuelLiters,
     hourlyComfort: nominal.hourly,
-    // Tacks and gybes the plan implies, merged into the sail-change
-    // queue alongside the recommendation-driven changes (work doc
-    // #5); every event carries the forecast conditions at the change
-    // point (nearest hourly step) so the timeline can say what the
-    // crew is rigging into
-    sailEvents: [
-      ...(nominal.sailEvents ?? []),
-      ...detectManeuvers(nominal.hourly),
-    ]
+    // Merged sail-work queue: twilight-anchored canvas changes plus
+    // the tactical tacks/gybes, every event carrying the forecast
+    // conditions at the change point (nearest hourly step)
+    sailEvents: [...sailPlan, ...maneuvers]
       .map((event) => {
         let row = null;
         let bestDelta = Infinity;

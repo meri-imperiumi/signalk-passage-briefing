@@ -34,6 +34,10 @@
       "@meri-imperiumi/signalk-energy-predictor",
       "@meri-imperiumi/signalk-internet",
       "signalk-polar-management"
+    ],
+    "recommends": [
+      "signalk-watch-schedule",
+      "signalk-ships-time"
     ]
   },
   "engines": {

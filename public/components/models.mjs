@@ -627,6 +627,16 @@ export function mergeTimeline(exceptions, payload = null) {
     // enriched conditions block.
     const conditions = e.conditions ?? null;
     const tws = conditions?.twsKnots ?? e.twsAtManeuver ?? null;
+    // Why the change sits where it sits: watch handover when a watch
+    // schedule runs, else the sunrise/sunset it waits for
+    const anchorText =
+      e.anchor === "watch"
+        ? "watch change"
+        : e.anchor === "dusk"
+          ? "at dusk"
+          : e.anchor === "dawn"
+            ? "at dawn"
+            : null;
     push({
       hoursFromNow: e.hoursFromNow ?? null,
       timestamp: e.timestamp ?? null,
@@ -642,6 +652,7 @@ export function mergeTimeline(exceptions, payload = null) {
           ? `Hs ${conditions.hsMeters.toFixed(1)} m`
           : null,
         conditions?.comfortLevel ?? null,
+        anchorText,
       ]
         .filter(Boolean)
         .join(" · "),
