@@ -972,3 +972,31 @@ test("zone transitions ride the simulated schedule (work doc #17)", async () => 
   assert.equal(enter.hoursFromNow, null);
   assert.equal(enter.timestamp, null);
 });
+
+describe("energy consumption (work doc #10)", () => {
+  test("the predictor's series powers the frozen 24h contract", async () => {
+    const { filterExceptions, simulatePassage } = await simPromise;
+    const payload = buildPayload();
+    payload.energyHourly =
+      require("./fixtures/energy-forecast-hourly.json").map((entry) => ({
+        timestamp: entry.time,
+        solarWh:
+          (entry.idealSolarYieldWh ?? 0) +
+          (entry.idealWindYieldWh ?? 0) +
+          (entry.idealHydroYieldWh ?? 0) +
+          (entry.alternatorWh ?? 0),
+        loadWh: entry.houseLoadWh ?? 0,
+      }));
+    const exceptions = filterExceptions(
+      simulatePassage({
+        payload,
+        startTime: new Date("2026-10-03T07:28:57.661Z"),
+      }),
+    );
+    // The frozen 24h consumer contract fires now that data flows
+    assert.ok(exceptions.next24h.solarYieldKwh != null);
+    assert.equal(typeof exceptions.next24h.energyDeficitAlert, "boolean");
+    // The payload's own series is the fallback source
+    assert.ok(exceptions.next24h.solarYieldKwh > 0);
+  });
+});

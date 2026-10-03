@@ -29,6 +29,7 @@ const GLYPHS = {
   space: "✦",
   hazard: "⚠",
   line: "⌀",
+  energy: "🔋",
 };
 
 /**

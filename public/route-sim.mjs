@@ -1062,6 +1062,8 @@ function timestampZoneTransitions(transitions, rows) {
  * @param {object} [params.polar] - Polar table
  * @param {Array} [params.notes] - Hazard notes
  * @param {Array<{timestamp: string, solarWh?: number, loadWh?: number}>} [params.energyHourly]
+ *   Energy forecast series; falls back to the payload's own
+ *   `energyHourly` (work doc #10: the series rides the payload)
  * @param {object} [params.watch] - Running watch schedule
  *   (signalk-watch-schedule): sail changes anchor to watch changes
  *   while it runs
@@ -1085,6 +1087,9 @@ export function simulatePassage({
   if (Number.isNaN(startTime.getTime())) {
     startTime = new Date();
   }
+  // The energy series rides the briefing payload (work doc #10); the
+  // explicit param wins when a caller feeds a different series
+  energyHourly = energyHourly ?? payload?.energyHourly ?? null;
   const runs = ETA_FACTORS.map((twsFactor) =>
     simulateRun({
       payload,

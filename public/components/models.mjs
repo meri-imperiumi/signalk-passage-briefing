@@ -366,6 +366,48 @@ export function hereHourly(payload, config = {}, hours = 24) {
  * @param {Array<object>} [rows] - {@link hereHourly} rows for comfort
  * @returns {{comfortLevel: string|null, color: string, twsKnots: number|null, twdDeg: number|null, gustKnots: number|null, hsMeters: number|null, tpSeconds: number|null, currentDriftKnots: number|null, currentSetDeg: number|null, mslpHpa: number|null, mslpTrend: number|null, stamp: string}}
  */
+/**
+ * Energy summary for the conditions-here view (work doc #10): the
+ * predictor's hourly series summed over the forward 24 h, generation
+ * and net — the passage strip's here-mode sibling at SOG 0.
+ *
+ * @param {object|null} payload - Here payload (optional
+ *   `energyHourly`)
+ * @returns {{netSolar24h: number|null, netBalance24h: number|null}}
+ *   kWh, null when the payload carries no forecast
+ */
+export function hereEnergySummary(payload) {
+  const hours = payload?.energyHourly ?? [];
+  if (!Array.isArray(hours) || hours.length === 0) {
+    return { netSolar24h: null, netBalance24h: null };
+  }
+  const start = payload?.metadata?.fetchedAt
+    ? new Date(payload.metadata.fetchedAt).getTime()
+    : Date.now();
+  const end = start + 24 * 3600000;
+  let solar = 0;
+  let balance = 0;
+  let seen = 0;
+  for (const hour of hours) {
+    const t = new Date(hour.timestamp).getTime();
+    if (Number.isNaN(t) || t < start || t >= end) {
+      continue;
+    }
+    const solarWh = typeof hour.solarWh === "number" ? hour.solarWh : 0;
+    const loadWh = typeof hour.loadWh === "number" ? hour.loadWh : 0;
+    solar += solarWh;
+    balance += solarWh - loadWh;
+    seen++;
+  }
+  if (seen === 0) {
+    return { netSolar24h: null, netBalance24h: null };
+  }
+  return {
+    netSolar24h: Math.round(solar) / 1000,
+    netBalance24h: Math.round(balance) / 1000,
+  };
+}
+
 export function hereNow(payload, rows = []) {
   const step = payload?.waypoints?.[0]?.forecasts?.[0];
   if (!step) {
@@ -913,6 +955,43 @@ export function mergeTimeline(exceptions, payload = null) {
       continue;
     }
     item.night = trackNightAt(item.hoursFromNow, track, baseMs) ?? false;
+  }
+
+  // Energy events (work doc #10): the predictor's own surplus and
+  // deficit terms, not an independent derivation — surplus is forecast
+  // curtailment (battery full, yield continues), deficit is the
+  // outlook status saying the battery keeps going down
+  for (const e of payload?.energyEvents ?? []) {
+    const deficit = e.type === "deficit";
+    push({
+      hoursFromNow: relHours(e.timestamp, fetchMs),
+      timestamp: e.timestamp ?? null,
+      kind: "energy",
+      severity: deficit
+        ? e.status === "critical"
+          ? "severe"
+          : "warn"
+        : "info",
+      label: deficit
+        ? e.status === "critical"
+          ? "Energy critical"
+          : "Energy deficit"
+        : "Energy surplus",
+      detail: [
+        e.netWh != null
+          ? `${e.netWh >= 0 ? "+" : "−"}${(Math.abs(e.netWh) / 1000).toFixed(1)} kWh`
+          : null,
+        e.timestamp != null && e.endTimestamp != null
+          ? `until ${fmtUtc(e.endTimestamp)}`
+          : null,
+        deficit && e.timeToEmpty != null
+          ? `battery depleted by ${fmtUtc(e.timeToEmpty)}`
+          : null,
+        e.type === "surplus" ? "run opportunistic loads" : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    });
   }
 
   // Lines of interest (work doc #1): the traditional ceremonial

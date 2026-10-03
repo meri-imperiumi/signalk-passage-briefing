@@ -413,7 +413,11 @@ class PassageOutlook extends HTMLElement {
     const button = document.createElement("button");
     button.textContent = "Fetch now";
     button.disabled = this._status?.online !== true;
-    button.addEventListener("click", () => this.refreshBriefing());
+    // Here mode refreshes the conditions payload; the route-select
+    // flow would target the selected route instead
+    button.addEventListener("click", () =>
+      mode === "here" ? this.refreshHereBriefing() : this.refreshBriefing(),
+    );
     strip.append(text, button);
     this._view.before(strip);
   }
@@ -479,6 +483,9 @@ class PassageOutlook extends HTMLElement {
         // The payload covers the fetch window forward; hours are read
         // from its own timestamps
         startTime: payload.metadata?.fetchedAt ?? new Date().toISOString(),
+        // Energy forecast (work doc #10): the predictor's hourly
+        // series rides the payload
+        energyHourly: payload.energyHourly ?? null,
       },
     });
   }
@@ -522,7 +529,27 @@ class PassageOutlook extends HTMLElement {
     if (here && this._briefing?.payload) {
       here.setHere(this._briefing.payload, this._config ?? {});
     }
+    here?.setOnline(this._status?.online === true);
+    here.onRefresh = () => this.refreshHereBriefing();
     this.renderDisclaimer();
+  }
+
+  /**
+   * Refreshes the conditions-here briefing specifically: the header's
+   * route-select flow would target the selected route, and the here
+   * payload is what the crew is looking at (work doc #7; the energy
+   * and other payload fields only arrive on a recompile).
+   */
+  async refreshHereBriefing() {
+    this.renderLoading("Fetching conditions…");
+    try {
+      await fetchJson(`${PLUGIN_API}/briefing/refresh`, 120000, {
+        method: "POST",
+      });
+      await this.loadBriefing("");
+    } catch (error) {
+      this.showError(fetchErrorMessage(error, "Refresh failed"));
+    }
   }
 
   /** Pushes the latest exceptions into the active screen. */

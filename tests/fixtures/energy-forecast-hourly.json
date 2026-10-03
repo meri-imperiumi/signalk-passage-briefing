@@ -1,0 +1,156 @@
+[
+  {
+    "hour": 0,
+    "time": "2026-10-03T07:28:57.661Z",
+    "idealSolarYieldWh": 0,
+    "idealWindYieldWh": 0,
+    "idealHydroYieldWh": 0,
+    "alternatorWh": 0,
+    "houseLoadWh": 130,
+    "idealNetWh": -130,
+    "idealSoC": 0.903
+  },
+  {
+    "hour": 1,
+    "time": "2026-10-03T08:28:57.661Z",
+    "idealSolarYieldWh": 0,
+    "idealWindYieldWh": 0,
+    "idealHydroYieldWh": 0,
+    "alternatorWh": 0,
+    "houseLoadWh": 80,
+    "idealNetWh": -80,
+    "idealSoC": 0.886
+  },
+  {
+    "hour": 2,
+    "time": "2026-10-03T09:28:57.661Z",
+    "idealSolarYieldWh": 0,
+    "idealWindYieldWh": 8,
+    "idealHydroYieldWh": 0,
+    "alternatorWh": 0,
+    "houseLoadWh": 80,
+    "idealNetWh": -71,
+    "idealSoC": 0.871
+  },
+  {
+    "hour": 12,
+    "time": "2026-10-03T19:28:57.661Z",
+    "idealSolarYieldWh": 119,
+    "idealWindYieldWh": 5,
+    "idealHydroYieldWh": 0,
+    "alternatorWh": 0,
+    "houseLoadWh": 126,
+    "idealNetWh": -1,
+    "idealSoC": 0.719
+  },
+  {
+    "hour": 13,
+    "time": "2026-10-03T20:28:57.661Z",
+    "idealSolarYieldWh": 183,
+    "idealWindYieldWh": 5,
+    "idealHydroYieldWh": 0,
+    "alternatorWh": 0,
+    "houseLoadWh": 126,
+    "idealNetWh": 63,
+    "idealSoC": 0.732
+  },
+  {
+    "hour": 14,
+    "time": "2026-10-03T21:28:57.661Z",
+    "idealSolarYieldWh": 244,
+    "idealWindYieldWh": 8,
+    "idealHydroYieldWh": 0,
+    "alternatorWh": 0,
+    "houseLoadWh": 126,
+    "idealNetWh": 126,
+    "idealSoC": 0.758
+  },
+  {
+    "hour": 15,
+    "time": "2026-10-03T22:28:57.661Z",
+    "idealSolarYieldWh": 373,
+    "idealWindYieldWh": 8,
+    "idealHydroYieldWh": 0,
+    "alternatorWh": 0,
+    "houseLoadWh": 126,
+    "idealNetWh": 256,
+    "idealSoC": 0.811
+  },
+  {
+    "hour": 16,
+    "time": "2026-10-03T23:28:57.661Z",
+    "idealSolarYieldWh": 542,
+    "idealWindYieldWh": 8,
+    "idealHydroYieldWh": 0,
+    "alternatorWh": 0,
+    "houseLoadWh": 126,
+    "idealNetWh": 424,
+    "idealSoC": 0.9
+  },
+  {
+    "hour": 17,
+    "time": "2026-10-04T00:28:57.661Z",
+    "idealSolarYieldWh": 673,
+    "idealWindYieldWh": 7,
+    "idealHydroYieldWh": 0,
+    "alternatorWh": 0,
+    "houseLoadWh": 126,
+    "idealNetWh": 555,
+    "idealSoC": 1
+  },
+  {
+    "hour": 18,
+    "time": "2026-10-04T01:28:57.661Z",
+    "idealSolarYieldWh": 636,
+    "idealWindYieldWh": 7,
+    "idealHydroYieldWh": 0,
+    "alternatorWh": 0,
+    "houseLoadWh": 126,
+    "idealNetWh": 517,
+    "idealSoC": 1
+  },
+  {
+    "hour": 23,
+    "time": "2026-10-04T06:28:57.661Z",
+    "idealSolarYieldWh": 0,
+    "idealWindYieldWh": 0,
+    "idealHydroYieldWh": 0,
+    "alternatorWh": 0,
+    "houseLoadWh": 130,
+    "idealNetWh": -130,
+    "idealSoC": 0.973
+  },
+  {
+    "hour": 24,
+    "time": "2026-10-04T07:28:57.661Z",
+    "idealSolarYieldWh": 0,
+    "idealWindYieldWh": 6,
+    "idealHydroYieldWh": 0,
+    "alternatorWh": 0,
+    "houseLoadWh": 130,
+    "idealNetWh": -124,
+    "idealSoC": 0.947
+  },
+  {
+    "hour": 25,
+    "time": "2026-10-04T08:28:57.661Z",
+    "idealSolarYieldWh": 0,
+    "idealWindYieldWh": 6,
+    "idealHydroYieldWh": 0,
+    "alternatorWh": 0,
+    "houseLoadWh": 80,
+    "idealNetWh": -74,
+    "idealSoC": 0.932
+  },
+  {
+    "hour": 26,
+    "time": "2026-10-04T09:28:57.661Z",
+    "idealSolarYieldWh": 0,
+    "idealWindYieldWh": 6,
+    "idealHydroYieldWh": 0,
+    "alternatorWh": 0,
+    "houseLoadWh": 80,
+    "idealNetWh": -74,
+    "idealSoC": 0.916
+  }
+]

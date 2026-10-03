@@ -220,6 +220,13 @@ interface UnifiedWeatherPayload {
     territory: string;
   }[];
   zoneDisclaimer?: string;      // Marine Regions attribution + no-navigation notice
+  energyHourly?: {
+    timestamp: string;          // ISO hour stamp
+    solarWh: number;            // total ideal generation (solar+wind+hydro+alternator)
+    loadWh: number;             // house consumption
+    netWh: number;              // solarWh - loadWh
+    soc: number | null;         // ideal SoC 0-1 at hour end
+  }[];                          // signalk-energy-predictor forecast, 48 h
 }
 
 interface TimeStepForecast {

@@ -59,6 +59,12 @@ const {
 const hazardSource = require("./hazard-source.js");
 const maritimeZones = require("./maritime-zones-source.js");
 const {
+  adaptEnergyForecast,
+  energyEventsFromState,
+  ENERGY_FORECAST_PATH,
+  ENERGY_OUTLOOK_PATHS,
+} = require("./energy-source.js");
+const {
   backfillSailEvents,
   createHistoryWindStats,
   createLogbookWindStats,
@@ -97,6 +103,8 @@ const WATCHED_PATHS = [
   NAVIGATION_STATE_PATH,
   HOUSE_SOC_PATH,
   ACTIVE_ROUTE_PATH,
+  ENERGY_FORECAST_PATH,
+  ...Object.values(ENERGY_OUTLOOK_PATHS),
 ];
 
 /** Flat paths the plotter tile consumes (work doc #8). */
@@ -553,6 +561,24 @@ module.exports = (app) => {
   }
 
   /**
+   * Attaches the energy outlook to a briefing payload (work doc #10):
+   * the adapted hourly series plus the predictor's own surplus and
+   * deficit terms, derived from its subscribed outlook paths.
+   *
+   * @param {object} payload - Briefing payload to attach to
+   */
+  function attachEnergyToPayload(payload) {
+    payload.energyEvents = energyEventsFromState({
+      status: observations[ENERGY_OUTLOOK_PATHS.status],
+      net: observations[ENERGY_OUTLOOK_PATHS.net],
+      surplus: observations[ENERGY_OUTLOOK_PATHS.surplus],
+      surplusFrom: observations[ENERGY_OUTLOOK_PATHS.surplusFrom],
+      surplusTo: observations[ENERGY_OUTLOOK_PATHS.surplusTo],
+      timeToEmpty: observations[ENERGY_OUTLOOK_PATHS.timeToEmpty],
+    });
+  }
+
+  /**
    * Vessel position from the Signal K self path (work doc #7 here
    * mode). Both wrapped and plain value shapes are unwrapped.
    *
@@ -641,6 +667,14 @@ module.exports = (app) => {
       lon: position.lon,
     });
     await attachHazardEvents(payload, position, waypoints);
+    // Energy forecast (work doc #10): the predictor's subscribed
+    // hourly series adapts into the consumer contract and rides the
+    // payload, so the offline hours re-derive from the cache; the
+    // energy events are the predictor's own surplus/deficit terms
+    payload.energyHourly = adaptEnergyForecast(
+      observations[ENERGY_FORECAST_PATH],
+    );
+    attachEnergyToPayload(payload);
     // Here mode reports the waters the vessel is in right now instead
     // of transitions (work doc #17); the disclaimer rides along and
     // everything caches together
@@ -803,6 +837,12 @@ module.exports = (app) => {
       app.debug?.(`Zone transitions failed: ${error.message}`);
     }
     await attachHazardEvents(payload, vesselPosition(), waypoints);
+    // Energy forecast (work doc #10): rides the payload like the here
+    // mode's, powering the 24 h strip; the outlook terms ride along
+    payload.energyHourly = adaptEnergyForecast(
+      observations[ENERGY_FORECAST_PATH],
+    );
+    attachEnergyToPayload(payload);
     await savePayload(app.getDataDirPath(), routeId, payload);
     await writeFile(
       join(app.getDataDirPath(), "weather", "last-route"),

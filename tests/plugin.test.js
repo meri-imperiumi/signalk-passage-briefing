@@ -94,7 +94,7 @@ describe("plugin", () => {
     plugin.stop();
   });
 
-  test("subscribes to the state machine and active-route paths", () => {
+  test("subscribes to the state machine, active-route and energy paths", () => {
     const app = createMockApp();
     const plugin = pluginFactory(app);
     plugin.start({});
@@ -108,6 +108,13 @@ describe("plugin", () => {
       "navigation.state",
       "electrical.batteries.house.capacity.stateOfCharge",
       "navigation.course.activeRoute",
+      "electrical.energy.prediction.forecast.hourly",
+      "electrical.energy.prediction.status",
+      "electrical.energy.prediction.net",
+      "electrical.energy.prediction.surplus",
+      "electrical.energy.prediction.surplus.from",
+      "electrical.energy.prediction.surplus.to",
+      "electrical.energy.prediction.timeToEmpty",
     ]);
   });
 
@@ -1805,6 +1812,105 @@ test("zone transitions: briefing survives when zone tiles cannot download", asyn
     // No tile data: no transitions field, no disclaimer
     assert.equal(res.payload.payload.zoneTransitions, undefined);
     assert.equal(res.payload.payload.zoneDisclaimer, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  plugin.stop();
+});
+
+test("energy forecast: predictor delta adapts into the payload", async () => {
+  const { mockOpenMeteo } = require("./openmeteo-mock.js");
+  const app = createMockApp();
+  app.getSelfPath = (path) =>
+    path === "navigation.position"
+      ? { latitude: -18.658, longitude: -173.982 }
+      : null;
+  const plugin = pluginFactory(app);
+  plugin.start({});
+  plugin.registerWithRouter(app.router);
+  const feed = app.getDeltaHandlers()[0];
+  const call = async (path) => {
+    const r = app.getRoutes().find((x) => x.path === path);
+    const res = {
+      code: null,
+      payload: null,
+      status(c) {
+        this.code = c;
+        return this;
+      },
+      json(p) {
+        this.payload = p;
+      },
+    };
+    await r.handler({ query: {} }, res);
+    return res;
+  };
+
+  feed({
+    updates: [
+      { values: [{ path: "network.internet.state", value: "online" }] },
+    ],
+  });
+  // The predictor's hourly forecast arrives as one delta value
+  feed({
+    updates: [
+      {
+        values: [
+          {
+            path: "electrical.energy.prediction.forecast.hourly",
+            value: [
+              {
+                hour: 0,
+                time: new Date(Date.now() + 3600000).toISOString(),
+                idealSolarYieldWh: 100,
+                idealWindYieldWh: 0,
+                idealHydroYieldWh: 0,
+                alternatorWh: 0,
+                houseLoadWh: 80,
+                idealNetWh: 20,
+                idealSoC: 0.85,
+              },
+            ],
+          },
+          {
+            path: "electrical.energy.prediction.status",
+            value: "surplus",
+          },
+          {
+            path: "electrical.energy.prediction.surplus",
+            value: 1200,
+          },
+          {
+            path: "electrical.energy.prediction.surplus.from",
+            value: "2026-10-03T10:00:00.000Z",
+          },
+          {
+            path: "electrical.energy.prediction.surplus.to",
+            value: "2026-10-03T15:00:00.000Z",
+          },
+        ],
+      },
+    ],
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = mockOpenMeteo();
+  try {
+    await call("/api/briefing/refresh");
+    const res = await call("/api/briefing");
+    const series = res.payload.payload.energyHourly ?? [];
+    assert.equal(series.length, 1);
+    assert.equal(series[0].solarWh, 100); // Total generation
+    assert.equal(series[0].loadWh, 80);
+    assert.equal(series[0].netWh, 20);
+    assert.equal(series[0].soc, 0.85);
+    // The predictor's own surplus term rides the payload as an event
+    const events = res.payload.payload.energyEvents ?? [];
+    const surplus = events.find((e) => e.type === "surplus");
+    assert.ok(surplus, "surplus event derived from the predictor's state");
+    assert.equal(surplus.netWh, 1200);
+    assert.equal(surplus.timestamp, "2026-10-03T10:00:00.000Z");
+    assert.equal(surplus.endTimestamp, "2026-10-03T15:00:00.000Z");
   } finally {
     globalThis.fetch = originalFetch;
   }

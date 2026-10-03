@@ -770,4 +770,46 @@ test("webapp view models", async (t) => {
     assert.equal(convective.night, true);
     assert.equal(zone.night, false);
   });
+
+  await t.test(
+    "mergeTimeline maps the predictor's surplus and deficit terms",
+    () => {
+      const timeline = mergeTimeline(
+        { passageSummary: {} },
+        {
+          metadata: { fetchedAt: "2026-10-03T07:28:57.000Z" },
+          energyEvents: [
+            {
+              type: "surplus",
+              timestamp: "2026-10-03T20:28:57.000Z",
+              endTimestamp: "2026-10-04T01:28:57.000Z",
+              netWh: 1938,
+              status: "surplus",
+              timeToEmpty: null,
+            },
+            {
+              type: "deficit",
+              timestamp: null,
+              endTimestamp: null,
+              netWh: -780,
+              status: "deficit",
+              timeToEmpty: "2026-10-05T18:00:00.000Z",
+            },
+          ],
+        },
+      );
+      assert.deepEqual(
+        timeline.map((item) => [item.kind, item.severity, item.label]),
+        [
+          ["energy", "info", "Energy surplus"],
+          ["energy", "warn", "Energy deficit"],
+        ],
+      );
+      assert.match(timeline[0].detail, /\+1\.9 kWh/);
+      assert.match(timeline[0].detail, /opportunistic loads/);
+      assert.match(timeline[1].detail, /−0\.8 kWh/);
+      assert.match(timeline[1].detail, /battery depleted by/);
+      assert.equal(timeline[1].severity, "warn");
+    },
+  );
 });

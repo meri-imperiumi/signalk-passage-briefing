@@ -12,7 +12,13 @@
  * @file components/conditions-here.js
  */
 
-import { fmtKn, hereHourly, hereNow, splitSevere } from "./models.mjs";
+import {
+  fmtKn,
+  hereEnergySummary,
+  hereHourly,
+  hereNow,
+  splitSevere,
+} from "./models.mjs";
 import { SK_BASE_CSS } from "./sk-base-css.js";
 
 /**
@@ -90,10 +96,22 @@ class ConditionsHere extends HTMLElement {
         dd { margin: 0; font-family: var(--font-data, ui-monospace, monospace); }
         .console { margin: 0; white-space: pre-wrap; font-family: var(--font-data, ui-monospace, monospace); font-size: 0.85rem; }
         .severe { color: var(--color-red); font-weight: 700; }
+        .card-head {
+          display: flex; align-items: center; justify-content: space-between;
+          gap: 8px;
+        }
+        .card-head h2 { margin: 0; }
+        .refresh {
+          min-height: 36px; padding: 6px 12px; flex: none;
+        }
+        .refresh:disabled { opacity: 0.5; }
         .note { color: var(--color-grey); font-size: 0.85rem; margin: 4px 0 0; }
       </style>
       <section class="sk-card theme-teal">
-        <h2>Conditions Here</h2>
+        <div class="card-head">
+          <h2>Conditions Here</h2>
+          <button id="refresh" class="refresh">Fetch now</button>
+        </div>
         <p class="note">No active route — conditions at the vessel</p>
         <div class="now">
           <span class="value" id="pos">—</span>
@@ -105,6 +123,7 @@ class ConditionsHere extends HTMLElement {
           <dt>Sea</dt><dd id="sea">—</dd>
           <dt>Current</dt><dd id="current">—</dd>
           <dt>Pressure</dt><dd id="pressure">—</dd>
+          <dt>Energy 24h</dt><dd id="energy">—</dd>
         </dl>
         <horizon-sparkline id="spark"></horizon-sparkline>
       </section>
@@ -133,6 +152,7 @@ class ConditionsHere extends HTMLElement {
     this._seaEl = this.shadowRoot.getElementById("sea");
     this._currentEl = this.shadowRoot.getElementById("current");
     this._pressureEl = this.shadowRoot.getElementById("pressure");
+    this._energyEl = this.shadowRoot.getElementById("energy");
     this._spark = this.shadowRoot.getElementById("spark");
     this._warningsCard = this.shadowRoot.getElementById("warnings-card");
     this._warningsEl = this.shadowRoot.getElementById("warnings");
@@ -142,10 +162,34 @@ class ConditionsHere extends HTMLElement {
     this._hazardsEl = this.shadowRoot.getElementById("hazards");
     this._zonesCard = this.shadowRoot.getElementById("zones-card");
     this._zonesEl = this.shadowRoot.getElementById("zones");
+    this._refreshEl = this.shadowRoot.getElementById("refresh");
+    this._refreshEl.disabled = !this._online;
+    this._refreshEl.addEventListener("click", () => this.onRefresh?.());
     if (this._payload) {
       this.setHere(this._payload, this._config);
     }
   }
+
+  /**
+   * Online state: the fetch button only fires while the link is up
+   * (the server refuses offline refreshes).
+   *
+   * @param {boolean} online
+   */
+  setOnline(online) {
+    this._online = online === true;
+    if (this._refreshEl) {
+      this._refreshEl.disabled = !this._online;
+    }
+  }
+
+  /**
+   * Refresh callback (set by the root component): posts the here
+   * refresh and reloads — the conditions view otherwise has no way to
+   * recompile, and a cached payload predating a new payload field
+   * would render stale forever.
+   */
+  onRefresh = null;
 
   /**
    * Renders from the here payload and simulation config.
@@ -203,6 +247,21 @@ class ConditionsHere extends HTMLElement {
               : ""
           }`
         : "—";
+
+    // Energy strip (work doc #10): the predictor's forecast summed
+    // over the forward 24 h at SOG 0 — generation and net balance.
+    // A payload with no energy field at all predates the feature (or
+    // the predictor's delta had not arrived at compile time): say so
+    // instead of the generic dash, so the crew knows to refresh
+    const energy = hereEnergySummary(payload);
+    this._energyEl.textContent =
+      energy.netSolar24h != null
+        ? `+${energy.netSolar24h.toFixed(1)} kWh solar, net ${
+            energy.netBalance24h >= 0 ? "+" : "−"
+          }${Math.abs(energy.netBalance24h).toFixed(1)} kWh`
+        : payload?.energyHourly
+          ? "no forward hours in forecast"
+          : "no energy forecast";
 
     this._spark.setColumns(rows);
 
