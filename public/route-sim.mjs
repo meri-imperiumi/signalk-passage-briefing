@@ -21,6 +21,7 @@
  * @module route-sim
  */
 
+import { detectLineCrossings } from "./lines-of-interest.js";
 import {
   bearingRad,
   DEFAULT_POLAR_TABLE,
@@ -57,6 +58,7 @@ export const SIMULATION_DEFAULTS = {
   waterline_length_m: 9.4,
   k_heel: 0.35,
   k_pitch: 0.4,
+  lines_of_interest_enabled: true,
 };
 
 /**
@@ -1012,6 +1014,16 @@ export function simulatePassage({
   const base = runs.find((r) => r !== null);
   const nominal = runs[ETA_FACTORS.indexOf(1.0)] ?? base;
 
+  // Lines of interest (work doc #1): wind-independent, so computed
+  // once for the passage rather than per perturbed run — along the
+  // simulated track, whose timestamps are the boat's schedule (the
+  // payload waypoints' forecasts all start at the fetch window, which
+  // would put every crossing at "now")
+  const simCfg = { ...SIMULATION_DEFAULTS, ...config };
+  const linesOfInterest = simCfg.lines_of_interest_enabled
+    ? detectLineCrossings(nominal.hourly ?? [])
+    : [];
+
   const etas = runs.map((run) => run.etaHours).sort((a, b) => a - b);
   const pctHours = (p) =>
     etas[Math.min(etas.length - 1, Math.round(p * (etas.length - 1)))];
@@ -1058,6 +1070,9 @@ export function simulatePassage({
     motoringHours: nominal.motoringHours,
     fuelConsumptionLiters: nominal.fuelLiters,
     hourlyComfort: nominal.hourly,
+    // Ceremonial line crossings (work doc #1): wind-independent,
+    // computed once for the passage
+    linesOfInterest,
     // Merged sail-work queue: twilight-anchored canvas changes plus
     // the tactical tacks/gybes, every event carrying the forecast
     // conditions at the change point (nearest hourly step)
@@ -1128,6 +1143,8 @@ export function filterExceptions(simulationResult) {
       // Whole-route hazard alerts (work doc #18): the unified
       // timeline slices per screen, so the summary carries them all
       hazards: simulationResult.hazardAlerts ?? [],
+      // Ceremonial line crossings (work doc #1)
+      linesOfInterest: simulationResult.linesOfInterest ?? [],
       // Anomalies merge into episodes (start hour, time range, peak
       // values) — a five-hour warning band reads as one timeline
       // event, not five lines

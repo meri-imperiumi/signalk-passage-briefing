@@ -77,6 +77,11 @@ signalk-passage-outlook/
       "type": "number",
       "title": "Pitching Acceleration Multiplier Constant",
       "default": 0.40
+    },
+    "lines_of_interest_enabled": {
+      "type": "boolean",
+      "title": "Lines of Interest (ceremonial crossings)",
+      "default": true
     }
   }
 }

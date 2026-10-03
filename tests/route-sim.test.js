@@ -16,6 +16,10 @@ const approx = (actual, expected, epsilon = 1e-6) =>
  * route with steady conditions.
  */
 function buildPayload({
+  route = [
+    [0, 0],
+    [0, 3],
+  ],
   hours = 72,
   tws = 10,
   /** Per-hour TWS overrides (bin-edge chatter fixtures). */
@@ -30,10 +34,7 @@ function buildPayload({
   steepHour = null,
   convectiveHour = null,
 } = {}) {
-  const track = sampleRoutePoints([
-    [0, 0],
-    [0, 3],
-  ]);
+  const track = sampleRoutePoints(route);
   const waypoints = track.map((w) => ({
     ...w,
     forecasts: Array.from({ length: hours }, (_, h) => {
@@ -396,6 +397,57 @@ describe("simulatePassage", () => {
     assert.ok(exceptions.passageSummary.macroSeaAnomalies.length === 0);
     assert.ok(exceptions.passageSummary.convectiveWarnings.length === 0);
     assert.ok(Array.isArray(exceptions.passageSummary.hazards));
+  });
+
+  test("lines of interest ride the simulated track (work doc #1)", async () => {
+    const { filterExceptions, simulatePassage } = await simPromise;
+    const startTime = new Date("2026-06-21T06:00:00Z");
+    // 240 nm meridian leg from 1°S to 1°N: crosses the equator
+    const payload = buildPayload({
+      route: [
+        [179, -1],
+        [179, 1],
+      ],
+    });
+    const exceptions = filterExceptions(
+      simulatePassage({ payload, startTime }),
+    );
+    const lines = exceptions.passageSummary.linesOfInterest;
+    assert.equal(lines.length, 1);
+    const equator = lines[0];
+    assert.equal(equator.lineId, "equator");
+    assert.equal(equator.lat, 0);
+    assert.equal(equator.lon, 179);
+    // ETA from the simulated schedule, not the fetch window: the
+    // crossing sits within the passage's own duration
+    const eta = new Date(equator.eta).getTime();
+    assert.ok(eta > startTime.getTime(), `eta ${equator.eta}`);
+    assert.ok(
+      eta <= new Date(exceptions.passageSummary.etaP90).getTime(),
+      `eta ${equator.eta} within passage`,
+    );
+    assert.ok(
+      equator.distanceFromStartNm > 50 && equator.distanceFromStartNm < 70,
+      `distance ${equator.distanceFromStartNm}`,
+    );
+  });
+
+  test("lines of interest disabled by config stays empty", async () => {
+    const { filterExceptions, simulatePassage } = await simPromise;
+    const payload = buildPayload({
+      route: [
+        [179, -1],
+        [179, 1],
+      ],
+    });
+    const exceptions = filterExceptions(
+      simulatePassage({
+        payload,
+        startTime: new Date("2026-06-21T06:00:00Z"),
+        config: { lines_of_interest_enabled: false },
+      }),
+    );
+    assert.deepEqual(exceptions.passageSummary.linesOfInterest, []);
   });
 
   test("convective warnings surface in the passage summary", async () => {

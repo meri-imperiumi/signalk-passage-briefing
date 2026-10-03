@@ -138,6 +138,7 @@ const DEFAULTS = {
   spool_directory: join(homedir(), ".signalk", "spool", "passage-outlook"),
   k_heel: 0.35,
   k_pitch: 0.4,
+  lines_of_interest_enabled: true,
   /** Verified NWS High Seas Forecast feeds (METAREA XII/XV). The
    * METAREA XIV issuer (MetService) gets added as a URL once a
    * working endpoint is confirmed on board. */
@@ -1092,6 +1093,14 @@ module.exports = (app) => {
           title: "Pitching Acceleration Multiplier Constant",
           default: DEFAULTS.k_pitch,
         },
+        lines_of_interest_enabled: {
+          type: "boolean",
+          title: "Lines of Interest (ceremonial crossings)",
+          description:
+            "Detect equator, tropic, polar-circle, prime-meridian and " +
+            "antimeridian crossings along the planned route.",
+          default: DEFAULTS.lines_of_interest_enabled,
+        },
         bulletin_urls: {
           type: "array",
           title: "High Seas Bulletin Sources (NAVAREA / HSF text)",
@@ -1176,6 +1185,7 @@ module.exports = (app) => {
         waterline_length_m: config.waterline_length_m,
         k_heel: config.k_heel,
         k_pitch: config.k_pitch,
+        lines_of_interest_enabled: config.lines_of_interest_enabled,
       };
       stateMachine = new PassageStateMachine();
       db = new PassageDatabase(app.getDataDirPath());

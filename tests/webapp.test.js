@@ -632,4 +632,49 @@ test("webapp view models", async (t) => {
     );
     assert.equal(timeline[0].moon, null);
   });
+
+  await t.test("mergeTimeline maps lines of interest as line events", () => {
+    const timeline = mergeTimeline(
+      {
+        passageSummary: {
+          linesOfInterest: [
+            {
+              lineId: "antimeridian",
+              lineName: "Antimeridian / Date Line",
+              ceremony: "Domain of the Golden Dragon",
+              note: "the calendar skips or repeats by 24 h",
+              lat: -21,
+              lon: -180,
+              distanceFromStartNm: 640.2,
+              eta: "2026-06-23T18:00:00.000Z",
+            },
+            {
+              lineId: "tropic-capricorn",
+              lineName: "Tropic of Capricorn",
+              ceremony: null,
+              lat: -23.4366,
+              lon: 174,
+              distanceFromStartNm: 810,
+              eta: null,
+            },
+          ],
+        },
+      },
+      { metadata: { fetchedAt: "2026-06-21T06:00:00.000Z" } },
+    );
+    assert.deepEqual(
+      timeline.map((item) => [item.kind, item.hoursFromNow]),
+      [
+        ["line", 60],
+        ["line", null],
+      ],
+    );
+    assert.equal(
+      timeline[0].label,
+      "Antimeridian / Date Line — Domain of the Golden Dragon",
+    );
+    assert.match(timeline[0].detail, /21\.0°S 180\.0°W/);
+    assert.match(timeline[0].detail, /24 h/);
+    assert.equal(timeline[1].label, "Tropic of Capricorn");
+  });
 });

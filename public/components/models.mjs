@@ -664,6 +664,23 @@ function moonGlyphFor(timestamp, payload) {
     : null;
 }
 
+/**
+ * Formats a position for the timeline detail line: degrees and
+ * minutes are overkill here — one decimal and a hemisphere letter.
+ *
+ * @param {number|null} lat - Latitude degrees
+ * @param {number|null} lon - Longitude degrees east
+ * @returns {string|null}
+ */
+function formatCoord(lat, lon) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return null;
+  }
+  const ns = lat >= 0 ? "N" : "S";
+  const ew = lon >= 0 ? "E" : "W";
+  return `${Math.abs(lat).toFixed(1)}°${ns} ${Math.abs(lon).toFixed(1)}°${ew}`;
+}
+
 export function mergeTimeline(exceptions, payload = null) {
   const summary = exceptions?.passageSummary ?? {};
   const fetchMs = payload?.metadata?.fetchedAt
@@ -809,6 +826,28 @@ export function mergeTimeline(exceptions, payload = null) {
         z.distanceFromStartNm != null
           ? `${Math.round(z.distanceFromStartNm)} nm`
           : "",
+    });
+  }
+
+  // Lines of interest (work doc #1): the traditional ceremonial
+  // crossings, riding the timeline as `line` events (the general form
+  // the timeline was built for — no separate block)
+  for (const l of summary.linesOfInterest ?? []) {
+    push({
+      hoursFromNow: relHours(l.eta, fetchMs),
+      timestamp: l.eta ?? null,
+      kind: "line",
+      severity: "info",
+      label: l.ceremony ? `${l.lineName} — ${l.ceremony}` : l.lineName,
+      detail: [
+        formatCoord(l.lat, l.lon),
+        l.note ?? null,
+        l.distanceFromStartNm != null
+          ? `${Math.round(l.distanceFromStartNm)} nm`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
     });
   }
 
