@@ -225,12 +225,16 @@ async function saveHazards(dataDir, events) {
  * @param {string} params.dataDir - Plugin data directory
  * @param {typeof fetch} [params.fetchImpl]
  * @param {number} [params.timeoutMs]
+ * @param {Function} [params.onFailure] - Called with the failure
+ *   (transport error or HTTP status error) when the feed could not
+ *   be fetched this cycle (source status registry, work doc #23)
  * @returns {Promise<{fetched: boolean, events: Array<object>}>}
  */
 async function refreshHazards({
   dataDir,
   fetchImpl = fetch,
   timeoutMs = 15000,
+  onFailure,
 }) {
   const cached = await loadHazards(dataDir);
   let incoming = null;
@@ -242,8 +246,13 @@ async function refreshHazards({
     });
     if (response.ok) {
       incoming = parseHazardsXml(await response.text());
+    } else {
+      onFailure?.(
+        new Error(`${response.status} ${response.statusText}`.trim()),
+      );
     }
-  } catch {
+  } catch (error) {
+    onFailure?.(error);
     incoming = null;
   } finally {
     clearTimeout(timer);

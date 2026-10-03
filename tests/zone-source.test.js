@@ -9,6 +9,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { join } = require("node:path");
 
 const {
   extractGmdssPre,
@@ -18,6 +19,8 @@ const {
   parseUkhoWarnings,
   resolveZones,
   romanNumeral,
+  parseRnwDateTime,
+  parseRnwHtml,
   tgftpUrl,
   ukhoWarningsUrl,
 } = require("../plugin/zone-source.js");
@@ -102,10 +105,15 @@ test("roman numerals and URL construction", () => {
   assert.equal(romanNumeral(4), "IV");
   assert.equal(romanNumeral(21), "XXI");
   assert.equal(gmdssBulletinUrl(14), "https://weather.gmdss.org/XIV.html");
+  // The UKHO coordinates NAVAREA I only: zone 1 reads the RNW page,
+  // other zones have no UKHO source at all (the old per-area JSON
+  // API is gone and XIV 404s forever)
   assert.equal(
-    ukhoWarningsUrl(14),
-    "https://msi.admiralty.co.uk/api/Warnings/Area/XIV",
+    ukhoWarningsUrl(1),
+    "https://msi.admiralty.co.uk/RadioNavigationalWarnings",
   );
+  assert.equal(ukhoWarningsUrl(14), null);
+  assert.equal(ukhoWarningsUrl(10), null);
   assert.equal(
     tgftpUrl("fqps01", "NFFN"),
     "https://tgftp.nws.noaa.gov/data/raw/fq/fqps01.nffn..txt",
@@ -223,4 +231,47 @@ test("fetch ladder: only resolved zones are fetched", async () => {
   assert.equal(fetched.length, 2);
   assert.ok(fetched.some((u) => u.includes("XIV.html")));
   assert.ok(fetched.some((u) => u.includes("X.html")));
+});
+
+// --- UKHO Radio Navigational Warnings page --------------------------------
+
+const readFixture = (name) =>
+  require("node:fs").readFileSync(join(__dirname, "fixtures", name), "utf8");
+
+test("parseRnwDateTime reads the RNW date-time group", () => {
+  assert.equal(
+    parseRnwDateTime("021011 UTC Oct 26"),
+    "2026-10-02T10:11:00.000Z",
+  );
+  // 4-digit years and full month names tolerated
+  assert.equal(
+    parseRnwDateTime("010230 UTC Jan 2027"),
+    "2027-01-01T02:30:00.000Z",
+  );
+  assert.equal(parseRnwDateTime("not a dtg"), null);
+  assert.equal(parseRnwDateTime(null), null);
+});
+
+test("parseRnwHtml extracts reference, DTG and full text from the live page shape", () => {
+  const warnings = parseRnwHtml(readFixture("ukho-rnw-sample.html"));
+  assert.ok(warnings.length >= 2, "multiple warnings parsed");
+  const first = warnings[0];
+  // Reference and DTG prepend the console text, so the block reads
+  // like a bulletin; the raw ANMB text follows
+  assert.match(
+    first.text,
+    /^NAVAREA I 220\/26\n021011 UTC Oct 26\n\n1\. NAVAREA I/,
+  );
+  assert.equal(first.issuedAt, "2026-10-02T10:11:00.000Z");
+  // Entity-encoded newlines (&#xA;) decoded into real paragraphs
+  assert.ok(first.text.includes("\n\n2026 SERIES"));
+  // Same shape the parseUkhoWarnings pipeline consumes: text,
+  // issuedAt, coordinates (empty — the text pipeline filters)
+  assert.deepEqual(first.coordinates, []);
+  assert.ok(
+    warnings.every((w) => typeof w.text === "string" && w.text.length > 0),
+  );
+  // Chrome without warning sections parses to nothing
+  assert.deepEqual(parseRnwHtml("<html><body>cookie banner</body></html>"), []);
+  assert.deepEqual(parseRnwHtml(""), []);
 });

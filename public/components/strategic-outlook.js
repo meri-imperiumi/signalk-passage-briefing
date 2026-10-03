@@ -8,6 +8,7 @@
 
 import { etaTable, fmtShip, mergeTimeline, splitSevere } from "./models.mjs";
 import "./passage-timeline.js";
+import "./source-status.js";
 import { SK_BASE_CSS } from "./sk-base-css.js";
 
 /**
@@ -63,6 +64,7 @@ class StrategicOutlook extends HTMLElement {
         <h2>Warnings On Your Waters</h2>
         <div class="console" id="blocks"></div>
       </section>
+      <source-status></source-status>
       <synoptic-chart hidden></synoptic-chart>
     `;
     this._etaBody = this.shadowRoot.getElementById("eta-body");

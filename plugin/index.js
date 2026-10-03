@@ -20,7 +20,13 @@
 
 const { join } = require("node:path");
 const { homedir } = require("node:os");
-const { mkdir, readFile, unlink, writeFile } = require("node:fs/promises");
+const {
+  mkdir,
+  readdir,
+  readFile,
+  unlink,
+  writeFile,
+} = require("node:fs/promises");
 
 const { PassageStateMachine } = require("./state-machine.js");
 const { PassageDatabase } = require("./sqlite-db.js");
@@ -39,12 +45,15 @@ const {
   loadSynoptic,
   loadSynopticFailure,
   refreshSynoptics,
+  loadSynopticMap,
+  chartUrlForZone,
 } = require("./synoptic-source.js");
 const {
   fetchZoneBulletins,
   parseUkhoWarnings,
   resolveZones,
   ukhoWarningsUrl,
+  parseRnwHtml,
 } = require("./zone-source.js");
 const { fetchSpaceEvents } = require("./celestial-source.js");
 const ephemeris = require("./celestial-ephemeris.js");
@@ -79,6 +88,7 @@ const {
   savePayload,
 } = require("./fetch-engine.js");
 const { createWeatherFetcher } = require("./weather-source.js");
+const { createSourceStatus } = require("./source-status.js");
 
 /**
  * Plugin identifier (matches package name without the scope).
@@ -118,6 +128,22 @@ const BRIEF_AGE_HOURS_PATH = "navigation.briefing.ageHours";
 /** A route briefing is overdue when the next daily edition misses
  * this line (work doc #13); here mode keeps its 3h TTL. */
 const ROUTE_TTL_MS = 26 * 60 * 60 * 1000;
+
+/**
+ * Per-source expected refresh intervals for the source status
+ * registry (work doc #23): the client flags a source as stale when
+ * its last success is older than this. Weather models refresh
+ * roughly twice a day, bulletin and synoptic sources publish on the
+ * 00Z/12Z synoptic hours; the ephemeris is recomputed on every
+ * compile.
+ */
+const SOURCE_REFRESH_MS = {
+  weather: 6 * 60 * 60 * 1000,
+  bulletin: 12 * 60 * 60 * 1000,
+  chart: 12 * 60 * 60 * 1000,
+  hazard: 12 * 60 * 60 * 1000,
+  ephemeris: 24 * 60 * 60 * 1000,
+};
 
 /**
  * How often the cron ticker checks whether a publication window is due.
@@ -247,6 +273,121 @@ module.exports = (app) => {
   let trackWeatherFetcher = null;
   /** Last staleness-backstop fetch (rate limit anchor). */
   let lastStaleRefreshAt = 0;
+  /** Per-source status registry (work doc #23). */
+  let sourceStatus = null;
+
+  /** Registry metadata for the sources recorded from here. */
+  const WEATHER_SOURCE = {
+    id: "weather-track",
+    label: "Weather forecast",
+    kind: "weather",
+    expectedRefreshMs: SOURCE_REFRESH_MS.weather,
+  };
+  const EPHEMERIS_SOURCE = {
+    id: "celestial-ephemeris",
+    label: "Celestial ephemeris",
+    kind: "ephemeris",
+    expectedRefreshMs: SOURCE_REFRESH_MS.ephemeris,
+  };
+  const HAZARD_SOURCE = {
+    id: "hazard-gdacs",
+    label: "GDACS hazard feed",
+    kind: "hazard",
+    url: hazardSource.GDACS_RSS_URL,
+    expectedRefreshMs: SOURCE_REFRESH_MS.hazard,
+  };
+
+  /** Checklist metadata for a zone's bulletin sources. */
+  const bulletinZoneSource = (zone) => ({
+    id: `bulletin-zone-${zone}`,
+    label: `GMDSS zone ${zone} bulletins`,
+    kind: "bulletin",
+    expectedRefreshMs: SOURCE_REFRESH_MS.bulletin,
+  });
+  /** Checklist metadata for a zone's UKHO structured warnings. */
+  const ukhoZoneSource = (zone) => ({
+    id: `ukho-zone-${zone}`,
+    label: `UKHO warnings (zone ${zone})`,
+    kind: "bulletin",
+    expectedRefreshMs: SOURCE_REFRESH_MS.bulletin,
+  });
+  /** Checklist metadata for a zone's synoptic chart. */
+  const synopticZoneSource = (zone) => ({
+    id: `synoptic-zone-${zone}`,
+    label: `Synoptic chart (zone ${zone})`,
+    kind: "chart",
+    expectedRefreshMs: SOURCE_REFRESH_MS.chart,
+  });
+  /** Checklist metadata for one configured extra bulletin feed; the
+   * id anchors to the configuration position so a renamed URL keeps
+   * its history slot. */
+  const customBulletinSource = (index) => ({
+    id: `bulletin-custom-${index}`,
+    label: `Bulletin feed ${index + 1}`,
+    kind: "bulletin",
+    expectedRefreshMs: SOURCE_REFRESH_MS.bulletin,
+  });
+
+  /**
+   * Runs one ingest step and records its outcome in the source
+   * status registry (work doc #23). Errors propagate unchanged after
+   * being recorded.
+   *
+   * @param {object} meta - Source metadata (id, label, kind, url,
+   *   expectedRefreshMs)
+   * @param {Function} task - The ingest step
+   * @returns {Promise<object>} The task's result
+   */
+  async function withSourceStatus(meta, task) {
+    try {
+      const result = await task();
+      sourceStatus?.record(meta);
+      return result;
+    } catch (error) {
+      sourceStatus?.record({ ...meta, error });
+      throw error;
+    }
+  }
+
+  /**
+   * Records the checklist outcome of the configured extra bulletin
+   * feeds: one entry per URL, success and failure alike (work doc
+   * #23).
+   *
+   * @param {object} result - refreshBulletins result
+   * @param {Map<string, Error>} errors - URL → error from onFailure
+   * @returns {void}
+   */
+  function recordCustomBulletinStatuses(result, errors) {
+    for (const url of [...result.fetched, ...result.failed]) {
+      const index = bulletinUrls.indexOf(url);
+      if (index === -1) {
+        continue;
+      }
+      sourceStatus?.record({
+        ...customBulletinSource(index),
+        url,
+        ...(errors.has(url) ? { error: errors.get(url) } : {}),
+      });
+    }
+  }
+
+  /**
+   * Pulls the configured extra bulletin feeds with their source
+   * status recorded.
+   *
+   * @returns {Promise<object>} refreshBulletins result
+   */
+  async function refreshCustomBulletins() {
+    const errors = new Map();
+    const result = await refreshBulletins({
+      dataDir: app.getDataDirPath(),
+      urls: bulletinUrls,
+      onFailure: (url, error) => errors.set(url, error),
+    });
+    recordCustomBulletinStatuses(result, errors);
+    return result;
+  }
 
   /**
    * Whether the internet link currently allows fetching.
@@ -397,32 +538,70 @@ module.exports = (app) => {
    *   for zone resolution (position-only when omitted)
    */
   async function refreshBulletinsOnline(trigger, waypoints = []) {
+    const track = waypoints.map((w) => [w.lon, w.lat]);
+    const zones = resolveZones(track);
     if (!isOnline()) {
+      // Skipped cycles are recorded, not hidden (work doc #23): the
+      // checklist must distinguish "not attempted, boat offline"
+      // from an attempted-and-failed cycle
+      for (const zone of zones) {
+        sourceStatus?.record({ ...bulletinZoneSource(zone), skip: true });
+        // Only zones the UKHO coordinates have a UKHO rung to skip
+        if (ukhoWarningsUrl(zone)) {
+          sourceStatus?.record({ ...ukhoZoneSource(zone), skip: true });
+        }
+      }
+      for (const [index, url] of bulletinUrls.entries()) {
+        sourceStatus?.record({
+          ...customBulletinSource(index),
+          url,
+          skip: true,
+        });
+      }
       return;
     }
     // Zone-targeted pulls (work doc #9 fetch strategy): TGFTP fast
     // path for configured stations, GMDSS portal fallback, then the
     // UKHO MSI JSON for the same zones (structured navigational
     // warnings stored raw and filtered at serve time)
-    const track = waypoints.map((w) => [w.lon, w.lat]);
-    const zones = resolveZones(track);
     const zoneBulletins = await fetchZoneBulletins({
       zones,
       tgftpStations: bulletinStations,
+      onFailure: (zone, url, error) =>
+        sourceStatus?.record({ ...bulletinZoneSource(zone), url, error }),
     });
     for (const zone of zones) {
+      // The ladder records failures via onFailure; the zones whose
+      // ladder produced text record their success here
+      const entry = zoneBulletins.find((b) => b.zone === zone);
+      if (entry) {
+        sourceStatus?.record({ ...bulletinZoneSource(zone), url: entry.url });
+      }
+    }
+    for (const zone of zones) {
+      // The UKHO coordinates NAVAREA I only: other zones have no
+      // source here and are skipped, not fetched into 404s
       const url = ukhoWarningsUrl(zone);
+      if (!url) {
+        continue;
+      }
       try {
         const { text } = await resolveBulletinSource(url, {});
+        // The RNW page HTML parses into the same structured warning
+        // shape the old UKHO JSON API fed; the cache entry stays a
+        // "ukho-json" blob, filtered at serve time as before
+        const warnings = parseRnwHtml(text);
         zoneBulletins.push({
           url,
-          text,
+          text: JSON.stringify(warnings),
           source: "ukho",
           zone,
           format: "ukho-json",
         });
-      } catch {
+        sourceStatus?.record({ ...ukhoZoneSource(zone), url });
+      } catch (error) {
         // UKHO unavailable this cycle: portal text still covers the zone
+        sourceStatus?.record({ ...ukhoZoneSource(zone), url, error });
       }
     }
     const result = await refreshBulletins({
@@ -432,10 +611,7 @@ module.exports = (app) => {
     });
     // Custom extra feeds (source-agnostic escape hatch)
     if (bulletinUrls.length > 0) {
-      const extra = await refreshBulletins({
-        dataDir: app.getDataDirPath(),
-        urls: bulletinUrls,
-      });
+      const extra = await refreshCustomBulletins();
       result.fetched.push(...extra.fetched);
       result.failed.push(...extra.failed);
     }
@@ -457,10 +633,13 @@ module.exports = (app) => {
    * @param {Array<{lat: number, lon: number}>} [waypoints]
    */
   async function refreshSynopticsOnline(trigger, waypoints = []) {
+    const zones = resolveZones(waypoints.map((w) => [w.lon, w.lat]));
     if (!isOnline()) {
+      for (const zone of zones) {
+        sourceStatus?.record({ ...synopticZoneSource(zone), skip: true });
+      }
       return;
     }
-    const zones = resolveZones(waypoints.map((w) => [w.lon, w.lat]));
     if (zones.length === 0) {
       return;
     }
@@ -471,7 +650,22 @@ module.exports = (app) => {
       // whole briefing window (candidates are tried in order)
       timeoutMs: 8000,
     });
+    // Checklist outcome per zone (work doc #23): fetched and "same
+    // chart already cached" are both healthy cycles, failures carry
+    // the classified error
+    const map = loadSynopticMap();
+    for (const zone of [...result.fetched, ...result.skipped]) {
+      sourceStatus?.record({
+        ...synopticZoneSource(zone),
+        url: chartUrlForZone(map, zone)?.urls?.[0] ?? null,
+      });
+    }
     for (const failure of result.failed) {
+      sourceStatus?.record({
+        ...synopticZoneSource(failure.zone),
+        url: failure.url,
+        error: failure.error,
+      });
       app.error?.(
         `Synoptic chart fetch failed (zone ${failure.zone}): ` +
           `${failure.url} — ${failure.error}`,
@@ -543,10 +737,15 @@ module.exports = (app) => {
       return;
     }
     try {
-      await hazardSource.refreshHazards({
+      const result = await hazardSource.refreshHazards({
         dataDir: app.getDataDirPath(),
         timeoutMs: 15000,
+        onFailure: (error) => sourceStatus?.record({ ...HAZARD_SOURCE, error }),
       });
+      // A cycle without a recorded failure means the feed answered
+      if (result.fetched) {
+        sourceStatus?.record(HAZARD_SOURCE);
+      }
     } catch (error) {
       app.debug?.(`Hazard refresh failed: ${error.message}`);
     }
@@ -650,10 +849,12 @@ module.exports = (app) => {
     await refreshSynopticsOnline("here", waypoints);
     // forecast_days=2: Open-Meteo's first day starts at 00Z, so two
     // days guarantee 24 forward hours from any fetch time
-    const payload = await trackWeatherFetcher({
-      waypoints,
-      forecastDays: 2,
-    });
+    const payload = await withSourceStatus(WEATHER_SOURCE, () =>
+      trackWeatherFetcher({
+        waypoints,
+        forecastDays: 2,
+      }),
+    );
     payload.metadata.mode = "here";
     const bulletin = await bulletinForTrack(waypoints);
     if (bulletin) {
@@ -669,12 +870,14 @@ module.exports = (app) => {
       lon: position.lon,
       cloudCoverAt: ephemeris.cloudCoverLookup(payload),
     });
-    payload.celestialNights = ephemeris.celestialNights({
-      from: new Date(payload.metadata.fetchedAt),
-      days: 2,
-      lat: position.lat,
-      lon: position.lon,
-    });
+    payload.celestialNights = await withSourceStatus(EPHEMERIS_SOURCE, () =>
+      ephemeris.celestialNights({
+        from: new Date(payload.metadata.fetchedAt),
+        days: 2,
+        lat: position.lat,
+        lon: position.lon,
+      }),
+    );
     await attachHazardEvents(payload, position, waypoints);
     // Energy forecast (work doc #10): the predictor's subscribed
     // hourly series adapts into the consumer contract and rides the
@@ -779,6 +982,7 @@ module.exports = (app) => {
     forecastDays = DEFAULT_FORECAST_DAYS,
   ) {
     if (!isOnline()) {
+      sourceStatus?.record({ ...WEATHER_SOURCE, skip: true });
       throw new Error("Offline: internet weather is only fetched while online");
     }
     let coordinates;
@@ -799,7 +1003,9 @@ module.exports = (app) => {
     // metareaBulletin): pulled first so this briefing carries them
     await refreshBulletinsOnline("briefing", waypoints);
     await refreshSynopticsOnline("briefing", waypoints);
-    const payload = await trackWeatherFetcher({ waypoints, forecastDays });
+    const payload = await withSourceStatus(WEATHER_SOURCE, () =>
+      trackWeatherFetcher({ waypoints, forecastDays }),
+    );
     const bulletin = await bulletinForTrack(waypoints);
     if (bulletin) {
       payload.metareaBulletin = bulletin;
@@ -814,12 +1020,14 @@ module.exports = (app) => {
       lon: waypoints[0].lon,
       cloudCoverAt: ephemeris.cloudCoverLookup(payload),
     });
-    payload.celestialNights = ephemeris.celestialNights({
-      from: new Date(payload.metadata.fetchedAt),
-      days: forecastDays,
-      lat: waypoints[0].lat,
-      lon: waypoints[0].lon,
-    });
+    payload.celestialNights = await withSourceStatus(EPHEMERIS_SOURCE, () =>
+      ephemeris.celestialNights({
+        from: new Date(payload.metadata.fetchedAt),
+        days: forecastDays,
+        lat: waypoints[0].lat,
+        lon: waypoints[0].lon,
+      }),
+    );
     // Territorial waters transitions (work doc #17): corridor tiles
     // download during the online window; the boundary walk resamples
     // the route at ~1 nm so a short territorial hop is not missed.
@@ -927,6 +1135,7 @@ module.exports = (app) => {
    */
   async function runFetch(trigger) {
     if (!isOnline()) {
+      sourceStatus?.record({ ...WEATHER_SOURCE, skip: true });
       setStatus(`Fetch skipped while offline (${trigger})`);
       return;
     }
@@ -1214,6 +1423,139 @@ module.exports = (app) => {
   }
 
   /**
+   * Records the Signal K source availability in the source status
+   * registry (work doc #23): the checklist also covers the server
+   * side — the subscribed paths the state machine and the payload
+   * compile consume, and the resource sources the briefing depends
+   * on. A required path with no value since startup reads as a
+   * failure (`unavailable`); an optional source that is simply not
+   * there (companion plugin not installed, no route being sailed)
+   * records as absent — information, not an error.
+   *
+   * Runs from the cron ticker: the first minute of uptime is the
+   * grace period in which the server replays current values to the
+   * new subscriptions.
+   *
+   * @param {Date} [now]
+   */
+  async function recordSignalKSources(now = new Date()) {
+    if (!sourceStatus) {
+      return;
+    }
+    const unwrap = (v) =>
+      v && typeof v === "object" && v.value !== undefined ? v.value : v;
+    const selfPath = (path) =>
+      typeof app.getSelfPath === "function"
+        ? unwrap(app.getSelfPath(path))
+        : null;
+    const pathSources = [
+      {
+        id: "sk-internet-state",
+        path: INTERNET_STATE_PATH,
+        label: "Internet state (signalk-internet)",
+        required: true,
+      },
+      {
+        id: "sk-navigation-state",
+        path: NAVIGATION_STATE_PATH,
+        label: "Navigation state",
+        required: true,
+      },
+      {
+        id: "sk-house-soc",
+        path: HOUSE_SOC_PATH,
+        label: "House battery SoC",
+        required: true,
+      },
+      {
+        id: "sk-active-route",
+        path: ACTIVE_ROUTE_PATH,
+        label: "Active route",
+        required: false,
+      },
+      {
+        id: "sk-energy-prediction",
+        path: ENERGY_FORECAST_PATH,
+        label: "Energy outlook (energy-predictor)",
+        required: false,
+      },
+    ];
+    for (const source of pathSources) {
+      const missing = observations[source.path] == null;
+      sourceStatus.record({
+        id: source.id,
+        label: source.label,
+        kind: "signalk",
+        url: source.path,
+        ...(missing
+          ? source.required
+            ? {
+                error: new Error("No value received since startup"),
+                errorClass: "unavailable",
+              }
+            : { absent: true }
+          : {}),
+        now,
+      });
+    }
+    // Resource-side sources
+    const routesAvailable =
+      typeof app.resourcesApi?.getResource === "function" &&
+      typeof app.resourcesApi?.listResources === "function";
+    sourceStatus.record({
+      id: "sk-routes-resources",
+      label: "Route resources",
+      kind: "signalk",
+      url: "resources/routes",
+      ...(routesAvailable
+        ? {}
+        : {
+            error: new Error("Resources API not available on this server"),
+            errorClass: "unavailable",
+          }),
+      now,
+    });
+    // Optional sources: present or absent, never failed
+    const optionalSelfPaths = [
+      {
+        id: "sk-polar",
+        path: "polars.activePolar",
+        label: "Active polar (polar-management)",
+      },
+      {
+        id: "sk-ships-time",
+        path: "environment.time.timezoneOffset",
+        label: "Ship's time (signalk-ships-time)",
+      },
+    ];
+    for (const source of optionalSelfPaths) {
+      sourceStatus.record({
+        id: source.id,
+        label: source.label,
+        kind: "signalk",
+        url: source.path,
+        ...(selfPath(source.path) == null ? { absent: true } : {}),
+        now,
+      });
+    }
+    let logbookReadable = false;
+    try {
+      await readdir(logbookStoreDir());
+      logbookReadable = true;
+    } catch (_error) {
+      logbookReadable = false;
+    }
+    sourceStatus.record({
+      id: "sk-logbook",
+      label: "Logbook (signalk-logbook)",
+      kind: "signalk",
+      url: logbookStoreDir(),
+      ...(logbookReadable ? {} : { absent: true }),
+      now,
+    });
+  }
+
+  /**
    * Sail inventory keys (from `@signalk/sailsconfiguration`) used to
    * filter free-text noise out of manually edited log entries. Empty
    * set when no inventory is configured: everything then parses.
@@ -1458,6 +1800,17 @@ module.exports = (app) => {
       stateMachine = new PassageStateMachine();
       db = new PassageDatabase(app.getDataDirPath());
 
+      // Source status registry (work doc #23): configured sources
+      // get their checklist entries immediately, even before the
+      // first cycle runs
+      sourceStatus = createSourceStatus({ dataDir: app.getDataDirPath() });
+      sourceStatus.define(WEATHER_SOURCE);
+      sourceStatus.define(HAZARD_SOURCE);
+      sourceStatus.define(EPHEMERIS_SOURCE);
+      for (const [index, url] of bulletinUrls.entries()) {
+        sourceStatus.define({ ...customBulletinSource(index), url });
+      }
+
       // Warm the webapp models module so the first compile does not
       // pay the dynamic-import cost mid-refresh
       modelsPromise ??= import("../public/components/models.mjs");
@@ -1498,6 +1851,12 @@ module.exports = (app) => {
         if (briefMeta.generatedAt != null) {
           publishBriefMeta();
         }
+        // Signal K source availability for the checklist (work doc
+        // #23); the ticker interval doubles as the startup grace
+        // period for the server to replay current values
+        recordSignalKSources().catch((error) =>
+          app.debug?.(`Source status check failed: ${error.message}`),
+        );
       }, CRON_TICK_INTERVAL_MS);
       cronTimer.unref?.();
 
@@ -1577,6 +1936,11 @@ module.exports = (app) => {
         db.close();
         db = null;
       }
+      if (sourceStatus) {
+        // Best-effort: flush the pending persistence write
+        sourceStatus.flush().catch(() => {});
+        sourceStatus = null;
+      }
       stateMachine = null;
       setStatus("Passage briefing stopped");
     },
@@ -1585,6 +1949,8 @@ module.exports = (app) => {
      * REST API routes under `/plugins/<id>/`:
      *
      * - `GET /api/status` — state machine state and next cron window
+     * - `GET /sources` — per-source ingest status registry (work doc
+     *   #23): the webapp checklist and external diagnostics
      * - `GET /api/matrix` — learned sail preference matrix (SPEC §3.2)
      * - `GET /api/events` — recorded logbook sail events
      * - `GET /api/logbook-events` — sail events extracted from the
@@ -1609,6 +1975,13 @@ module.exports = (app) => {
           online: isOnline(),
           activeRouteId: activeRouteId(observations[ACTIVE_ROUTE_PATH]),
         });
+      });
+
+      /** Source status checklist (work doc #23): one entry per
+       * ingest path and Signal K source, the outcome of each one's
+       * latest cycle. */
+      router.get("/sources", (_req, res) => {
+        res.json(sourceStatus ? sourceStatus.list() : []);
       });
 
       router.get("/api/matrix", (_req, res) => {
@@ -1762,10 +2135,7 @@ module.exports = (app) => {
           "manual",
           position ? [{ lat: position.lat, lon: position.lon }] : [],
         );
-        const result = await refreshBulletins({
-          dataDir: app.getDataDirPath(),
-          urls: bulletinUrls,
-        });
+        const result = await refreshCustomBulletins();
         res.json(result);
       });
 
@@ -1902,6 +2272,8 @@ module.exports = (app) => {
     ...plugin,
     /** Exposed for tests: the staleness backstop check. */
     refreshIfStale,
+    /** Exposed for tests: the Signal K source availability check. */
+    recordSignalKSources,
   };
 };
 

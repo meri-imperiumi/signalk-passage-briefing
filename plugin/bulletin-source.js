@@ -95,6 +95,9 @@ async function saveBulletinCache(dataDir, entries) {
  *   [params.zoneBulletins] - Already-fetched zone bulletins
  * @param {typeof fetch} [params.fetchImpl]
  * @param {number} [params.timeoutMs]
+ * @param {Function} [params.onFailure] - Called with `(url, error)`
+ *   for every URL that failed this cycle (source status registry,
+ *   work doc #23)
  * @returns {Promise<{fetched: string[], failed: string[], entries: BulletinEntry[]}>}
  *   Newly fetched URLs (failures listed separately) and the merged
  *   cache
@@ -105,6 +108,7 @@ async function refreshBulletins({
   zoneBulletins = [],
   fetchImpl = fetch,
   timeoutMs,
+  onFailure,
 }) {
   const cached = await loadBulletinCache(dataDir);
   const fetched = [];
@@ -133,7 +137,8 @@ async function refreshBulletins({
         source,
       });
       fetched.push(url);
-    } catch {
+    } catch (error) {
+      onFailure?.(url, error);
       failed.push(url);
     }
   }

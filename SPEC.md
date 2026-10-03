@@ -164,6 +164,12 @@ The plugin monitors `network.internet.state`, `navigation.state`, and `electrica
 * **Cron Schedule Rules:** Runs at `02:15`, `08:15`, `14:15`, and `20:15` UTC (15 minutes after major global ensemble publication windows).
 * **Execution Guard:** Checks if `navigation.state === 'moored' | 'anchored'`. If `navigation.state === 'sailing'`, cron timers are disabled and data fetches are strictly tied to single explicit transitions of `network.internet.state` to `online` or `metered`.
 
+### 2.3 Data Source Status Registry (work doc #23)
+
+Every ingest path records the outcome of its latest cycle in a persistent per-source registry (`plugin/source-status.js`, persisted in `source-status.json`) so a moved URL or dead host is diagnosable mid-passage instead of surfacing only as absence of data. Covered sources: the weather fetch, per-zone bulletin/UKHO pulls, the configured extra bulletin feeds, the synoptic chart rasters, the GDACS hazard feed, the local celestial ephemeris, and — checked on the one-minute ticker — the Signal K sources themselves (required subscribed paths: internet state, navigation state, house SoC; optional: active route, energy outlook, route resources, polar, ship's time, logbook).
+
+Each entry carries `id`, `label`, `kind`, `url`, `lastAttemptAt`, `lastSuccessAt`, `lastError` (`{class, message}`), `consecutiveFailures`, `expectedRefreshMs` and `lastStatus` (`ok` / `fail` / `skip` / `absent`). Error classes are coarse and stable: `http-404`, `http-429`, `http-4xx`, `http-5xx`, `timeout`, `network`, `parse`, `unavailable`. Cycles the online gate skips record `offline-skipped` behavior via `lastStatus: "skip"` — never counted as failures. The registry serves at `GET /plugins/signalk-passage-briefing/sources` (diagnostics, not briefing content) and survives restarts.
+
 ---
 
 ## 3. Data Schemas & Structural Interfaces
@@ -563,6 +569,7 @@ Displays:
 2. Macro Sea State warnings block.
 3. Convective Warning block (CAPE / K-Index).
 4. Raw METAREA text bulletin container.
+5. `<source-status>` checklist (work doc #23): collapsed by default, summary line always visible ("12 sources, 1 FAIL"). Rows: last-attempt stamp (muted) | source label + kind | right-aligned monospace status bracket mapped by the pure `statusVerdict` view model — `[ OK ]` green, `[ WARN ]` orange (429/parse failures, or success stale beyond the source's expected refresh interval), `[ FAIL ]` red, `[ SKIP ]`/`[ N/A ]` muted. Tap expands the row's detail (URL, last success, classified error, consecutive failures). The component polls `GET /plugins/signalk-passage-briefing/sources` at a minute rate and mutates only `textContent`/class attributes; expanded state persists in `localStorage`.
 
 #### `<horizon-sparkline>` (SVG Renderer)
 

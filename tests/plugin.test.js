@@ -898,24 +898,6 @@ describe("plugin", () => {
       "OF AXIS 21S 178W TO 24S 175W.",
       "NNNN",
     ].join("\n");
-    const UKHO_JSON = JSON.stringify({
-      warnings: [
-        {
-          text: "NAVAREA XIV 115/26",
-          issuedAt: "2026-09-27T10:00:00Z",
-          coordinates: [
-            [-20.8, -175.6],
-            [-21.2, -174.8],
-            [-21.6, -175.4],
-          ],
-        },
-        {
-          text: "NAVAREA I 1/26",
-          issuedAt: "2026-09-27T09:00:00Z",
-          coordinates: [[50.0, -5.0]],
-        },
-      ],
-    });
 
     const app = createMockApp();
     const route = {
@@ -966,6 +948,7 @@ describe("plugin", () => {
       ],
     });
     const openMeteoFetch = mockOpenMeteo();
+    const ukhoRequests = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async (url) => {
       const u = String(url);
@@ -973,6 +956,7 @@ describe("plugin", () => {
         return { ok: true, text: async () => TGFTP_TEXT };
       }
       if (u.includes("msi.admiralty.co.uk")) {
+        ukhoRequests.push(u);
         return { ok: true, text: async () => UKHO_JSON };
       }
       if (u.includes("weather.gmdss.org")) {
@@ -984,35 +968,114 @@ describe("plugin", () => {
       const res = await call("/api/briefing/refresh");
       assert.equal(res.code, null);
 
-      // Both ingestion paths merge into one console, track-filtered:
-      // the UKHO polygon near Tonga and the TGFTP trough axis band
-      // stay, the UKHO warning in the North Sea is dropped
+      // The UKHO coordinates NAVAREA I only: a zone XIV route never
+      // fetches it (the old per-area JSON endpoint is gone)
+      assert.deepEqual(ukhoRequests, []);
       const briefing = await call("/api/briefing");
       const bulletin = briefing.payload.payload.metareaBulletin;
       assert.ok(bulletin, "bulletin attached");
       const texts = bulletin.blocks.map((b) => b.text);
-      assert.ok(texts.includes("NAVAREA XIV 115/26"), "ukho polygon kept");
-      assert.ok(!texts.includes("NAVAREA I 1/26"), "ukho far warning dropped");
       assert.ok(
         bulletin.blocks.some((b) => b.text.includes("TROUGH")),
         "tgftp text block kept",
       );
-      assert.ok(
-        bulletin.blocks.some((b) => b.source === "ukho"),
-        "ukho blocks carry their source",
-      );
-      assert.match(bulletin.header, /NAVAREA XIV/);
-      assert.equal(bulletin.issuedAt, "2026-09-27T10:00:00.000Z");
+      assert.match(bulletin.header, /GA14/); // TGFTP WMO header line
+      assert.ok(bulletin.issuedAt);
 
-      // Standalone bulletin route serves the merged view too
+      // Standalone bulletin route serves the same merged view
       const direct = await call("/api/bulletin");
-      assert.ok(
-        direct.payload.blocks.some((b) => b.source === "ukho"),
-        "ukho blocks on the standalone route",
-      );
       assert.ok(
         direct.payload.blocks.some((b) => b.text.includes("TROUGH")),
         "tgftp blocks on the standalone route",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    plugin.stop();
+  });
+
+  test("UKHO rung: NAVAREA I route scrapes the RNW page into the console", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const RNW_HTML = require("node:fs").readFileSync(
+      join(__dirname, "fixtures", "ukho-rnw-sample.html"),
+      "utf8",
+    );
+    const app = createMockApp();
+    // A route across the North Sea: inside NAVAREA I, the zone the
+    // UKHO actually coordinates
+    const route = {
+      name: "Channel hop",
+      feature: {
+        geometry: {
+          coordinates: [
+            [-5.0, 50.0],
+            [1.0, 50.8],
+          ],
+        },
+      },
+    };
+    app.resourcesApi = {
+      async getResource(resType, resId) {
+        if (resType === "routes" && resId === "r1") {
+          return route;
+        }
+        throw new Error("not found");
+      },
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const call = async (path) => {
+      const r = app.getRoutes().find((x) => x.path === path);
+      const res = {
+        code: null,
+        payload: null,
+        status(c) {
+          this.code = c;
+          return this;
+        },
+        json(p) {
+          this.payload = p;
+        },
+      };
+      await r.handler({ query: { route: "r1" } }, res);
+      return res;
+    };
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "online" }] },
+      ],
+    });
+    const openMeteoFetch = mockOpenMeteo();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes("msi.admiralty.co.uk")) {
+        return { ok: true, text: async () => RNW_HTML };
+      }
+      if (u.includes("weather.gmdss.org")) {
+        throw new Error("portal down");
+      }
+      return openMeteoFetch(url);
+    };
+    try {
+      const res = await call("/api/briefing/refresh");
+      assert.equal(res.code, null);
+      const briefing = await call("/api/briefing");
+      const bulletin = briefing.payload.payload.metareaBulletin;
+      assert.ok(bulletin, "bulletin attached");
+      const texts = bulletin.blocks.map((b) => b.text);
+      // The scraped warnings ride the same ukho-json merge path:
+      // reference + DTG header, full ANMB text, ukho provenance
+      assert.ok(
+        texts.some((t) => t.startsWith("NAVAREA I 220/26")),
+        "scraped NAVAREA I warning kept",
+      );
+      assert.ok(
+        bulletin.blocks.some((b) => b.source === "ukho"),
+        "ukho blocks carry their source",
       );
     } finally {
       globalThis.fetch = originalFetch;
@@ -1914,6 +1977,67 @@ test("energy forecast: predictor delta adapts into the payload", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+
+  plugin.stop();
+});
+
+test("source status: SK availability recorded and served at /sources", async () => {
+  const app = createMockApp();
+  app.getSelfPath = (path) =>
+    path === "polars.activePolar" ? { value: "default" } : null;
+  const plugin = pluginFactory(app);
+  plugin.start({});
+  plugin.registerWithRouter(app.router);
+
+  // The internet state arrives over the stream; navigation state and
+  // house SoC never do (no battery provider on this mock)
+  const feed = app.getDeltaHandlers()[0];
+  feed({
+    updates: [
+      {
+        values: [{ path: "network.internet.state", value: "online" }],
+      },
+    ],
+  });
+
+  // Required paths with data read OK; missing required ones fail as
+  // unavailable; optional ones absent — information, not error
+  await plugin.recordSignalKSources(new Date("2026-10-03T06:00:00Z"));
+
+  const route = app.getRoutes().find((r) => r.path === "/sources");
+  assert.ok(route, "GET /sources registered");
+  const res = {
+    payload: null,
+    status() {
+      return this;
+    },
+    json(payload) {
+      this.payload = payload;
+    },
+  };
+  await route.handler({}, res);
+  const entries = Object.fromEntries(
+    res.payload.map((entry) => [entry.id, entry]),
+  );
+  assert.equal(entries["sk-internet-state"].lastStatus, "ok");
+  assert.equal(entries["sk-internet-state"].kind, "signalk");
+  assert.equal(entries["sk-navigation-state"].lastStatus, "fail");
+  assert.equal(entries["sk-navigation-state"].lastError.class, "unavailable");
+  assert.equal(entries["sk-house-soc"].lastStatus, "fail");
+  assert.equal(entries["sk-active-route"].lastStatus, "absent");
+  assert.equal(entries["sk-energy-prediction"].lastStatus, "absent");
+  assert.equal(entries["sk-polar"].lastStatus, "ok");
+  assert.equal(entries["sk-ships-time"].lastStatus, "absent");
+  assert.equal(entries["sk-routes-resources"].lastStatus, "fail");
+  assert.equal(entries["sk-logbook"].lastStatus, "absent");
+
+  // Configured sources have entries even before their first cycle
+  assert.equal(entries["weather-track"].lastStatus, null);
+  assert.equal(entries["hazard-gdacs"].lastStatus, null);
+  assert.equal(
+    entries["bulletin-custom-0"].url,
+    pluginFactory.DEFAULTS.bulletin_urls[0],
+  );
 
   plugin.stop();
 });

@@ -228,6 +228,56 @@ export function fmtLiters(liters) {
 }
 
 /**
+ * Maps one data-source status registry entry (work doc #23) to its
+ * checklist verdict: the bracket glyph, the semantic theme class and
+ * whether the last success is older than the source's expected
+ * refresh interval.
+ *
+ * - `ok` sources render `[ OK ]`, unless stale beyond the expected
+ *   refresh interval → `[ WARN ]`.
+ * - A failed cycle renders `[ FAIL ]`, except the classes that mean
+ *   "their server is annoyed or their payload changed shape" — 429
+ *   and parse errors — which render `[ WARN ]` (a rate-limited feed
+ *   is a wait, a moved URL is a fix-me).
+ * - `offline-skipped` cycles never render as FAIL: an offline boat
+ *   shows a wall of `[ SKIP ]`, which is correct information.
+ * - `absent` optional sources (companion plugin not installed) and
+ *   sources never yet attempted render muted.
+ *
+ * @param {object} entry - Registry entry
+ * @param {Date} [now]
+ * @returns {{bracket: string, theme: string, stale: boolean}}
+ */
+export function statusVerdict(entry, now = new Date()) {
+  const status = entry?.lastStatus;
+  if (status === "skip") {
+    return { bracket: "[ SKIP ]", theme: "theme-offline", stale: false };
+  }
+  if (status === "absent") {
+    return { bracket: "[ N/A ]", theme: "theme-offline", stale: false };
+  }
+  if (status === "fail") {
+    const cls = entry.lastError?.class;
+    if (cls === "http-429" || cls === "parse") {
+      return { bracket: "[ WARN ]", theme: "theme-orange", stale: false };
+    }
+    return { bracket: "[ FAIL ]", theme: "theme-red", stale: false };
+  }
+  if (status === "ok") {
+    const stale =
+      entry.expectedRefreshMs != null &&
+      entry.lastSuccessAt != null &&
+      now.getTime() - new Date(entry.lastSuccessAt).getTime() >
+        entry.expectedRefreshMs;
+    return stale
+      ? { bracket: "[ WARN ]", theme: "theme-orange", stale: true }
+      : { bracket: "[ OK ]", theme: "theme-green", stale: false };
+  }
+  // No cycle recorded yet: the entry is defined but unproven
+  return { bracket: "[ WAIT ]", theme: "theme-offline", stale: false };
+}
+
+/**
  * Columns for the 24-bar horizon sparkline: bar height tracks AWS
  * within the window (max of the window → 100%), fill color maps the
  * comfort tier.

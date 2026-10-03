@@ -21,6 +21,7 @@ const {
   parseCardinalBounds,
   parseCoordinateChain,
   parseCoordinatePoints,
+  resolveBulletinSource,
   segmentBlocks,
   shouldRetainSubject,
   stripBoilerplate,
@@ -850,5 +851,81 @@ test("issue-time formats: mixed-case months from the WMO bulletin sets", () => {
   assert.equal(
     extractIssuedAt("For 24 hours commencing 0930 UTC 28 February 2026"),
     "2026-02-28T09:30:00.000Z",
+  );
+});
+
+test("api.weather.gov resolver: no query params, newest issuance wins, URLs in errors", async () => {
+  // The API started rejecting unknown query parameters ("limit is
+  // not recognized" → 400), so the resolver must request the bare
+  // locations URL and pick the newest iteration itself
+  const requestedUrls = [];
+  const fetchImpl = async (url) => {
+    requestedUrls.push(String(url));
+    if (String(url).includes("/locations/NP")) {
+      if (String(url).includes("?")) {
+        return {
+          ok: false,
+          status: 400,
+          statusText: "Bad Request",
+          text: async () => "",
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          "@graph": [
+            {
+              id: "older",
+              issuanceTime: "2026-10-01T11:00:00+00:00",
+            },
+            {
+              id: "bare-uuid-newest",
+              "@id": "https://api.weather.gov/products/newest",
+              issuanceTime: "2026-10-03T11:25:00+00:00",
+            },
+          ],
+        }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({ productText: "HIGH SEAS FORECAST NAVAREA IV" }),
+    };
+  };
+  const { text, source } = await resolveBulletinSource(
+    "https://api.weather.gov/products/types/HSF/locations/NP",
+    { fetchImpl },
+  );
+  assert.match(text, /HIGH SEAS FORECAST/);
+  assert.equal(source, "api");
+  // Bare URL requested; the newest issuanceTime fetched via "@id"
+  // (the graph's "id" is a bare UUID, not a URL)
+  assert.deepEqual(requestedUrls, [
+    "https://api.weather.gov/products/types/HSF/locations/NP",
+    "https://api.weather.gov/products/newest",
+  ]);
+
+  // HTTP failures carry the URL so the checklist detail says which
+  // request failed (work doc #23)
+  const failing = async () => ({
+    ok: false,
+    status: 404,
+    statusText: "Not Found",
+    text: async () => "",
+  });
+  await assert.rejects(
+    resolveBulletinSource(
+      "https://api.weather.gov/products/types/HSF/locations/NP",
+      {
+        fetchImpl: failing,
+      },
+    ),
+    /locations\/NP returned 404/,
+  );
+  await assert.rejects(
+    resolveBulletinSource("https://example.com/bulletin.txt", {
+      fetchImpl: failing,
+    }),
+    /bulletin\.txt returned 404/,
   );
 });

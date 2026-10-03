@@ -914,7 +914,11 @@ async function resolveBulletinSource(
         headers: { Accept: "text/plain" },
       });
       if (!response.ok) {
-        throw new Error(`${response.status} ${response.statusText}`);
+        // The URL rides in the message: the source status checklist
+        // shows it verbatim in the row detail (work doc #23)
+        throw new Error(
+          `${url} returned ${response.status} ${response.statusText}`,
+        );
       }
       return { text: await response.text(), source: "api" };
     } finally {
@@ -922,8 +926,11 @@ async function resolveBulletinSource(
     }
   }
 
-  // api.weather.gov: latest iteration of the product type/location
-  const listUrl = `${apiMatch[0]}?limit=1`;
+  // api.weather.gov: latest iteration of the product type/location.
+  // No query parameters — the API now rejects unknown ones (limit
+  // included) with a 400, so "latest" is resolved client-side by
+  // sorting the returned graph on issuanceTime
+  const listUrl = apiMatch[0];
   const get = async (u) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs ?? 15000);
@@ -933,7 +940,9 @@ async function resolveBulletinSource(
         headers: { Accept: "application/geo+json, application/json" },
       });
       if (!response.ok) {
-        throw new Error(`${response.status} ${response.statusText}`);
+        throw new Error(
+          `${u} returned ${response.status} ${response.statusText}`,
+        );
       }
       return response.json();
     } finally {
@@ -941,11 +950,18 @@ async function resolveBulletinSource(
     }
   };
   const list = await get(listUrl);
-  const latest = (list?.["@graph"] ?? [])[0];
-  if (!latest?.id) {
+  // "id" is a bare UUID; the fetchable product URL lives in "@id"
+  const latest = [...(list?.["@graph"] ?? [])]
+    .filter((product) => product?.id)
+    .sort((a, b) =>
+      String(b.issuanceTime ?? "").localeCompare(String(a.issuanceTime ?? "")),
+    )[0];
+  if (!latest) {
     throw new Error("No product iterations available");
   }
-  const product = await get(latest.id);
+  const productUrl =
+    latest["@id"] ?? `https://api.weather.gov/products/${latest.id}`;
+  const product = await get(productUrl);
   const text = product?.productText;
   if (typeof text !== "string" || text.length === 0) {
     throw new Error("Product has no text");

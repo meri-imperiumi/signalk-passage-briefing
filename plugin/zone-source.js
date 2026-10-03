@@ -19,9 +19,10 @@
  * 2. WMO GMDSS portal (`https://weather.gmdss.org/XIV.html`) —
  *    global METAREA coverage; the `<pre>` block feeds the cruft
  *    cutter.
- * 3. UKHO Admiralty MSI JSON for NAVAREA navigational warnings
- *    (structured coordinates skip the regex geography entirely —
- *    consumed as raw JSON text by the cache for now).
+ * 3. UKHO Admiralty Radio Navigational Warnings for NAVAREA I (the
+ *    zone the UKHO coordinates; page HTML parsed into the structured
+ *    warning shape — the old MSI JSON API is gone). Other zones skip
+ *    this rung: the UKHO does not coordinate them.
  *
  * Division of labor: this module owns where bytes come from and
  * which zones are fetched; bulletin-engine owns everything that
@@ -163,13 +164,113 @@ function gmdssBulletinUrl(zone) {
 }
 
 /**
- * UKHO Admiralty MSI REST URL for a zone's NAVAREA warnings.
+ * UKHO Admiralty MSI page for the Radio Navigational Warnings the
+ * UKHO coordinates. The UKHO is the NAVAREA I coordinator (plus UK
+ * coastal WZ warnings), so only zone 1 has a source here — other
+ * zones get null and are skipped instead of guaranteed-404 fetches
+ * (the old `/api/Warnings/Area/{XIV}` JSON endpoint is gone; the
+ * site is server-rendered HTML now, parsed by {@link parseRnwHtml}).
  *
  * @param {number} zone
- * @returns {string}
+ * @returns {string|null} Page URL, null when the UKHO has no source
+ *   for this zone
  */
 function ukhoWarningsUrl(zone) {
-  return `https://msi.admiralty.co.uk/api/Warnings/Area/${romanNumeral(zone)}`;
+  return zone === 1
+    ? "https://msi.admiralty.co.uk/RadioNavigationalWarnings"
+    : null;
+}
+
+/** Months for the RNW date-time group (`021011 UTC Oct 26`). */
+const RNW_MONTHS = {
+  JAN: 0,
+  FEB: 1,
+  MAR: 2,
+  APR: 3,
+  MAY: 4,
+  JUN: 5,
+  JUL: 6,
+  AUG: 7,
+  SEP: 8,
+  OCT: 9,
+  NOV: 10,
+  DEC: 11,
+};
+
+/**
+ * Parses the RNW page's date-time group (`DDHHMM UTC Mon YY`, full
+ * month names and 4-digit years tolerated) into an ISO timestamp.
+ *
+ * @param {string} dtg - e.g. "021011 UTC Oct 26"
+ * @returns {string|null}
+ */
+function parseRnwDateTime(dtg) {
+  const match = String(dtg ?? "").match(
+    /\b(\d{2})(\d{2})(\d{2})\s+UTC\s+([A-Za-z]{3,9})\s+(\d{2,4})\b/,
+  );
+  if (!match) {
+    return null;
+  }
+  const [, day, hour, minute, mon, year] = match;
+  const month = RNW_MONTHS[mon.toUpperCase().slice(0, 3)];
+  if (month == null) {
+    return null;
+  }
+  const fullYear = Number(year) < 100 ? 2000 + Number(year) : Number(year);
+  const parsed = new Date(
+    Date.UTC(fullYear, month, Number(day), Number(hour), Number(minute)),
+  );
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+/** Decodes the HTML entities the RNW page uses in warning text. */
+function decodeRnwText(text) {
+  return String(text ?? "")
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) =>
+      String.fromCodePoint(Number.parseInt(hex, 16)),
+    )
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * Parses the UKHO Radio Navigational Warnings page into the warning
+ * shape the cache consumes (same shape `parseUkhoWarnings` emits:
+ * `text`, `issuedAt`, `coordinates`). Each detail section carries a
+ * reference heading (`NAVAREA I 220/26`), a date-time group and a
+ * `<pre class="warning-description">` with the full text; the
+ * reference and DTG are prepended so the console reads like a
+ * bulletin. Warnings without a parseable DTG still pass with a null
+ * `issuedAt`.
+ *
+ * @param {string} html - The RNW page HTML
+ * @returns {Array<{text: string, issuedAt: string|null,
+ *   coordinates: number[][]}>}
+ */
+function parseRnwHtml(html) {
+  const warnings = [];
+  const sectionRe =
+    /<h2[^>]*class="warning-reference"[^>]*>([\s\S]*?)<\/h2>[\s\S]*?<h3[^>]*class="warning-date-time"[^>]*>([\s\S]*?)<\/h3>[\s\S]*?<pre[^>]*class="warning-description"[^>]*>([\s\S]*?)<\/pre>/g;
+  for (const [, reference, dtg, body] of html.matchAll(sectionRe)) {
+    const text = decodeRnwText(body).trim();
+    if (!text) {
+      continue;
+    }
+    const ref = decodeRnwText(reference)
+      .replace(/<[^>]+>/g, "")
+      .trim();
+    const stamp = parseRnwDateTime(decodeRnwText(dtg));
+    warnings.push({
+      text: `${ref}\n${decodeRnwText(dtg).trim()}\n\n${text}`,
+      issuedAt: stamp,
+      coordinates: [],
+    });
+  }
+  return warnings;
 }
 
 /**
@@ -219,6 +320,9 @@ function extractGmdssPre(html) {
  *   [params.tgftpStations] - Configured TGFTP fast paths
  * @param {typeof fetch} [params.fetchImpl]
  * @param {number} [params.timeoutMs]
+ * @param {Function} [params.onFailure] - Called with `(zone, url,
+ *   error)` when a zone's whole ladder (TGFTP fast path + GMDSS
+ *   portal) failed; per-step fallbacks inside the ladder stay silent
  * @returns {Promise<Array<{url: string, text: string, source: string,
  *   zone: number}>>}
  */
@@ -227,6 +331,7 @@ async function fetchZoneBulletins({
   tgftpStations = [],
   fetchImpl = fetch,
   timeoutMs,
+  onFailure,
 }) {
   const out = [];
   for (const zone of zones ?? []) {
@@ -251,8 +356,9 @@ async function fetchZoneBulletins({
         timeoutMs,
       });
       out.push({ url, text, source: "api", zone });
-    } catch {
+    } catch (error) {
       // Zone unavailable this cycle: skip, next refresh retries
+      onFailure?.(zone, url, error);
     }
   }
   return out;
@@ -333,6 +439,8 @@ module.exports = {
   romanNumeral,
   gmdssBulletinUrl,
   ukhoWarningsUrl,
+  parseRnwDateTime,
+  parseRnwHtml,
   tgftpUrl,
   extractGmdssPre,
   fetchZoneBulletins,
