@@ -136,7 +136,7 @@ function noteCategory(block) {
   return "meteorological-warning";
 }
 
-function buildNote(block, { issuedAt, zone, chart, ref }) {
+function buildNote(block, { issuedAt, issuer = null, zone, chart, ref }) {
   const position = geometryPosition(block.geometry, ref);
   if (!position) {
     return null;
@@ -157,6 +157,13 @@ function buildNote(block, { issuedAt, zone, chart, ref }) {
       source: block.source ?? null,
       zone,
       sourcePlugin: "signalk-passage-briefing",
+      // Provenance (who published, when): the issuing authority parsed
+      // from the bulletin header when it names its service, else the
+      // plugin publishing on its own account — plus the bulletin's
+      // issue time, which is when the warning came into being (the
+      // top-level timestamp carries the same instant).
+      publishedBy: issuer ?? "signalk-passage-briefing",
+      publishedAt: issuedAt,
     },
     timestamp: issuedAt,
   };
@@ -174,6 +181,8 @@ function buildNote(block, { issuedAt, zone, chart, ref }) {
  * @param {object} params
  * @param {NotesStore} params.store - the metarea notes store
  * @param {object|null} params.bulletin - metareaBulletin with blocks
+ * @param {string|null} [params.bulletin.issuer] - issuing authority
+ *   parsed from the bulletin text (extractIssuer)
  * @param {number|null} params.zone - resolved zone for chart links
  * @param {(zone: number) => {url: string, mimeType: string}|null}
  *   [params.synopticChartFor] - cached chart lookup (work doc #11)
@@ -197,6 +206,7 @@ async function publishNotes({
     const chart = zone != null ? synopticChartFor(zone) : null;
     const note = buildNote(block, {
       issuedAt: bulletin.issuedAt,
+      issuer: bulletin.issuer ?? null,
       zone,
       chart,
       ref,

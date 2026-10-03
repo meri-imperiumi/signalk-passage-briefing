@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **METAREA notes now carry provenance: who published, when.** Every note the bulletin pipeline serves in `resources/notes` is stamped in its `properties` with `publishedBy` — the issuing authority parsed from the bulletin header ("ISSUED BY FIJI METEOROLOGICAL SERVICE …" → `FIJI METEOROLOGICAL SERVICE`), falling back to `signalk-passage-briefing` when the bulletin names no service (structured UKHO warnings, some NWS products) — and `publishedAt`, the bulletin's issue time. Chart plotters can show the line "Published on 10-03 12:00Z by FIJI METEOROLOGICAL SERVICE" straight from the resource; the DR webapp's note detail surface does.
+
 ## [0.4.0] - 2026-10-03
 
 ### Added

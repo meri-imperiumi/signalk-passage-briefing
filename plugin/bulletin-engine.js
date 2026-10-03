@@ -738,6 +738,34 @@ function intersectsTrack(geometry, track) {
 }
 
 /**
+ * Extracts the issuing authority from a bulletin's text (work doc #12
+ * provenance): GMDSS bulletins name their service in the header block,
+ * e.g. "ISSUED BY FIJI METEOROLOGICAL SERVICE SEP 270800 UTC." The
+ * name is captured verbatim, minus the trailing issue-time fragment
+ * and punctuation. Null when the bulletin does not name an issuer
+ * (structured UKHO warnings, some NWS products) — consumers then fall
+ * back to the publishing plugin.
+ *
+ * @param {string} text - Raw or cleaned bulletin text
+ * @returns {string|null} Issuer name, e.g. "FIJI METEOROLOGICAL SERVICE"
+ */
+function extractIssuer(text) {
+  const match = text.match(/ISSUED\s+BY\s+(.+)/i);
+  if (!match) {
+    return null;
+  }
+  // Strip the trailing issue-time fragment in its observed shapes
+  // ("SEP 270800 UTC", "270800 UTC", "270800Z"), then any trailing
+  // punctuation or padding the station style leaves behind. The
+  // leading \s+ anchors the fragment to a word start, so a name that
+  // merely ends in 3–4 letters can't be mistaken for the month token.
+  const name = match[1]
+    .replace(/\s+(?:[A-Z]{3,4}\.?\s+)?\d{4,10}Z?(?:\s+UTC)?\.?\s*$/i, "")
+    .replace(/[.\s]+$/, "");
+  return name || null;
+}
+
+/**
  * Runs the full pipeline over one raw bulletin (work doc #4 §2–4):
  * boilerplate stripping, NAVTEX subject filter, GMDSS segmentation,
  * geographic extraction and track filtering.
@@ -751,9 +779,9 @@ function intersectsTrack(geometry, track) {
  *   keep (default {@link RETAINED_SUBJECTS})
  * @param {string} [params.issuedAt] - Issue time override (spool
  *   file parsing result); extracted from the text otherwise
- * @returns {object|null} `{header, issuedAt, bulletinText, source,
- *   blocks: [{text, subject, geometryType, source}]}` — null when
- *   the whole message is discarded by the subject filter
+ * @returns {object|null} `{header, issuedAt, issuer, bulletinText,
+ *   source, blocks: [{text, subject, geometryType, source}]}` — null
+ *   when the whole message is discarded by the subject filter
  */
 function filterBulletin({
   rawText,
@@ -792,6 +820,7 @@ function filterBulletin({
       issuedAt ??
       spoolWatcher.extractIssuedAt(cleaned) ??
       new Date(0).toISOString(),
+    issuer: extractIssuer(cleaned),
     bulletinText: rawText,
     source,
     blocks,
@@ -979,6 +1008,7 @@ module.exports = {
   polygonIntersectsTrack,
   bboxIntersectsTrack,
   intersectsTrack,
+  extractIssuer,
   filterBulletin,
   fetchRemoteBulletin,
   resolveBulletinSource,

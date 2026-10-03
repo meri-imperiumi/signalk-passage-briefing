@@ -39,6 +39,7 @@ const ISSUED = "2026-09-27T19:42:19.033Z";
 const BULLETIN = {
   header: "FQPS01 NFFN 270700",
   issuedAt: ISSUED,
+  issuer: "FIJI METEOROLOGICAL SERVICE",
   bulletinText: "…",
   source: "api",
   blocks: [
@@ -124,6 +125,9 @@ test("publishNotes: one note per placeable block, mapped fields", async () => {
   assert.equal(first.properties.category, "meteorological-warning");
   assert.equal(first.properties.zone, 14);
   assert.equal(first.properties.sourcePlugin, "signalk-passage-briefing");
+  // Provenance: who issued the bulletin, when it was issued.
+  assert.equal(first.properties.publishedBy, "FIJI METEOROLOGICAL SERVICE");
+  assert.equal(first.properties.publishedAt, ISSUED);
   assert.equal(first.timestamp, ISSUED);
   assert.equal(first.mimeType, "image/gif"); // chart linked when cached
 });
@@ -151,6 +155,18 @@ test("re-publish updates in place; expiry prunes dropped blocks", async () => {
   const remaining = await notesIn(store);
   assert.equal(Object.keys(remaining).length, 1);
   assert.ok(remaining[noteId(BULLETIN.blocks[1].text, partial.issuedAt)]);
+});
+
+test("publishNotes without an issuer: plugin publishes on its own account", async () => {
+  // Structured UKHO warnings and some NWS products name no issuing
+  // service — the note still carries provenance: the plugin itself.
+  const store = stubStore();
+  const anonymous = { ...BULLETIN, issuer: null };
+  await publishNotes({ store, bulletin: anonymous, zone: 14 });
+  const notes = await notesIn(store);
+  const [note] = Object.values(notes);
+  assert.equal(note.properties.publishedBy, "signalk-passage-briefing");
+  assert.equal(note.properties.publishedAt, ISSUED);
 });
 
 test("clearNotes empties the store", async () => {

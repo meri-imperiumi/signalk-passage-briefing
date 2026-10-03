@@ -27,6 +27,7 @@ const {
   bboxIntersectsTrack,
   ringContains,
   ukhoBlocksFromWarnings,
+  extractIssuer,
 } = require("../plugin/bulletin-engine.js");
 const {
   loadBulletinCache,
@@ -253,6 +254,51 @@ test("cardinal bounds translate to a bbox", () => {
     [179, -25, 180, 90],
   );
   assert.equal(parseCardinalBounds("no geography here"), null);
+});
+
+test("extractIssuer: issuing authority from the bulletin header", () => {
+  // The observed NFFN phrasing, with its issue-time fragment stripped.
+  assert.equal(
+    extractIssuer("ISSUED BY FIJI METEOROLOGICAL SERVICE SEP 270800 UTC."),
+    "FIJI METEOROLOGICAL SERVICE",
+  );
+  // Other observed shapes of the trailing time fragment.
+  assert.equal(
+    extractIssuer("ISSUED BY FIJI METEOROLOGICAL SERVICE 270800 UTC."),
+    "FIJI METEOROLOGICAL SERVICE",
+  );
+  assert.equal(
+    extractIssuer("ISSUED BY FIJI METEOROLOGICAL SERVICE 270800Z"),
+    "FIJI METEOROLOGICAL SERVICE",
+  );
+  // No time fragment at all — name only.
+  assert.equal(extractIssuer("ISSUED BY METEO-FRANCE."), "METEO-FRANCE");
+  // Lowercase station style matches too.
+  assert.equal(
+    extractIssuer("Issued by Fiji Meteorological Service Sep 27 0800 UTC."),
+    "Fiji Meteorological Service Sep 27",
+  );
+  // Bulletins that name no issuer: structured UKHO warnings, some NWS
+  // products — null, and note consumers fall back to the publisher.
+  assert.equal(extractIssuer("GALE WARNING. Within 300 nm of a line."), null);
+});
+
+test("filterBulletin carries the issuing authority", () => {
+  const text = [
+    "FQPS01 NFFN 270700",
+    "MARINE WEATHER BULLETIN FOR ISLANDS AREA",
+    "ISSUED BY FIJI METEOROLOGICAL SERVICE SEP 270800 UTC.",
+    "",
+    "PART 1 : WARNINGNIL.",
+  ].join("\n");
+  const result = filterBulletin({ rawText: text, source: "api", track: [] });
+  assert.equal(result.issuer, "FIJI METEOROLOGICAL SERVICE");
+  const noIssuer = filterBulletin({
+    rawText: "GALE WARNING. Within 300 nm of a line 45S 170E to 50S 172E.",
+    source: "api",
+    track: [],
+  });
+  assert.equal(noIssuer.issuer, null);
 });
 
 test("live NFFN bulletin: axis lines band-filtered, cardinal areas kept", () => {
