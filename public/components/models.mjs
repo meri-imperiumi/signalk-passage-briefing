@@ -325,6 +325,9 @@ export const SEVERE_KEYWORDS = [
   "VERY ROUGH SEAS",
   "HIGH SEAS",
   "PHENOMENAL SEAS",
+  "FREEZING SPRAY",
+  "DENSE FOG",
+  "VOLCANIC ASH",
 ];
 
 /**
@@ -341,7 +344,7 @@ export function splitSevere(text) {
     return [];
   }
   const pattern =
-    /\b(HURRICANE FORCE|VIOLENT STORM|VERY ROUGH SEAS|ROUGH SEAS|HIGH SEAS|PHENOMENAL SEAS|GALE|STORM|SQUALL)\b/gi;
+    /\b(HURRICANE FORCE|VIOLENT STORM|VERY ROUGH SEAS|ROUGH SEAS|HIGH SEAS|PHENOMENAL SEAS|FREEZING SPRAY|DENSE FOG|VOLCANIC ASH|HURRICANE|CYCLONE|GALE|STORM|SQUALL)\b/gi;
   const tokens = [];
   let last = 0;
   for (const match of text.matchAll(pattern)) {

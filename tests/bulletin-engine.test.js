@@ -473,10 +473,11 @@ test("retained bulletin: blocks filtered against the Tonga track", () => {
   });
   assert.ok(result, "retained with G in the set");
 
-  // The far-away synopsis has no geography: kept conservatively
+  // The far-away synopsis has no geography and no severity: it is
+  // transmission boilerplate to the warnings console (work doc #23
+  // day-one finding: NWS preamble flooded the panel)
   const synopsis = result.blocks.find((b) => b.text.includes("SITUATION"));
-  assert.ok(synopsis, "no-geometry block kept");
-  assert.equal(synopsis.geometryType, null);
+  assert.equal(synopsis, undefined, "no-geometry prose dropped");
 });
 test("ukhoBlocksFromWarnings: structured geometry vs track, point bbox", () => {
   const warnings = [
@@ -529,7 +530,10 @@ test("discard rule drops geographically irrelevant warnings", () => {
   });
   const trough = result.blocks.find((b) => b.text.includes("TROUGH"));
   assert.equal(trough, undefined, "Atlantic trough dropped for Pacific track");
-  assert.ok(result.blocks.some((b) => b.text.includes("SITUATION")));
+  assert.ok(
+    !result.blocks.some((b) => b.text.includes("SITUATION")),
+    "synopsis prose dropped",
+  );
 });
 
 // --- Bulletin source ----------------------------------------------------------
@@ -928,4 +932,149 @@ test("api.weather.gov resolver: no query params, newest issuance wins, URLs in e
     }),
     /bulletin\.txt returned 404/,
   );
+});
+
+test("NHC HSFEP2 (2026-10-03): NWS API preamble stripped, hurricane warning on-track", () => {
+  // As received from the api.weather.gov productText: a "000" frame
+  // line and a bare WMO routing header lead the product text
+  const raw = readFixture("hsfep2-knhc-2026-10-03.txt");
+  const cleaned = stripBoilerplate(raw);
+  assert.ok(!/^000\b/.test(cleaned), "frame line stripped");
+  assert.ok(!/FZPN03 KNHC/.test(cleaned), "routing header stripped");
+  assert.match(cleaned, /^HSFEP2/, "product code line survives as header");
+
+  const onTrack = filterBulletin({
+    rawText: raw,
+    source: "api",
+    track: [[-111.8, 19.4]], // Inside the hurricane warning polygon
+  });
+  assert.equal(onTrack.header, "HSFEP2");
+  assert.equal(onTrack.issuedAt, "2026-10-03T10:30:00.000Z");
+  assert.ok(
+    /NATIONAL HURRICANE CENTER/i.test(onTrack.issuer),
+    `issuer parsed (${onTrack.issuer})`,
+  );
+  const texts = onTrack.blocks.map((b) => b.text);
+  // The hurricane warning survives with its polygon
+  const warning = texts.find((t) => t.includes("HURRICANE RACHEL NEAR 19.4N"));
+  assert.ok(warning, "hurricane warning kept");
+  assert.equal(
+    onTrack.blocks.find((b) => b.text === warning)?.geometryType,
+    "polygon",
+  );
+  // The decimal-pair position parsed: the polygon covers the storm
+  // center (19.4N 111.8W wraps into the polygon's ring)
+  assert.ok(
+    texts.some((t) => t.includes("24 HOUR FORECAST HURRICANE")),
+    "24h forecast block with its own decimal positions kept",
+  );
+  // Preamble, disclaimers and footers have neither geography nor
+  // severity: gone from the warnings console
+  assert.ok(!texts.some((t) => t.includes("SECURITE")));
+  assert.ok(!texts.some((t) => t.includes("SUPERSEDED BY NEXT ISSUANCE")));
+  assert.ok(!texts.some((t) => t.includes("SEAS GIVEN AS SIGNIFICANT")));
+  assert.ok(!texts.some((t) => t.includes("SHOULD BE USED WITH CAUTION")));
+  assert.ok(!texts.some((t) => t.includes("FORECASTER AL")));
+  assert.ok(!texts.some((t) => t.startsWith("HSFEP2")));
+
+  // Off-track the whole warning is dropped — and the boilerplate
+  // does not leak into the console in its place
+  const offTrack = filterBulletin({
+    rawText: raw,
+    source: "api",
+    track: [[178, -18]], // Fiji waters
+  });
+  assert.ok(
+    !offTrack.blocks.some((b) => b.text.includes("HURRICANE RACHEL")),
+    "hurricane off our waters dropped",
+  );
+  assert.ok(
+    offTrack.blocks.every(
+      (b) => b.geometryType != null || /HURRICANE/.test(b.text),
+    ),
+    "nothing without geography or severity survives off-track",
+  );
+});
+
+test("no-geometry blocks without severity are boilerplate, dropped", () => {
+  // "SITUATION IS MODERATE..." carries no geography and no severity:
+  // it is synopsis prose, not a warning for the console
+  const result = filterBulletin({
+    rawText: NAVAREA_FIXTURE,
+    source: "spool",
+    track: TONGA_TRACK,
+  });
+  const texts = result.blocks.map((b) => b.text);
+  assert.ok(!texts.some((t) => t.includes("SITUATION")), "synopsis dropped");
+  assert.ok(
+    texts.some((t) => t.includes("DEVELOPING TROUGH")),
+    "geographic trough kept",
+  );
+  // A severity keyword without coordinates survives the rule: a
+  // warning whose geography did not parse must not vanish
+  const coordsFailed = NAVAREA_FIXTURE.replace(
+    "16S 170E TO 20S 178W TO 25S 175W",
+    "NOWHERE PARSEABLE",
+  );
+  const kept = filterBulletin({
+    rawText: coordsFailed,
+    source: "spool",
+    track: TONGA_TRACK,
+  });
+  assert.ok(
+    kept.blocks.some((b) => b.text.includes("GALE WARNING")),
+    "unparseable-geometry gale warning kept by severity",
+  );
+});
+
+test("EQUATOR is a real bound in NWS area headers, not a pole default", () => {
+  // "NORTH PACIFIC EQUATOR TO 30N BETWEEN 140W AND 180W" used to
+  // parse to a pole-to-pole box on the longitude band, intersecting
+  // every water on it — the area line then leaked into consoles as
+  // far away as Fiji
+  const { parseCardinalBounds } = require("../plugin/bulletin-engine.js");
+  assert.deepEqual(
+    parseCardinalBounds("NORTH PACIFIC EQUATOR TO 30N BETWEEN 140W AND 180W"),
+    [-180, 0, -140, 30],
+  );
+  assert.deepEqual(
+    parseCardinalBounds("EQUATOR TO 03.4S"),
+    [-180, -3.4, 180, 0],
+  );
+  // No equator mention: unchanged behavior
+  assert.deepEqual(
+    parseCardinalBounds("S OF 32N BETWEEN 169W AND 178W"),
+    [-178, -90, -169, 90],
+  );
+});
+
+test("fixed NWS disclaimer paragraphs are stripped whole", () => {
+  const raw = readFixture("fzpn01-kwbc-hsf-ep1.txt");
+  const cleaned = stripBoilerplate(raw);
+  assert.ok(
+    !cleaned.includes("FROM OCTOBER 15 TO APRIL 1"),
+    "seasonal note gone",
+  );
+  assert.ok(!cleaned.includes("ONLY YOU KNOW THE WEATHER"), "outreach gone");
+  assert.ok(
+    !cleaned.includes("ALL FORECASTS VALID OVER ICE FREE"),
+    "ice note gone",
+  );
+  assert.ok(!cleaned.includes("SEAS GIVEN AS SIGNIFICANT"), "definition gone");
+  assert.ok(
+    !cleaned.includes("FORECAST WINDS IN AND NEAR ACTIVE TROPICAL CYCLONES"),
+  );
+  assert.ok(!cleaned.includes("FOR ANY TROPICAL CYCLONE INFORMATION"));
+  // Real content survives the paragraph stripper
+  assert.ok(cleaned.includes("STORM WARNING"));
+
+  // With HURRICANE/CYCLONE in the severity keywords, the office name
+  // must not count: "NATIONAL HURRICANE CENTER" is not a warning
+  const { hasSevereKeyword } = require("../plugin/bulletin-engine.js");
+  assert.equal(
+    hasSevereKeyword("NWS NATIONAL HURRICANE CENTER MIAMI FL"),
+    false,
+  );
+  assert.equal(hasSevereKeyword("HURRICANE RACHEL NEAR 19.4N"), true);
+  assert.equal(hasSevereKeyword("TROPICAL CYCLONE FORCE WINDS"), true);
 });

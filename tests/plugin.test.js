@@ -2041,3 +2041,97 @@ test("source status: SK availability recorded and served at /sources", async () 
 
   plugin.stop();
 });
+
+test("serve-time bulletin re-filter: cached payload blocks recompute", async () => {
+  const { mockOpenMeteo } = require("./openmeteo-mock.js");
+  const TGFTP_TEXT = [
+    "FQPS01 NFFN 011200Z AUG 26",
+    "ZCZC GA14",
+    "NAVAREA XIV 114/26",
+    "SOUTH PACIFIC FIJI WATERS",
+    "GALE WARNING",
+    "PART 1 WARNING",
+    "DEVELOPING TROUGH T1 WITH SQUALLS AND GALES WITHIN 120NM",
+    "EAST OF AXIS 16S 170E TO 20S 178W TO 25S 175W AT 011200Z.",
+    "EXPECT WINDS 35 KNOTS. ROUGH SEAS WITH HEAVY SWELLS.",
+    "PARTS 2 AND 3 SYNOPSIS AND FORECAST",
+    "SITUATION IS MODERATE OVER REMAINDER WATERS.",
+    "NNNN",
+  ].join("\n");
+
+  const app = createMockApp();
+  app.getSelfPath = (path) =>
+    path === "navigation.position"
+      ? { latitude: -21.1, longitude: -175.2 }
+      : null;
+  const plugin = pluginFactory(app);
+  plugin.start({});
+  plugin.registerWithRouter(app.router);
+  const feed = app.getDeltaHandlers()[0];
+  const call = async (path, req = { query: {} }) => {
+    const r = app.getRoutes().find((x) => x.path === path);
+    const res = {
+      code: null,
+      payload: null,
+      status(c) {
+        this.code = c;
+        return this;
+      },
+      json(p) {
+        this.payload = p;
+      },
+    };
+    await r.handler(req, res);
+    return res;
+  };
+  feed({
+    updates: [
+      { values: [{ path: "network.internet.state", value: "online" }] },
+    ],
+  });
+  const openMeteoFetch = mockOpenMeteo();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes("tgftp.nws.noaa.gov")) {
+      return { ok: true, text: async () => TGFTP_TEXT };
+    }
+    if (u.includes("weather.gmdss.org") || u.includes("msi.admiralty.co.uk")) {
+      throw new Error("down");
+    }
+    return openMeteoFetch(url);
+  };
+  try {
+    // Compile the here payload: its metareaBulletin is computed at
+    // compile time, in this case with the current filter
+    await call("/api/briefing/refresh");
+
+    // Simulate a payload compiled by an older plugin version: stale
+    // blocks that the current filter would never produce
+    const hereFile = join(app.dataDir, "weather", "here.json");
+    const payload = JSON.parse(readFileSync(hereFile, "utf8"));
+    payload.metareaBulletin.blocks = ["STALE BOILERPLATE THE OLD FILTER KEPT"];
+    writeFileSync(hereFile, JSON.stringify(payload));
+
+    const res = await call("/api/briefing", { query: { route: "" } });
+    const blocks = res.payload.payload.metareaBulletin.blocks.map(
+      (b) => b.text,
+    );
+    assert.ok(
+      !blocks.some((t) => t.includes("STALE BOILERPLATE")),
+      "stale compile-time blocks replaced at serve time",
+    );
+    assert.ok(
+      blocks.some((t) => t.includes("TROUGH")),
+      "recomputed console carries the real warning",
+    );
+    assert.ok(
+      !blocks.some((t) => t.includes("SITUATION")),
+      "boilerplate rule applies at serve time too",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  plugin.stop();
+});

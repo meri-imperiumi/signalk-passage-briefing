@@ -26,14 +26,39 @@
 const SEVERE_KEYWORDS = [
   "GALE",
   "STORM",
+  "HURRICANE",
   "HURRICANE FORCE",
+  "CYCLONE",
   "SQUALL",
   "VIOLENT STORM",
   "ROUGH SEAS",
   "VERY ROUGH SEAS",
   "HIGH SEAS",
   "PHENOMENAL SEAS",
+  "FREEZING SPRAY",
+  "DENSE FOG",
+  "VOLCANIC ASH",
 ];
+
+/**
+ * Whether a block carries a severity keyword (kept in sync with the
+ * webapp's highlighter copy in `public/components/models.mjs`).
+ *
+ * Product and office names must not trip the keywords, or every NWS
+ * masthead survives the boilerplate filter: "HIGH SEAS FORECAST"
+ * would read as a HIGH SEAS warning, "NATIONAL HURRICANE CENTER"
+ * as a hurricane warning.
+ *
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasSevereKeyword(text) {
+  const upper = String(text ?? "")
+    .toUpperCase()
+    .replace(/HIGH SEAS FORECAST/g, "")
+    .replace(/HURRICANE CENTER/g, "");
+  return SEVERE_KEYWORDS.some((keyword) => upper.includes(keyword));
+}
 
 /**
  * Retained NAVTEX B_2 subject indicators (work doc #4): A navigational
@@ -61,19 +86,46 @@ const SECTION_ANCHORS =
  * @param {string} text - Raw bulletin text
  * @returns {string} Cleaned text
  */
+/**
+ * NWS fixed disclaimer paragraphs, stripped whole by their stable
+ * opening line. These frame every High Seas Forecast (seasonal
+ * coverage note, sea-state definitions, tropical-cyclone pointers);
+ * they are transmission framing, not bulletin content — and with
+ * HURRICANE/CYCLONE in the severity keywords they would otherwise
+ * survive the boilerplate filter by enumeration.
+ */
+const DISCLAIMER_START =
+  /^(SEAS GIVEN AS SIGNIFICANT|SUPERSEDED BY NEXT ISSUANCE|THIS HIGH SEAS FORECAST USES|FORECAST WINDS IN AND NEAR ACTIVE TROPICAL CYCLONES|ONLY YOU KNOW THE WEATHER|FOR ANY TROPICAL CYCLONE INFORMATION|ALL FORECASTS VALID OVER ICE FREE|FROM\s+[A-Z]+\s+\d+\s+TO\s+[A-Z]+\s+\d+\s*,?\s+DUE TO THE CLIMATOLOGY)/i;
+
 function stripBoilerplate(text) {
-  return text
-    .split(/\r?\n/)
-    .filter((line) => {
-      const trimmed = line.trim();
-      if (/^NNNN$/.test(trimmed)) {
-        return false; // End-of-message frame
-      }
-      if (/^[A-Z]{4}\d{2}\s+[A-Z]{4}\s+\d{6}Z/.test(trimmed)) {
-        return false; // Routing header (FQPS01 NFFN 011200Z AUG 26)
-      }
-      return true;
-    })
+  const kept = [];
+  let skipping = false;
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) {
+      skipping = false;
+      kept.push(line);
+      continue;
+    }
+    if (/^NNNN$/.test(trimmed)) {
+      continue; // End-of-message frame
+    }
+    if (/^\d{3,4}$/.test(trimmed)) {
+      continue; // NWS product frame line ("000")
+    }
+    if (/^[A-Z]{4}\d{2}\s+[A-Z]{4}\s+\d{6}Z?/.test(trimmed)) {
+      continue; // Routing header (FQPS01 NFFN 011200Z AUG 26,
+      // or the NWS API's bare "FZPN03 KNHC 030838")
+    }
+    if (!skipping && DISCLAIMER_START.test(trimmed)) {
+      skipping = true; // Fixed disclaimer paragraph: drop to the blank line
+      continue;
+    }
+    if (!skipping) {
+      kept.push(line);
+    }
+  }
+  return kept
     .join("\n")
     .replace(/\bGULF OF AMERICA\b/gi, "GULF OF MEXICO")
     .replace(/\n{3,}/g, "\n\n")
@@ -278,6 +330,22 @@ function parseCardinalBounds(text) {
   const northOf = text.match(/NORTH OF\s+(\d+(?:\.\d+)?)\s*([NS])/i);
   if (northOf) {
     minLat = hemisphereDegrees(northOf[1], northOf[2].toUpperCase());
+    found = true;
+  }
+  // The equator is a real bound in NWS area headers ("NORTH PACIFIC
+  // EQUATOR TO 30N BETWEEN 140W AND 180W"), not a poleward default —
+  // without this the area line parses to a pole-to-pole box that
+  // intersects every water on the longitude band
+  const equatorTo = text.match(/EQUATOR\s+TO\s+(\d+(?:\.\d+)?)\s*([NS])/i);
+  if (equatorTo) {
+    const deg = hemisphereDegrees(equatorTo[1], equatorTo[2].toUpperCase());
+    if (deg >= 0) {
+      minLat = Math.max(minLat, 0);
+      maxLat = Math.min(maxLat, deg);
+    } else {
+      minLat = Math.max(minLat, deg);
+      maxLat = Math.min(maxLat, 0);
+    }
     found = true;
   }
 
@@ -829,6 +897,13 @@ function filterBulletin({
       if (!intersectsTrack(geometry, track)) {
         return null; // Discard rule: not on our waters
       }
+      // The warnings console is for relevant paragraphs only: a block
+      // with neither geography nor severity is transmission
+      // boilerplate (preamble, disclaimers, footers) — dropping it
+      // keeps real warnings from drowning in NWS preamble text
+      if (!geometry && !hasSevereKeyword(blockText)) {
+        return null;
+      }
       return {
         text: blockText,
         subject: subject ?? null,
@@ -1034,6 +1109,7 @@ module.exports = {
   SEVERE_KEYWORDS,
   SECTION_ANCHORS,
   stripBoilerplate,
+  hasSevereKeyword,
   navtexSubject,
   shouldRetainSubject,
   segmentBlocks,

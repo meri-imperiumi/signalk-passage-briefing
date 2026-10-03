@@ -787,6 +787,27 @@ module.exports = (app) => {
   }
 
   /**
+   * Recomputes a briefing payload's bulletin console from the
+   * bulletin cache at serve time: the cached payload carries blocks
+   * computed at compile, and parsing or filtering improvements must
+   * reach cached briefings on the next page load, not wait for a
+   * re-fetch (the crew is offline when they notice). A payload whose
+   * cache is gone keeps its own compile-time console.
+   *
+   * @param {object} payload - Briefing payload, mutated in place
+   * @returns {Promise<void>}
+   */
+  async function refilterPayloadBulletin(payload) {
+    if (!payload?.waypoints?.length) {
+      return;
+    }
+    const fresh = await bulletinForTrack(payload.waypoints);
+    if (fresh) {
+      payload.metareaBulletin = fresh;
+    }
+  }
+
+  /**
    * Vessel position from the Signal K self path (work doc #7 here
    * mode). Both wrapped and plain value shapes are unwrapped.
    *
@@ -2064,6 +2085,8 @@ module.exports = (app) => {
             });
             return;
           }
+          // Serve-time bulletin re-filter (same as route mode)
+          await refilterPayloadBulletin(here.payload);
           res.json({
             mode: "here",
             payload: here.payload,
@@ -2084,16 +2107,12 @@ module.exports = (app) => {
           });
           return;
         }
-        // Splice the freshest cached bulletin into older briefings so
-        // the warning panel stays current through the offline hours
-        if (!cached.payload?.metareaBulletin) {
-          const bulletin = await bulletinForTrack(
-            cached.payload?.waypoints ?? [],
-          );
-          if (bulletin) {
-            cached.payload.metareaBulletin = bulletin;
-          }
-        }
+        // Serve-time bulletin re-filter: recompute the merged console
+        // from the bulletin cache against the payload's track, so
+        // parsing and filtering improvements reach cached briefings
+        // on the next page load — and a payload compiled before a
+        // fresher bulletin arrived picks the newer merged view
+        await refilterPayloadBulletin(cached.payload);
         res.json({
           mode: "route",
           routeId: effectiveRoute,
