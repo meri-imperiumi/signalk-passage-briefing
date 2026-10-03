@@ -123,6 +123,19 @@ test("webapp view models", async (t) => {
     },
   );
 
+  await t.test(
+    "sparklineColumns carries the slatting tag for the hatch",
+    () => {
+      const cols = sparklineColumns([
+        { hoursFromNow: 0, comfortLevel: "rough", awsKnots: 8, slatting: true },
+        { hoursFromNow: 1, comfortLevel: "rough", awsKnots: 30 },
+      ]);
+      assert.equal(cols[0].slatting, true);
+      assert.match(cols[0].title, /slatting/);
+      assert.equal(cols[1].slatting, false);
+    },
+  );
+
   await t.test("sparklineColumns caps the window at 24 columns", () => {
     const blocks = Array.from({ length: 30 }, (_, i) => ({
       hoursFromNow: i,

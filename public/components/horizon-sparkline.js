@@ -31,7 +31,20 @@ class HorizonSparkline extends HTMLElement {
         rect { shape-rendering: crispEdges; }
       </style>
       <svg viewBox="0 0 240 96" preserveAspectRatio="none" role="img"
-        aria-label="24 hour comfort and wind outlook"></svg>
+        aria-label="24 hour comfort and wind outlook">
+        <defs>
+          <!-- Slatting hatch (work doc #14): Rough blocks triggered by
+            light air in a residual swell render striped — heavy-weather
+            rough keeps its solid colour. Transparent background lets
+            the card colour show between the stripes. -->
+          <pattern id="slatting-hatch" width="6" height="6"
+            patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <rect width="6" height="6" fill="none"></rect>
+            <line x1="0" y1="0" x2="0" y2="6"
+              stroke="var(--comfort-rough)" stroke-width="3"></line>
+          </pattern>
+        </defs>
+      </svg>
     `;
     this._svg = this.shadowRoot.querySelector("svg");
     this._rects = [];
@@ -41,8 +54,8 @@ class HorizonSparkline extends HTMLElement {
   /**
    * Re-renders the bars from comfort blocks.
    *
-   * @param {Array<{hoursFromNow: number, comfortLevel: string, awsKnots: number}>|
-   *   null} hourlyComfort
+   * @param {Array<{hoursFromNow: number, comfortLevel: string, awsKnots:
+   *   number, slatting?: boolean}>|null} hourlyComfort
    */
   setColumns(hourlyComfort) {
     this._columns = hourlyComfort;
@@ -64,7 +77,10 @@ class HorizonSparkline extends HTMLElement {
       const rect = this._rects[i];
       rect.setAttribute("x", String(i * width));
       rect.setAttribute("height", String((col.heightPct / 100) * 96));
-      rect.setAttribute("fill", col.color);
+      rect.setAttribute(
+        "fill",
+        col.slatting ? "url(#slatting-hatch)" : col.color,
+      );
       rect.querySelector("title").textContent = col.title;
     });
   }

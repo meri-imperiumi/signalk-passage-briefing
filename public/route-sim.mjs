@@ -840,6 +840,7 @@ export function simulateRun({
       awsKnots: comfort.awsKnots,
       azMs2: comfort.acceleration.value,
       comfortLevel: comfort.comfort,
+      slatting: comfort.slatting,
       twsKnots: tws,
       hsMeters: hs ?? null,
       tpSeconds: tp ?? null,

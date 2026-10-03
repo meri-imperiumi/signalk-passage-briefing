@@ -331,3 +331,77 @@ test("binIndexFor clamps to the last bin", async () => {
   assert.equal(binIndexFor(7, [0, 5, 10]), 1);
   assert.equal(binIndexFor(99, [0, 5, 10]), 2);
 });
+
+describe("slatting & roll-dampening penalty (work doc #14)", () => {
+  test("glassy calm bypasses the penalty entirely", async () => {
+    const { slattingRisk } = await physics();
+    // Calm sea: no slatting regardless of wind
+    assert.equal(
+      slattingRisk({ hsMeters: 0.59, twsKnots: 2, twaRad: 0 }),
+      false,
+    );
+    assert.equal(
+      slattingRisk({ hsMeters: 0.3, twsKnots: 0, twaRad: 0 }),
+      false,
+    );
+  });
+
+  test("upwind loses dampening below 7 kn, downwind below 12 kn", async () => {
+    const { slattingRisk } = await physics();
+    const swell = 1.2;
+    // Upwind / reaching (|TWA| < 90°)
+    assert.equal(
+      slattingRisk({ hsMeters: swell, twsKnots: 6.9, twaRad: 0.5 }),
+      true,
+    );
+    assert.equal(
+      slattingRisk({ hsMeters: swell, twsKnots: 7.0, twaRad: 0.5 }),
+      false,
+    );
+    // Downwind / running (|TWA| ≥ 90°)
+    assert.equal(
+      slattingRisk({ hsMeters: swell, twsKnots: 11.9, twaRad: 2.5 }),
+      true,
+    );
+    assert.equal(
+      slattingRisk({ hsMeters: swell, twsKnots: 12.0, twaRad: 2.5 }),
+      false,
+    );
+    // The ±90° boundary itself counts as downwind
+    assert.equal(
+      slattingRisk({ hsMeters: swell, twsKnots: 11.0, twaRad: Math.PI / 2 }),
+      true,
+    );
+  });
+
+  test("serenoComfort forces at least Rough and tags the hour", async () => {
+    const { serenoComfort, COMFORT_TIERS, comfortSeverity } = await physics();
+    const vessel = {
+      sogKnots: 5,
+      headingRad: 0,
+      waterlineLengthM: 9.4,
+      kHeel: 0.35,
+      kPitch: 0.4,
+    };
+    // Light air upwind in a 1.2 m swell: raw motion reads calm, but
+    // the snap-roll regime forces Rough and flags slatting
+    const washing = serenoComfort(
+      { tpSeconds: 9, hsMeters: 1.2, waveTravelDirectionRad: 0 },
+      vessel,
+      { twsKnots: 5, twaRad: 0.5 },
+    );
+    assert.equal(washing.slatting, true);
+    assert.ok(
+      comfortSeverity(washing.comfort) >= comfortSeverity("rough"),
+      `expected at least rough, got ${washing.comfort}`,
+    );
+    // Champagne-ish conditions without the swell: same wind, no tag
+    const glassy = serenoComfort(
+      { tpSeconds: 9, hsMeters: 0.4, waveTravelDirectionRad: 0 },
+      vessel,
+      { twsKnots: 5, twaRad: 0.5 },
+    );
+    assert.equal(glassy.slatting, false);
+    assert.equal(glassy.comfort, "champagne");
+  });
+});

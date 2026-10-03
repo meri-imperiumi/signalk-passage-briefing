@@ -374,6 +374,19 @@ $$a_z = a_{z,\text{base}} \cdot \mu_{\text{heel}} \cdot \mu_{\text{pitch}}$$
 * $0.630 \le a_z < 1.250\text{ m/s}^2 \implies \mathbf{Rough}$
 * $a_z \ge 1.250\text{ m/s}^2 \implies \mathbf{Sick}$
 
+#### Slatting & Roll-Dampening Penalty (work doc #14)
+
+On a monohull, aerodynamic pressure in the sails dampens roll. When
+that pressure is lost but a residual swell remains, the snap-roll and
+boom shock-loading can be worse than a gale — yet raw $a_z$ scores it
+calm, because the sea state itself is modest. After the base rating:
+
+1. **Glassy-calm gate:** if $H_{s,\text{combined}} < 0.6\text{ m}$ there is not enough wave energy to roll the hull — the penalty is skipped entirely.
+2. **Dampening-loss thresholds:** otherwise the sails have lost their dampening pressure when
+   * upwind / reaching ($|TWA| < 90°$): $TWS < 7.0\text{ kt}$
+   * downwind / running ($|TWA| \ge 90°$): $TWS < 12.0\text{ kt}$ — the boat sails away from its wind, dropping apparent wind below flow-attachment.
+3. **Washing-machine penalty:** when the regime is detected, the vertical acceleration is multiplied by $\mu_{\text{slat}} = 2.5$ before ISO banding, and the hour's tier is forced to at least **Rough**. The hourly row carries a `slatting` tag; the tactical dashboard renders slatting-triggered Rough blocks with a diagonal hatch (alternating `--comfort-rough` over the card background) so the skipper sees the discomfort is light-air slatting, not heavy weather — alter course for a better wave angle, drop the main and motor, or lock the boom down.
+
 
 
 ### 5.3 Hazard Proximity Ray-Casting Algorithm

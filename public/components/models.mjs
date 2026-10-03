@@ -240,10 +240,11 @@ export function sparklineColumns(hourlyComfort, hours = 24) {
     return {
       hoursFromNow: b.hoursFromNow,
       comfortLevel: b.comfortLevel ?? null,
+      slatting: Boolean(b.slatting),
       awsKnots: aws,
       heightPct: Math.max(4, Math.round((aws / maxAws) * 100)),
       color: comfortColor(b.comfortLevel),
-      title: `${b.hoursFromNow}h: ${fmtKn(aws)} AWS, ${b.comfortLevel ?? "?"}`,
+      title: `${b.hoursFromNow}h: ${fmtKn(aws)} AWS, ${b.comfortLevel ?? "?"}${b.slatting ? " (slatting)" : ""}`,
     };
   });
 }
@@ -348,6 +349,7 @@ export function hereHourly(payload, config = {}, hours = 24) {
       awsKnots: comfort.awsKnots,
       azMs2: comfort.acceleration.value,
       comfortLevel: comfort.comfort,
+      slatting: comfort.slatting,
       twsKnots: tws,
       sogKnots: 0,
       night: isNight(t, waypoint.lat, waypoint.lon),

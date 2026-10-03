@@ -903,3 +903,25 @@ describe("anchorSailChanges", () => {
     assert.equal(anchored[0].hoursFromNow, 4);
   });
 });
+
+test("slatting regime forces rough and tags hourly rows (work doc #14)", async () => {
+  const { filterExceptions, simulatePassage } = await simPromise;
+  // Light air (5 kn) upwind in a 1.2 m residual swell: the washing
+  // machine — raw acceleration stays modest, the penalty does the work
+  const exceptions = filterExceptions(
+    simulatePassage({
+      payload: buildPayload({ tws: 5, hs: 1.2 }),
+      startTime: new Date("2026-06-21T06:00:00Z"),
+    }),
+  );
+  const blocks = exceptions.next24h.comfortBlocks;
+  assert.ok(blocks.length > 0);
+  for (const block of blocks) {
+    assert.equal(
+      block.slatting,
+      true,
+      `slatting tagged at ${block.hoursFromNow}h`,
+    );
+    assert.equal(block.comfortLevel, "rough");
+  }
+});

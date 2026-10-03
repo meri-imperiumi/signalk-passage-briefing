@@ -15,7 +15,9 @@
  * 2. **Motion** — RMS vertical acceleration from the wave encounter
  *    period, adjusted for heel-induced roll and hull-length pitching
  *    resonance (SPEC §5.2 vector 2), rated against the comfort bands of
- *    ISO 2631-1.
+ *    ISO 2631-1. The slatting & roll-dampening penalty (work doc #14)
+ *    scales the motion of light air in a residual swell — the
+ *    "washing machine" a raw acceleration number reads as calm.
  *
  * The physics follows SV Sabado's `passage-weather` planner
  * (https://github.com/sailing12388/passage-weather, MIT), adapted for a
@@ -141,6 +143,65 @@ export const NIGHT_SUN_ALTITUDE_DEG = 0;
  * passage-weather's comfort model.
  */
 export const ENCOUNTER_FACTOR_FLOOR = 0.15;
+
+/**
+ * Combined significant wave height (m) below which the sea is glassy
+ * calm and the slatting penalty never applies: not enough wave energy
+ * to roll the hull (work doc #14, gate step 1).
+ */
+export const SLATTING_HS_MAX_M = 0.6;
+
+/**
+ * True wind speed (knots) below which aerodynamic roll-dampening is
+ * lost upwind / reaching (TWA within ±90°): not enough sail pressure
+ * to hold the rig steady against a residual swell (work doc #14, gate
+ * step 2).
+ */
+export const SLATTING_TWS_UPWIND_KNOTS = 7;
+
+/**
+ * True wind speed (knots) below which aerodynamic roll-dampening is
+ * lost downwind / running (TWA beyond ±90°): the boat sails away from
+ * the wind, dropping apparent wind too low to keep flow attached
+ * (work doc #14, gate step 2).
+ */
+export const SLATTING_TWS_DOWNWIND_KNOTS = 12;
+
+/**
+ * Discomfort multiplier of the vertical acceleration when the
+ * slatting regime is detected (work doc #14, μ_slat): the snap-roll
+ * and boom shock-loading of light air in a residual swell.
+ */
+export const SLATTING_MULTIPLIER = 2.5;
+
+/**
+ * Whether the hour sits in the slatting & roll-dampening regime (work
+ * doc #14): a residual swell (combined Hs at or over
+ * {@link SLATTING_HS_MAX_M}) with too little true wind to keep the
+ * sails loaded — the threshold depends on the point of sail, upwind
+ * losing dampening sooner than downwind. A glassy calm bypasses the
+ * penalty entirely; this is the "washing machine", not the gale.
+ *
+ * @param {object} params
+ * @param {number} params.hsMeters - Combined significant wave height (m)
+ * @param {number} params.twsKnots - True wind speed (knots)
+ * @param {number} params.twaRad - True wind angle (rad, signed, 0 =
+ *   wind from dead ahead)
+ * @returns {boolean}
+ */
+export function slattingRisk({ hsMeters, twsKnots, twaRad }) {
+  if (!Number.isFinite(hsMeters) || hsMeters < SLATTING_HS_MAX_M) {
+    return false;
+  }
+  if (!Number.isFinite(twsKnots) || !Number.isFinite(twaRad)) {
+    return false;
+  }
+  const upwind = Math.abs(twaRad) < Math.PI / 2;
+  const threshold = upwind
+    ? SLATTING_TWS_UPWIND_KNOTS
+    : SLATTING_TWS_DOWNWIND_KNOTS;
+  return twsKnots < threshold;
+}
 
 /**
  * Converts a direction from the meteorological *from* convention (the
@@ -511,13 +572,17 @@ export function verticalAcceleration(sea, vessel, wind) {
 /**
  * Full Sereno comfort assessment for one passage hour (SPEC §5.2):
  * apparent wind rating and motion rating, plus the combined level
- * (the worse of the two).
+ * (the worse of the two). The slatting & roll-dampening penalty (work
+ * doc #14) scales the vertical acceleration by
+ * {@link SLATTING_MULTIPLIER} before banding and forces the motion
+ * tier to at least Rough — the payload's `slatting` flag tells the
+ * dashboard to hatch the block.
  *
  * @param {object} sea - See {@link verticalAcceleration} `sea`
  * @param {object} vessel - See {@link verticalAcceleration} `vessel`
  * @param {object} wind - See {@link verticalAcceleration} `wind`
  * @returns {{awsKnots: number, awsComfort: string, acceleration: object,
- *   motionComfort: string, comfort: string}}
+ *   motionComfort: string, comfort: string, slatting: boolean}}
  */
 export function serenoComfort(sea, vessel, wind) {
   const awsKnots = apparentWindSpeedKnots({
@@ -526,14 +591,23 @@ export function serenoComfort(sea, vessel, wind) {
     twaRad: wind.twaRad,
   });
   const acceleration = verticalAcceleration(sea, vessel, wind);
+  const slatting = slattingRisk({
+    hsMeters: sea.hsMeters,
+    twsKnots: wind.twsKnots,
+    twaRad: wind.twaRad,
+  });
   const awsComfort = rateApparentWind(awsKnots);
-  const motionComfort = rateAcceleration(acceleration.value);
+  const motionComfort = rateAcceleration(
+    slatting ? acceleration.value * SLATTING_MULTIPLIER : acceleration.value,
+  );
+  const comfort = worseComfort(awsComfort, motionComfort);
   return {
     awsKnots,
     awsComfort,
     acceleration,
     motionComfort,
-    comfort: worseComfort(awsComfort, motionComfort),
+    comfort: slatting ? worseComfort(comfort, "rough") : comfort,
+    slatting,
   };
 }
 
