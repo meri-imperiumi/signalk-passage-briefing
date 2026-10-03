@@ -1443,6 +1443,17 @@ module.exports = (app) => {
     return join(configPath, "plugin-config-data", "signalk-logbook");
   }
 
+  /** Startup grace (ms) before the delta-fed path sources are
+   * recorded in the status registry (work doc #23, bergie session
+   * note): the server replays current values to new subscriptions a
+   * few seconds after start-up, and a snapshot taken before that
+   * replay would record a transient failure/absence for paths that
+   * are actually fine — navigation.state is the known case.
+   * Non-path sources (resources, plugin-provided) record from the
+   * first tick. */
+  const PATH_SOURCE_GRACE_MS = 2 * 60 * 1000;
+  let startedAt = Date.now();
+
   /**
    * Records the Signal K source availability in the source status
    * registry (work doc #23): the checklist also covers the server
@@ -1453,9 +1464,9 @@ module.exports = (app) => {
    * there (companion plugin not installed, no route being sailed)
    * records as absent — information, not an error.
    *
-   * Runs from the cron ticker: the first minute of uptime is the
-   * grace period in which the server replays current values to the
-   * new subscriptions.
+   * Runs from the cron ticker: delta-fed path sources are skipped
+   * during the startup grace period, in which the server replays
+   * current values to the new subscriptions.
    *
    * @param {Date} [now]
    */
@@ -1469,55 +1480,66 @@ module.exports = (app) => {
       typeof app.getSelfPath === "function"
         ? unwrap(app.getSelfPath(path))
         : null;
-    const pathSources = [
-      {
-        id: "sk-internet-state",
-        path: INTERNET_STATE_PATH,
-        label: "Internet state (signalk-internet)",
-        required: true,
-      },
-      {
-        id: "sk-navigation-state",
-        path: NAVIGATION_STATE_PATH,
-        label: "Navigation state",
-        required: true,
-      },
-      {
-        id: "sk-house-soc",
-        path: HOUSE_SOC_PATH,
-        label: "House battery SoC",
-        required: true,
-      },
-      {
-        id: "sk-active-route",
-        path: ACTIVE_ROUTE_PATH,
-        label: "Active route",
-        required: false,
-      },
-      {
-        id: "sk-energy-prediction",
-        path: ENERGY_FORECAST_PATH,
-        label: "Energy outlook (energy-predictor)",
-        required: false,
-      },
-    ];
-    for (const source of pathSources) {
-      const missing = observations[source.path] == null;
-      sourceStatus.record({
-        id: source.id,
-        label: source.label,
-        kind: "signalk",
-        url: source.path,
-        ...(missing
-          ? source.required
-            ? {
-                error: new Error("No value received since startup"),
-                errorClass: "unavailable",
-              }
-            : { absent: true }
-          : {}),
-        now,
-      });
+    // Delta-fed paths: during the startup grace the server has not
+    // replayed current values yet, so a snapshot here would lie about
+    // sources that are about to populate (navigation.state arrives a
+    // few seconds in). Skip them; they record from the next tick.
+    if (now.getTime() - startedAt >= PATH_SOURCE_GRACE_MS) {
+      const pathSources = [
+        {
+          id: "sk-internet-state",
+          path: INTERNET_STATE_PATH,
+          label: "Internet state (signalk-internet)",
+          required: true,
+        },
+        {
+          id: "sk-navigation-state",
+          path: NAVIGATION_STATE_PATH,
+          label: "Navigation state",
+          // Optional: many boats never publish navigation.state, and
+          // everything that reads it degrades gracefully — the state
+          // machine fetches regardless (unset ≠ moored), and the
+          // departure anchor treats unset as not underway (work doc
+          // #15). A FAIL here would be a permanent false alarm.
+          required: false,
+        },
+        {
+          id: "sk-house-soc",
+          path: HOUSE_SOC_PATH,
+          label: "House battery SoC",
+          required: true,
+        },
+        {
+          id: "sk-active-route",
+          path: ACTIVE_ROUTE_PATH,
+          label: "Active route",
+          required: false,
+        },
+        {
+          id: "sk-energy-prediction",
+          path: ENERGY_FORECAST_PATH,
+          label: "Energy outlook (energy-predictor)",
+          required: false,
+        },
+      ];
+      for (const source of pathSources) {
+        const missing = observations[source.path] == null;
+        sourceStatus.record({
+          id: source.id,
+          label: source.label,
+          kind: "signalk",
+          url: source.path,
+          ...(missing
+            ? source.required
+              ? {
+                  error: new Error("No value received since startup"),
+                  errorClass: "unavailable",
+                }
+              : { absent: true }
+            : {}),
+          now,
+        });
+      }
     }
     // Resource-side sources
     const routesAvailable =
@@ -1600,6 +1622,11 @@ module.exports = (app) => {
     description:
       "Offshore passage daily briefing: multi-model weather outlook, comfort " +
       "physics and learned sail preferences",
+    // Test seam: shift the start-up instant so the source-status grace
+    // period can be traversed deterministically
+    __setStartedAt: (value) => {
+      startedAt = value;
+    },
 
     schema: {
       type: "object",

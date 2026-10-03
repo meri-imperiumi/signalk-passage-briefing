@@ -2000,10 +2000,6 @@ test("source status: SK availability recorded and served at /sources", async () 
     ],
   });
 
-  // Required paths with data read OK; missing required ones fail as
-  // unavailable; optional ones absent — information, not error
-  await plugin.recordSignalKSources(new Date("2026-10-03T06:00:00Z"));
-
   const route = app.getRoutes().find((r) => r.path === "/sources");
   assert.ok(route, "GET /sources registered");
   const res = {
@@ -2015,14 +2011,40 @@ test("source status: SK availability recorded and served at /sources", async () 
       this.payload = payload;
     },
   };
+
+  // During the startup grace the delta-fed paths are not recorded at
+  // all: the server has not replayed current values to the new
+  // subscriptions yet, so a snapshot would lie about sources that are
+  // about to populate (navigation.state arrives a few seconds in)
+  plugin.__setStartedAt(new Date("2026-10-03T06:00:00Z").getTime());
+  await plugin.recordSignalKSources(new Date("2026-10-03T06:00:00Z"));
   await route.handler({}, res);
-  const entries = Object.fromEntries(
+  let entries = Object.fromEntries(
     res.payload.map((entry) => [entry.id, entry]),
   );
+  assert.equal(
+    entries["sk-internet-state"],
+    undefined,
+    "path sources skipped in grace",
+  );
+  assert.ok(
+    entries["sk-routes-resources"],
+    "non-path sources record during grace",
+  );
+
+  // Past the grace: required paths with data read OK; missing
+  // required ones fail as unavailable; optional ones absent —
+  // information, not error
+  plugin.__setStartedAt(new Date("2026-10-03T03:00:00Z").getTime());
+  await plugin.recordSignalKSources(new Date("2026-10-03T06:00:00Z"));
+  await route.handler({}, res);
+  entries = Object.fromEntries(res.payload.map((entry) => [entry.id, entry]));
   assert.equal(entries["sk-internet-state"].lastStatus, "ok");
   assert.equal(entries["sk-internet-state"].kind, "signalk");
-  assert.equal(entries["sk-navigation-state"].lastStatus, "fail");
-  assert.equal(entries["sk-navigation-state"].lastError.class, "unavailable");
+  // Optional: unset navigation.state is a degrade-to-absent, not a
+  // failure (the state machine and the departure anchor both handle
+  // unset gracefully)
+  assert.equal(entries["sk-navigation-state"].lastStatus, "absent");
   assert.equal(entries["sk-house-soc"].lastStatus, "fail");
   assert.equal(entries["sk-active-route"].lastStatus, "absent");
   assert.equal(entries["sk-energy-prediction"].lastStatus, "absent");
