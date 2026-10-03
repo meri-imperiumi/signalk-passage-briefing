@@ -813,6 +813,26 @@ export function mergeTimeline(exceptions, payload = null) {
     });
   }
 
+  // GDACS hazard events (work doc #22): earthquakes, cyclones, floods
+  // and volcanoes near the vessel or route — timeline kind `hazard`,
+  // the alert level setting the severity
+  for (const h of payload?.hazardEvents ?? []) {
+    push({
+      hoursFromNow: relHours(h.timestamp, fetchMs),
+      timestamp: h.timestamp ?? null,
+      kind: "hazard",
+      severity: h.alertLevel === "red" ? "severe" : "warn",
+      label: h.title ?? `${h.type ?? ""} hazard event`.trim(),
+      detail: [
+        h.distanceNm != null ? `${h.distanceNm} nm` : null,
+        h.bearingDeg != null ? `${h.bearingDeg}°` : null,
+        h.type ?? null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    });
+  }
+
   // Territorial waters transitions (work doc #17): the source object
   // carries `enter`/`leave` in its own `kind`; the timeline kind is
   // always `zone`

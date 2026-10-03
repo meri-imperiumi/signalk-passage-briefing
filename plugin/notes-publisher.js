@@ -228,6 +228,81 @@ async function clearNotes(store) {
   await store.clear();
 }
 
+/**
+ * Builds one Signal K note for a GDACS hazard event (work doc #22):
+ * schema-conservative like the METAREA notes — position, description,
+ * provenance in properties, event page as the url.
+ *
+ * @param {object} event - Filtered hazard event
+ * @returns {object} Note (id derived separately)
+ */
+function buildHazardNote(event) {
+  const title = String(event.title ?? "Hazard event").trim() || "Hazard event";
+  return {
+    title:
+      title.length > 48
+        ? `${title.slice(0, title.lastIndexOf(" ", 48))}…`
+        : title,
+    description: event.description ?? title,
+    position: {
+      latitude: Math.round(event.lat * 1e4) / 1e4,
+      longitude: Math.round(event.lon * 1e4) / 1e4,
+    },
+    url: event.link ?? undefined,
+    properties: {
+      category: "hazard-event",
+      eventType: event.type ?? null,
+      alertLevel: event.alertLevel ?? null,
+      source: "gdacs",
+      sourcePlugin: "signalk-passage-briefing",
+      publishedBy: "GDACS",
+      publishedAt: event.timestamp ?? null,
+    },
+    timestamp: event.timestamp ?? null,
+  };
+}
+
+/**
+ * Publishes filtered hazard events as notes, then prunes stale ones.
+ * Note ids are content-addressed on the GDACS event id, so a repoll
+ * updates in place; the prune touches only `hazard-` prefixed ids —
+ * the METAREA pass and notes written by other clients are untouched.
+ *
+ * @param {object} params
+ * @param {NotesStore} params.store - the shared notes store
+ * @param {Array<object>} params.events - Filtered hazard events
+ * @returns {Promise<{published: string[], pruned: string[]}>}
+ */
+async function publishHazardNotes({ store, events }) {
+  if (!store) {
+    return { published: [], pruned: [] };
+  }
+  const published = [];
+  const kept = new Set();
+  for (const event of events ?? []) {
+    if (!Number.isFinite(event?.lat) || !Number.isFinite(event?.lon)) {
+      continue; // A note that cannot be placed is on the wrong spot
+    }
+    const id = `hazard-${createHash("sha1")
+      .update(String(event.id))
+      .digest("hex")
+      .slice(0, 12)}`;
+    await store.set(id, buildHazardNote(event));
+    kept.add(id);
+    published.push(id);
+  }
+  // Scoped expiry: drop this feed's notes that fell out of the set
+  const all = await store.list();
+  const pruned = [];
+  for (const id of Object.keys(all)) {
+    if (id.startsWith("hazard-") && !kept.has(id)) {
+      await store.delete(id);
+      pruned.push(id);
+    }
+  }
+  return { published, pruned };
+}
+
 module.exports = {
   noteTitle,
   geometryPosition,
@@ -235,4 +310,6 @@ module.exports = {
   buildNote,
   publishNotes,
   clearNotes,
+  buildHazardNote,
+  publishHazardNotes,
 };

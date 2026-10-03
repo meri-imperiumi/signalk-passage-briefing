@@ -82,6 +82,32 @@ signalk-passage-outlook/
       "type": "boolean",
       "title": "Lines of Interest (ceremonial crossings)",
       "default": true
+    },
+    "hazard_events_enabled": {
+      "type": "boolean",
+      "title": "GDACS Hazard Events",
+      "default": true
+    },
+    "hazard_min_alert_level": {
+      "type": "string",
+      "enum": ["green", "orange", "red"],
+      "title": "Minimum GDACS Alert Level",
+      "default": "orange"
+    },
+    "hazard_radius_offroute_nm": {
+      "type": "number",
+      "title": "Hazard Off-route Radius (nm)",
+      "default": 500
+    },
+    "hazard_radius_ahead_nm": {
+      "type": "number",
+      "title": "Hazard Vessel Radius (nm)",
+      "default": 1000
+    },
+    "hazard_max_age_hours": {
+      "type": "number",
+      "title": "Hazard Event Aging (hours)",
+      "default": 72
     }
   }
 }
@@ -165,6 +191,19 @@ interface UnifiedWeatherPayload {
     astronomicalDawn: string | null;
     nauticalDawn: string | null;
     civilDawn: string | null;
+  }[];
+  hazardEvents?: {
+    id: string;                 // GDACS event id
+    type: string;               // 'EQ' | 'TC' | 'FL' | 'VO' | 'DR' | 'WF'
+    alertLevel: string;         // 'green' | 'orange' | 'red'
+    title: string;
+    description: string;
+    timestamp: string;          // ISO, newer of pubDate/datemodified
+    lat: number;
+    lon: number;
+    distanceNm: number;         // from the admitting reference (vessel or route)
+    bearingDeg: number;         // degrees true from the same reference
+    link: string | null;        // GDACS event page
   }[];
 }
 

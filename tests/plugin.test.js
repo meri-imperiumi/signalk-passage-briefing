@@ -1667,3 +1667,92 @@ describe("plugin", () => {
     plugin.stop();
   });
 });
+
+test("hazard events: GDACS feed rides the online window into the payload and notes", async () => {
+  const { mockOpenMeteo } = require("./openmeteo-mock.js");
+  const { readFileSync } = require("node:fs");
+  const { join } = require("node:path");
+  // Real feed shape (fixture trimmed from the live GDACS RSS) plus a
+  // synthetic Orange earthquake near the test vessel
+  const gdacsXml = readFileSync(
+    join(__dirname, "fixtures", "gdacs-rss-sample.xml"),
+    "utf8",
+  ).replace(
+    "</rss>",
+    `<item>
+      <title>Orange earthquake alert near the vessel</title>
+      <description>M6.2 earthquake, 90 km deep, near the route.</description>
+      <link>https://www.gdacs.org/report.aspx?eventtype=EQ&amp;eventid=1</link>
+      <pubDate>${new Date(Date.now() - 3600000).toUTCString()}</pubDate>
+      <gdacs:eventtype>EQ</gdacs:eventtype>
+      <gdacs:alertlevel>Orange</gdacs:alertlevel>
+      <guid isPermaLink="false">EQTEST1</guid>
+      <georss:point>-18.5 178.0</georss:point>
+    </item>
+  </rss>`,
+  );
+
+  const app = createMockApp();
+  app.getSelfPath = (path) =>
+    path === "navigation.position"
+      ? { latitude: -18.658, longitude: -173.982 }
+      : null;
+  const plugin = pluginFactory(app);
+  plugin.start({});
+  plugin.registerWithRouter(app.router);
+  const feed = app.getDeltaHandlers()[0];
+  const call = async (path) => {
+    const r = app.getRoutes().find((x) => x.path === path);
+    const res = {
+      code: null,
+      payload: null,
+      status(c) {
+        this.code = c;
+        return this;
+      },
+      json(p) {
+        this.payload = p;
+      },
+    };
+    await r.handler({ query: {} }, res);
+    return res;
+  };
+
+  feed({
+    updates: [
+      { values: [{ path: "network.internet.state", value: "online" }] },
+    ],
+  });
+  const openMeteoFetch = mockOpenMeteo();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("gdacs.org")) {
+      return { ok: true, text: async () => gdacsXml };
+    }
+    return openMeteoFetch(url);
+  };
+  try {
+    await call("/api/briefing/refresh");
+    const res = await call("/api/briefing");
+    const events = res.payload.payload.hazardEvents ?? [];
+    const near = events.find((e) => e.id === "EQTEST1");
+    assert.ok(near, "near-vessel event survives the geography filter");
+    assert.equal(near.alertLevel, "orange");
+    assert.ok(near.distanceNm < 500, `distance ${near.distanceNm}`);
+    assert.equal(typeof near.bearingDeg, "number");
+
+    // The surviving event publishes as a chart note
+    const provider = app.getResourceProviders().find((p) => p.type === "notes");
+    const listed = await provider.methods.listResources({});
+    const hazardIds = Object.keys(listed).filter((id) =>
+      id.startsWith("hazard-"),
+    );
+    assert.equal(hazardIds.length, 1, "one hazard note written");
+    assert.equal(listed[hazardIds[0]].properties.category, "hazard-event");
+    assert.equal(listed[hazardIds[0]].position.latitude, -18.5);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  plugin.stop();
+});

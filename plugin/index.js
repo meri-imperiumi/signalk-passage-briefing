@@ -51,7 +51,12 @@ const ephemeris = require("./celestial-ephemeris.js");
 const { registerPlotterExtension } = require("./brief-ext.js");
 const { registerStatusTileExamples } = require("./statustilesexamples.js");
 const { createNotesStore, registerNotesProvider } = require("./notes-store.js");
-const { clearNotes, publishNotes } = require("./notes-publisher.js");
+const {
+  clearNotes,
+  publishNotes,
+  publishHazardNotes,
+} = require("./notes-publisher.js");
+const hazardSource = require("./hazard-source.js");
 const {
   backfillSailEvents,
   createHistoryWindStats,
@@ -139,6 +144,11 @@ const DEFAULTS = {
   k_heel: 0.35,
   k_pitch: 0.4,
   lines_of_interest_enabled: true,
+  hazard_events_enabled: true,
+  hazard_min_alert_level: "orange",
+  hazard_radius_offroute_nm: 500,
+  hazard_radius_ahead_nm: 1000,
+  hazard_max_age_hours: 72,
   /** Verified NWS High Seas Forecast feeds (METAREA XII/XV). The
    * METAREA XIV issuer (MetService) gets added as a URL once a
    * working endpoint is confirmed on board. */
@@ -177,6 +187,14 @@ module.exports = (app) => {
   let bulletinUrls = DEFAULTS.bulletin_urls;
   /** TGFTP station→zone table (from configuration). */
   let bulletinStations = DEFAULTS.bulletin_stations;
+  /** GDACS hazard event config (work doc #22). */
+  let hazardEventsEnabled = DEFAULTS.hazard_events_enabled;
+  let hazardFilterConfig = {
+    minAlertLevel: DEFAULTS.hazard_min_alert_level,
+    offRouteRadiusNm: DEFAULTS.hazard_radius_offroute_nm,
+    aheadRadiusNm: DEFAULTS.hazard_radius_ahead_nm,
+    maxAgeHours: DEFAULTS.hazard_max_age_hours,
+  };
 
   /** Simulation-relevant config subset served to the webapp worker. */
   let simulationConfig = {
@@ -490,6 +508,50 @@ module.exports = (app) => {
   }
 
   /**
+   * Refreshes the GDACS hazard cache during the online window and
+   * attaches the route-filtered events to a briefing payload (work
+   * doc #22), then publishes the surviving placeable events as chart
+   * notes like the METAREA warnings. Degrades to the cached events
+   * on fetch failure; a disabled switch attaches nothing.
+   *
+   * @param {object} payload - Briefing payload to attach to
+   * @param {{lat: number, lon: number}|null} vessel - Vessel position
+   * @param {Array<{lat: number, lon: number}>} waypoints - Route
+   *   samples (route mode) or the position waypoint (here mode)
+   * @returns {Promise<void>}
+   */
+  async function attachHazardEvents(payload, vessel, waypoints) {
+    if (!hazardEventsEnabled) {
+      return;
+    }
+    try {
+      await hazardSource.refreshHazards({
+        dataDir: app.getDataDirPath(),
+        timeoutMs: 15000,
+      });
+    } catch (error) {
+      app.debug?.(`Hazard refresh failed: ${error.message}`);
+    }
+    const events = hazardSource.filterHazards({
+      events: await hazardSource.loadHazards(app.getDataDirPath()),
+      vessel,
+      waypoints,
+      ...hazardFilterConfig,
+      now: new Date(),
+    });
+    payload.hazardEvents = events;
+    if (notesStore) {
+      const result = await publishHazardNotes({ store: notesStore, events });
+      if (result.published.length > 0 || result.pruned.length > 0) {
+        app.debug?.(
+          `Hazard notes: ${result.published.length} published, ` +
+            `${result.pruned.length} expired`,
+        );
+      }
+    }
+  }
+
+  /**
    * Vessel position from the Signal K self path (work doc #7 here
    * mode). Both wrapped and plain value shapes are unwrapped.
    *
@@ -577,6 +639,7 @@ module.exports = (app) => {
       lat: position.lat,
       lon: position.lon,
     });
+    await attachHazardEvents(payload, position, waypoints);
     const dir = join(app.getDataDirPath(), "weather");
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "here.json"), JSON.stringify(payload));
@@ -697,6 +760,7 @@ module.exports = (app) => {
       lat: waypoints[0].lat,
       lon: waypoints[0].lon,
     });
+    await attachHazardEvents(payload, vesselPosition(), waypoints);
     await savePayload(app.getDataDirPath(), routeId, payload);
     await writeFile(
       join(app.getDataDirPath(), "weather", "last-route"),
@@ -1101,6 +1165,48 @@ module.exports = (app) => {
             "antimeridian crossings along the planned route.",
           default: DEFAULTS.lines_of_interest_enabled,
         },
+        hazard_events_enabled: {
+          type: "boolean",
+          title: "GDACS Hazard Events (earthquakes, cyclones, floods)",
+          description:
+            "Poll the GDACS feed during the online window and surface " +
+            "events near the vessel or route in the briefing and as " +
+            "chart notes.",
+          default: DEFAULTS.hazard_events_enabled,
+        },
+        hazard_min_alert_level: {
+          type: "string",
+          title: "Minimum GDACS Alert Level",
+          description:
+            "Green is informational; Orange severe; Red extreme. Only " +
+            "events at or above this level surface in the briefing.",
+          enum: ["green", "orange", "red"],
+          default: DEFAULTS.hazard_min_alert_level,
+        },
+        hazard_radius_offroute_nm: {
+          type: "number",
+          title: "Hazard Off-route Radius (nm)",
+          description:
+            "Events within this distance of the route corridor surface " +
+            "in the briefing.",
+          default: DEFAULTS.hazard_radius_offroute_nm,
+        },
+        hazard_radius_ahead_nm: {
+          type: "number",
+          title: "Hazard Vessel Radius (nm)",
+          description:
+            "Events within this distance of the vessel itself surface " +
+            "in the briefing, regardless of the route.",
+          default: DEFAULTS.hazard_radius_ahead_nm,
+        },
+        hazard_max_age_hours: {
+          type: "number",
+          title: "Hazard Event Aging (hours)",
+          description:
+            "Events older than this drop out of the briefing and the " +
+            "chart notes.",
+          default: DEFAULTS.hazard_max_age_hours,
+        },
         bulletin_urls: {
           type: "array",
           title: "High Seas Bulletin Sources (NAVAREA / HSF text)",
@@ -1162,6 +1268,15 @@ module.exports = (app) => {
         ? config.bulletin_urls
         : [];
       publishNotesEnabled = config.publish_metarea_notes !== false;
+      // GDACS hazard events (work doc #22): one switch covers the
+      // feed, the briefing surface and the chart notes
+      hazardEventsEnabled = config.hazard_events_enabled !== false;
+      hazardFilterConfig = {
+        minAlertLevel: config.hazard_min_alert_level,
+        offRouteRadiusNm: config.hazard_radius_offroute_nm,
+        aheadRadiusNm: config.hazard_radius_ahead_nm,
+        maxAgeHours: config.hazard_max_age_hours,
+      };
       // Weather source (work doc #16): the server's Weather API when
       // present (signalk-weather-router-plus registers a provider over
       // its decoded ECMWF run), Open-Meteo per config or fallback
