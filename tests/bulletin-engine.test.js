@@ -584,3 +584,271 @@ test("refreshBulletins fetches online sources, skips failures", async () => {
   assert.deepEqual(second.fetched, []);
   assert.equal((await loadBulletinCache(dir)).length, 1);
 });
+
+/**
+ * Real-world bulletin fixtures (tests/fixtures/bulletins/): raw texts
+ * as received over the wire, so regressions against the live formats
+ * surface as failing parses, not silent data loss.
+ */
+const readFixture = (name) =>
+  require("node:fs").readFileSync(
+    join(__dirname, "fixtures", "bulletins", name),
+    "utf8",
+  );
+
+test("NHC Atlantic HSF (HSFAT2): compact coordinates, Gulf naming, issue metadata", () => {
+  const raw = readFixture("hsfat2-knhc-2026-10-03.txt");
+
+  // Compact NHC coordinate pairs (13N67W, no separator) parse
+  assert.deepEqual(parseCoordinatePoints("13N67W TO 14N71W"), [
+    [-67, 13],
+    [-71, 14],
+  ]);
+
+  // Hemisphere-less second numbers stay prose: "07N TO 31N" is two
+  // latitudes, not 7N 31E
+  assert.deepEqual(parseCoordinatePoints("ATLANTIC FROM 07N TO 31N"), []);
+
+  // The renamed Gulf is normalized back to the crew's name everywhere
+  // the cleaned text is shown
+  assert.match(stripBoilerplate(raw), /GULF OF MEXICO/);
+  assert.doesNotMatch(stripBoilerplate(raw), /GULF OF AMERICA/);
+
+  const track = [
+    [-73.5, 12.5], // In the 13N67W Caribbean polygon
+    [-86, 16.5], // In the 17N85W Caribbean polygon
+    [-88, 25], // In the 24-hour Gulf polygon
+    [-96.5, 27], // In the 36-hour Gulf polygon
+  ];
+  const result = filterBulletin({ rawText: raw, source: "api", track });
+
+  // "0430 UTC SAT OCT 3 2026" issue line parsed (NHC style)
+  assert.equal(result.issuedAt, "2026-10-03T04:30:00.000Z");
+  // ".FORECASTER DELGADO." parsed as the issuer
+  assert.match(result.issuer, /DELGADO/);
+
+  const polygons = result.blocks.filter((b) => b.geometryType === "polygon");
+  // All four WITHIN areas extract as polygons on a covering track
+  assert.equal(polygons.length, 4);
+  assert.match(polygons[0].text, /CARIBBEAN WITHIN 13N67W/);
+  assert.match(polygons[1].text, /CARIBBEAN WITHIN 17N85W/);
+  assert.match(polygons[2].text, /GULF OF MEXICO WITHIN 26N84W/);
+  assert.match(polygons[3].text, /GULF OF MEXICO 36 HOUR FORECAST/);
+  // The Gulf polygons keep their normalized naming
+  assert.ok(polygons.every((b) => !/GULF OF AMERICA/.test(b.text)));
+  // Ring coordinates are lon/lat with west negative
+  assert.deepEqual(polygons[0].geometry.coordinates[0], [-67, 13]);
+});
+
+test("NHC Atlantic HSF: track off the bulletin's waters keeps only unfilterable blocks", () => {
+  const raw = readFixture("hsfat2-knhc-2026-10-03.txt");
+  const result = filterBulletin({
+    rawText: raw,
+    source: "api",
+    // South Pacific, nowhere near the Atlantic areas
+    track: [
+      [178.4, -18.1],
+      [179.9, -19],
+    ],
+  });
+  // No WITHIN polygon survives the discard rule
+  assert.ok(result.blocks.every((b) => b.geometryType !== "polygon"));
+});
+
+test("spool-watcher parses the NHC issue line (0430 UTC SAT OCT 3 2026)", () => {
+  const { extractIssuedAt } = require("../plugin/spool-watcher.js");
+  assert.equal(
+    extractIssuedAt("0430 UTC SAT OCT 3 2026"),
+    "2026-10-03T04:30:00.000Z",
+  );
+  assert.equal(
+    extractIssuedAt("1645 UTC MON SEP 28 2026"),
+    "2026-09-28T16:45:00.000Z",
+  );
+  // The existing formats still win when present
+  assert.equal(
+    extractIssuedAt("2026-09-28T16:45:00Z"),
+    "2026-09-28T16:45:00.000Z",
+  );
+  assert.equal(extractIssuedAt("no timestamp here"), null);
+});
+
+/**
+ * Per-fixture regression suite: one test per real-world bulletin
+ * family, asserting the pieces the briefing actually consumes — issue
+ * metadata, issuer, and geography extraction on a representative
+ * track. The fixtures are the received texts, byte for byte.
+ */
+const bulletinsDir = join(__dirname, "fixtures", "bulletins");
+
+/** Representative tracks per bulletin family (GeoJSON [lon, lat]). */
+const FAMILY_TRACKS = {
+  atlantic: [
+    [-73.5, 12.5],
+    [-86, 16.5],
+    [-88, 25],
+  ],
+  eastPacific: [
+    [-110, 10],
+    [-95, 15],
+    [-130, 20],
+  ],
+  northPacific: [
+    [-155, 30],
+    [-160, 25],
+  ],
+  southPacific: [
+    [-175, -18],
+    [-179, -20],
+  ],
+  fiji: [
+    [178.4, -18.1],
+    [179.9, -19],
+  ],
+};
+
+for (const [file, track] of [
+  ["fznt01-kwbc-hsf-at1.txt", FAMILY_TRACKS.atlantic],
+  ["fzpn01-kwbc-hsf-ep1.txt", FAMILY_TRACKS.eastPacific],
+  ["fzpn03-knhc-hsf-ep2.txt", FAMILY_TRACKS.eastPacific],
+  ["fzpn40-phfo-hsf-np.txt", FAMILY_TRACKS.northPacific],
+  ["fzps40-phfo-hsf-sp.txt", FAMILY_TRACKS.southPacific],
+  ["fqps01-nffn.txt", FAMILY_TRACKS.fiji],
+]) {
+  test(`fixture ${file}: parses metadata and geography`, () => {
+    const raw = readFixture(file);
+    const result = filterBulletin({ rawText: raw, source: "api", track });
+    assert.ok(result, "bulletin retained");
+
+    // The issue time parses (no epoch-0 fallback)
+    assert.notEqual(
+      result.issuedAt,
+      "1970-01-01T00:00:00.000Z",
+      `issuedAt unparsed for ${file}`,
+    );
+    const issued = new Date(result.issuedAt).getTime();
+    assert.ok(issued > Date.UTC(2020, 0, 1), `issuedAt ${result.issuedAt}`);
+
+    // An issuer is identified
+    assert.ok(result.issuer, `issuer missing for ${file}`);
+
+    // Geography extracts somewhere on the covering track: the
+    // formatting families differ, but none is a geometry-less blob
+    assert.ok(
+      result.blocks.some((b) => b.geometryType != null),
+      `no geographic blocks extracted for ${file}`,
+    );
+    // Blocks carry the cleaned text only (renamed geography normalized)
+    assert.ok(result.blocks.every((b) => !/GULF OF AMERICA/.test(b.text)));
+  });
+}
+
+test("fixture fzps40 (South Pacific): the gale warning reaches the Tonga track", () => {
+  const raw = readFixture("fzps40-phfo-hsf-sp.txt");
+  const result = filterBulletin({
+    rawText: raw,
+    source: "api",
+    track: FAMILY_TRACKS.southPacific,
+  });
+  const gale = result.blocks.find((b) => /GALE WARNING/.test(b.text));
+  assert.ok(gale, "gale warning block retained");
+  assert.equal(gale.geometryType, "polygon");
+  // The warning's front chain interpolates into the vessel's waters
+  assert.ok(
+    gale.geometry.coordinates.some(([lon, lat]) => lat < 0 && lon > 160),
+  );
+});
+
+test("fixture fqps01 (Fiji NAVAREA XIV): MetService-family format", () => {
+  const raw = readFixture("fqps01-nffn.txt");
+  const result = filterBulletin({
+    rawText: raw,
+    source: "api",
+    track: FAMILY_TRACKS.fiji,
+  });
+  // "ISSUED BY ... OCT 022000 UTC." parses (month, day+hhmm, UTC)
+  assert.match(result.issuedAt, /^2026-10-02T20:00/);
+  assert.match(result.issuer, /FIJI METEOROLOGICAL SERVICE/);
+  // The trough axis line extracts (two-point chain stays a line)
+  const line = result.blocks.find((b) => b.geometryType === "line");
+  assert.ok(line, "trough axis line extracted");
+  assert.equal(line.geometry.coordinates.length, 2);
+});
+
+test("fixture fqps43 (MetService NZ Subtropic): WMO-set rendering, day+hhmmUTC issue line", () => {
+  const raw = readFixture("fqps43-nzkl-subtropic.txt");
+  const result = filterBulletin({
+    rawText: raw,
+    source: "api",
+    // Inside the polygon the area definition parses to (the band's
+    // western corner — the ring is a coarse 3-point approximation of
+    // the stated 25S–40S / 163E–170E area)
+    track: [[166, -34]],
+  });
+  assert.ok(result, "bulletin retained");
+  // "Wellington issued at 021856UTC Valid until 031200UTC." parses
+  // (day+hhmm, UTC, no month/year on the wire)
+  assert.notEqual(result.issuedAt, "1970-01-01T00:00:00.000Z");
+  assert.match(result.issuer, /New Zealand/);
+  // The situation-analysis ridge chain extracts as a feature line
+  const geoms = result.blocks.filter((b) => b.geometryType);
+  assert.ok(geoms.length >= 1, "ridge/low geometry extracted");
+});
+
+test("fixture fqau23 (Australian BoM Western METAREA X): commencing issue line", () => {
+  const raw = readFixture("fqau23-ammc-western.txt");
+  const result = filterBulletin({
+    rawText: raw,
+    source: "api",
+    // Cold-front latitudes where the Australian warnings live
+    track: [
+      [110, -42],
+      [125, -48],
+    ],
+  });
+  assert.ok(result, "bulletin retained");
+  // "For 24 hours commencing 2300 UTC 2 October 2026" parses
+  assert.equal(result.issuedAt, "2026-10-02T23:00:00.000Z");
+  assert.match(result.issuer, /Bureau of Meteorology/);
+  // The frontal systems extract as polygons
+  assert.ok(
+    result.blocks.some((b) => b.geometryType === "polygon"),
+    "front polygon extracted",
+  );
+});
+
+test("fixture wtpz23 (NHC hurricane forecast/advisory): metadata parses, advisory family acknowledged", () => {
+  const raw = readFixture("wtpz23-knhc-tcmep3.txt");
+  const result = filterBulletin({
+    rawText: raw,
+    source: "api",
+    track: [[-111, 19.4]],
+  });
+  assert.ok(result, "bulletin retained");
+  // "0300 UTC SAT OCT 03 2026" parses
+  assert.equal(result.issuedAt, "2026-10-03T03:00:00.000Z");
+  assert.ok(result.issuer, "issuer identified");
+  // KNOWN LIMITATION (documented here as the regression tripwire): the
+  // forecast/advisory geography encodes wind/sea radii per quadrant
+  // ("64 KT....... 40NE  35SE  25SW  40NW"), which the coordinate-chain
+  // extractor does not yet translate into areas — no geometry today.
+  // Building that translation is future work on the hurricane family.
+  assert.ok(
+    result.blocks.every((b) => b.geometryType == null),
+    "advisory still geometry-less; flip this when quadrant radii are supported",
+  );
+});
+
+test("issue-time formats: mixed-case months from the WMO bulletin sets", () => {
+  const { extractIssuedAt } = require("../plugin/spool-watcher.js");
+  // WMO set rendering of the same Fiji bulletin: "Oct" not "OCT"
+  assert.equal(
+    extractIssuedAt("ISSUED BY FIJI METEOROLOGICAL SERVICE Oct 022000 UTC."),
+    new Date(Date.UTC(new Date().getUTCFullYear(), 9, 2, 20, 0)).toISOString(),
+  );
+  // Full month names (Australian BoM)
+  assert.equal(
+    extractIssuedAt("For 24 hours commencing 0930 UTC 28 February 2026"),
+    "2026-02-28T09:30:00.000Z",
+  );
+});

@@ -79,6 +79,93 @@ function extractIssuedAt(text) {
       }
     }
   }
+  // NHC High Seas style: "0430 UTC SAT OCT 3 2026" (weekday optional;
+  // month case varies between the wire feeds, "Oct" on the WMO sets)
+  const nhc = text.match(
+    /\b(\d{4})\s+UTC\s+(?:[A-Za-z]{3}\s+)?([A-Za-z]{3,9})\s+(\d{1,2})\s+(\d{4})\b/,
+  );
+  if (nhc) {
+    const [, hhmm, mon, day, year] = nhc;
+    const month = MONTHS[mon.toUpperCase().slice(0, 3)];
+    if (month != null) {
+      const parsed = new Date(
+        Date.UTC(
+          Number(year),
+          month,
+          Number(day),
+          Number(hhmm.slice(0, 2)),
+          Number(hhmm.slice(2, 4)),
+        ),
+      );
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toISOString();
+      }
+    }
+  }
+  // Fiji/MetService style: "ISSUED BY FIJI METEOROLOGICAL SERVICE OCT
+  // 022000 UTC." ("Oct 022000 UTC" on the WMO bulletin sets) — month,
+  // day+hhmm, UTC. No year on the wire: the current year is assumed,
+  // and a stale year-end bulletin shows as stale in the UI anyway.
+  const fiji = text.match(/\b([A-Za-z]{3,9})\s+(\d{2})(\d{2})(\d{2})\s+UTC\b/);
+  if (fiji) {
+    const [, mon, day, hour, minute] = fiji;
+    const month = MONTHS[mon.toUpperCase().slice(0, 3)];
+    if (month != null) {
+      const parsed = new Date(
+        Date.UTC(
+          new Date().getUTCFullYear(),
+          month,
+          Number(day),
+          Number(hour),
+          Number(minute),
+        ),
+      );
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toISOString();
+      }
+    }
+  }
+  // MetService New Zealand style: "Wellington issued at 021856UTC Valid
+  // until 031200UTC." — day+hhmm, UTC, no month and no year on the
+  // wire; the parsed day lands in the current month
+  const nzkl = text.match(/\bISSUED AT\s+(\d{2})(\d{2})(\d{2})Z?UTC/i);
+  if (nzkl) {
+    const [, day, hour, minute] = nzkl;
+    const now = new Date();
+    const parsed = new Date(
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        Number(day),
+        Number(hour),
+        Number(minute),
+      ),
+    );
+    return parsed.toISOString();
+  }
+  // Australian BoM style: "For 24 hours commencing 2300 UTC 2 October
+  // 2026"
+  const bom = text.match(
+    /\bcommencing\s+(\d{2})(\d{2})\s+UTC\s+(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})\b/i,
+  );
+  if (bom) {
+    const [, hour, minute, day, mon, year] = bom;
+    const month = MONTHS[mon.toUpperCase().slice(0, 3)];
+    if (month != null) {
+      const parsed = new Date(
+        Date.UTC(
+          Number(year),
+          month,
+          Number(day),
+          Number(hour),
+          Number(minute),
+        ),
+      );
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toISOString();
+      }
+    }
+  }
   return null;
 }
 

@@ -54,6 +54,10 @@ const SECTION_ANCHORS =
  * lines. The NAVTEX message id line (`ZCZC GA05 011200Z AUG 26`) is
  * kept — the subject filter reads it first.
  *
+ * NWS's renamed geography is normalized back to the name the crew
+ * uses: "GULF OF AMERICA" reads "GULF OF MEXICO" everywhere the
+ * cleaned text is shown or matched.
+ *
  * @param {string} text - Raw bulletin text
  * @returns {string} Cleaned text
  */
@@ -71,6 +75,7 @@ function stripBoilerplate(text) {
       return true;
     })
     .join("\n")
+    .replace(/\bGULF OF AMERICA\b/gi, "GULF OF MEXICO")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -175,14 +180,24 @@ function hemisphereDegrees(value, hemisphere) {
  * are missing are prose numbers ("280600 UTC", "20 TO 30 KNOTS")
  * and rejected.
  *
+ * Also accepts the compact NHC Atlantic form (`13N67W`, no separator
+ * between the latitude and longitude parts) by normalizing it to the
+ * spaced form first — the loose pattern cannot match it because
+ * there is no separator to consume.
+ *
  * @param {string} text
  * @returns {number[][]} [[lon, lat], …] (possibly empty)
  */
 function parseCoordinatePoints(text) {
+  // Compact NHC pairs: digits + NS + digits + EW glued together
+  const compact = text.replace(
+    /\b(\d{1,3})([NS])(\d{1,3})([EW])\b/g,
+    "$1$2 $3$4",
+  );
   const pair = /(\d+(?:\.\d+)?|EQT)\s*([NS])?[,\s]+(\d+(?:\.\d+)?)\s*([EW])?/gi;
   const points = [];
   let match;
-  while ((match = pair.exec(text)) !== null) {
+  while ((match = pair.exec(compact)) !== null) {
     const equator = match[1].toUpperCase() === "EQT";
     const latHemi = match[2]?.toUpperCase();
     const lonHemi = match[4]?.toUpperCase();
@@ -192,10 +207,17 @@ function parseCoordinatePoints(text) {
       pair.lastIndex = match.index + 1;
       continue;
     }
+    const lonValue = hemisphereDegrees(match[3], lonHemi ?? "E");
+    if (!equator && !lonHemi && lonValue !== 180) {
+      // A hemisphere-less longitude that is not the dateline
+      // shorthand is prose's second number ("07N TO 31N" is two
+      // latitudes, not 7N 31E) — reject it the same way
+      pair.lastIndex = match.index + 1;
+      continue;
+    }
     const lat = equator ? 0 : hemisphereDegrees(match[1], latHemi ?? "N");
-    const lon = hemisphereDegrees(match[3], lonHemi ?? "E");
-    if (Number.isFinite(lat) && Number.isFinite(lon)) {
-      points.push([lon, lat]);
+    if (Number.isFinite(lat) && Number.isFinite(lonValue)) {
+      points.push([lonValue, lat]);
     }
   }
   return points;
@@ -752,7 +774,10 @@ function intersectsTrack(geometry, track) {
 function extractIssuer(text) {
   const match = text.match(/ISSUED\s+BY\s+(.+)/i);
   if (!match) {
-    return null;
+    // NHC High Seas style: ".FORECASTER DELGADO. NATIONAL HURRICANE
+    // CENTER." — the forecaster's surname stands in for the issuer
+    const forecaster = text.match(/\bFORECASTER\s+([A-Z][A-Z .'-]+)/i);
+    return forecaster ? forecaster[1].replace(/[.\s]+$/, "") : null;
   }
   // Strip the trailing issue-time fragment in its observed shapes
   // ("SEP 270800 UTC", "270800 UTC", "270800Z"), then any trailing
@@ -761,6 +786,7 @@ function extractIssuer(text) {
   // merely ends in 3–4 letters can't be mistaken for the month token.
   const name = match[1]
     .replace(/\s+(?:[A-Z]{3,4}\.?\s+)?\d{4,10}Z?(?:\s+UTC)?\.?\s*$/i, "")
+    .replace(/^[Tt][Hh][Ee]\s+/, "")
     .replace(/[.\s]+$/, "");
   return name || null;
 }
