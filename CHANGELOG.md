@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-03
+
 ### Fixed
 - Duplicate satellite-pass lines (ISS ×2, Tiangong ×3): CelesTrak's stations group lists several catalog entries per crewed station — the docked modules ISS (ZARYA), ISS (NAUKA) and CSS (TIANHE), CSS (WENTIAN), CSS (MENGTIAN) — all mapped to the same display name, so every pass was propagated and reported once per module. `parseTLEs` now keeps one element set per station, preferring the core module's (ZARYA, TIANHE).
 
