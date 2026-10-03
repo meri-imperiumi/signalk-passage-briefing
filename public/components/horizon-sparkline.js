@@ -48,7 +48,7 @@ class HorizonSparkline extends HTMLElement {
     `;
     this._svg = this.shadowRoot.querySelector("svg");
     this._rects = [];
-    this.setColumns(this._columns ?? []);
+    this.setColumns(this._columns ?? [], this._columnOptions ?? {});
   }
 
   /**
@@ -56,13 +56,18 @@ class HorizonSparkline extends HTMLElement {
    *
    * @param {Array<{hoursFromNow: number, comfortLevel: string, awsKnots:
    *   number, slatting?: boolean}>|null} hourlyComfort
+   * @param {object} [options]
+   * @param {number|null} [options.anchorMs] - Epoch ms the schedule's
+   *   `+Xh` anchors to (the assumed departure, work doc #15): when
+   *   set, titles read wall-clock stamps instead of hours-from-now
    */
-  setColumns(hourlyComfort) {
+  setColumns(hourlyComfort, options = {}) {
     this._columns = hourlyComfort;
+    this._columnOptions = options;
     if (!this._svg) {
       return; // Not yet connected: cached, rendered on connect
     }
-    const columns = sparklineColumns(hourlyComfort);
+    const columns = sparklineColumns(hourlyComfort, 24, options);
     const width = 240 / 24;
     while (this._rects.length < columns.length) {
       const rect = document.createElementNS(NS, "rect");

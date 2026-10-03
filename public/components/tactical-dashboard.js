@@ -10,7 +10,7 @@
  * @file components/tactical-dashboard.js
  */
 
-import { mergeTimeline, splitSevere, tacticalNow } from "./models.mjs";
+import { fmtShip, mergeTimeline, splitSevere, tacticalNow } from "./models.mjs";
 import "./passage-timeline.js";
 import { SK_BASE_CSS } from "./sk-base-css.js";
 
@@ -44,6 +44,13 @@ class TacticalDashboard extends HTMLElement {
           color: var(--color-orange);
           text-transform: uppercase;
         }
+        .departure-chip {
+          font-family: var(--font-data, ui-monospace, monospace);
+          font-size: 0.8rem; font-weight: 700;
+          letter-spacing: 0.08em; text-transform: uppercase;
+          color: var(--color-grey);
+          margin: 8px 0 0;
+        }
       </style>
       <section class="sk-card theme-teal">
         <h2>Next 24 Hours</h2>
@@ -53,7 +60,9 @@ class TacticalDashboard extends HTMLElement {
           <span class="tier" id="tier">no data</span>
           <comfort-info id="cinfo"></comfort-info>
         </div>
+        <div class="departure-chip" id="departure-chip" hidden></div>
         <horizon-sparkline id="spark"></horizon-sparkline>
+        <departure-control id="departure-control"></departure-control>
         <div id="energy"></div>
         <passage-timeline id="timeline"></passage-timeline>
       </section>
@@ -67,6 +76,11 @@ class TacticalDashboard extends HTMLElement {
     this._tierEl = this.shadowRoot.getElementById("tier");
     this._cinfo = this.shadowRoot.getElementById("cinfo");
     this._spark = this.shadowRoot.getElementById("spark");
+    this._departureControl =
+      this.shadowRoot.getElementById("departure-control");
+    this._departureControl?.addEventListener("departurechange", (event) =>
+      this.onDepartureChange?.(event.detail),
+    );
     this._energyEl = this.shadowRoot.getElementById("energy");
     this._timeline = this.shadowRoot.getElementById("timeline");
     this._blocksCard = this.shadowRoot.getElementById("blocks-card");
@@ -101,7 +115,29 @@ class TacticalDashboard extends HTMLElement {
     this._tierEl.style.color = now.color;
     this._cinfo?.setAttribute("tier", now.comfortLevel ?? "");
 
-    this._spark.setColumns(exceptions?.next24h?.comfortBlocks ?? []);
+    // Departure chip (work doc #15): states the anchor when the
+    // schedule shifts — "First light 10-05 06:00 +13" — hidden when
+    // the schedule runs from now
+    const departure = exceptions?.passageSummary?.departure ?? null;
+    const chip = this.shadowRoot.getElementById("departure-chip");
+    if (chip) {
+      const shifted =
+        departure?.time != null && departure.reason !== "underway";
+      chip.hidden = !shifted;
+      if (shifted) {
+        const reasonText =
+          departure.reason === "next_dawn"
+            ? "First light"
+            : departure.reason === "daylight_prep"
+              ? "After prep"
+              : "Departure";
+        chip.textContent = `${reasonText} ${fmtShip(departure.time)}`;
+      }
+    }
+
+    this._spark.setColumns(exceptions?.next24h?.comfortBlocks ?? [], {
+      anchorMs: this._departureAnchorMs ?? null,
+    });
 
     // Energy deficit — only when true
     const deficit = exceptions?.next24h?.energyDeficitAlert === true;
@@ -115,6 +151,31 @@ class TacticalDashboard extends HTMLElement {
 
     this._renderTimeline();
   }
+
+  /**
+   * Departure state (work doc #15): renders the shared control and
+   * re-paints the chip/sparkline labels against the anchor.
+   *
+   * @param {{mode: string, customTime: string|null, departure: object|
+   *   null}} state
+   */
+  setDeparture(state) {
+    this._departureState = state;
+    this._departureAnchorMs = state?.departure?.time
+      ? new Date(state.departure.time).getTime()
+      : null;
+    if (this._departureControl) {
+      this._departureControl.render(state);
+    }
+    if (this._exceptions) {
+      this.setExceptions(this._exceptions);
+    }
+  }
+
+  /**
+   * The root owns the departure state; the control reports changes.
+   */
+  onDepartureChange = null;
 
   /**
    * Briefing payload (work docs #3, #17): carries the space events

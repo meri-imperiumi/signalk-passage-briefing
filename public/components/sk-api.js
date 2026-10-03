@@ -232,3 +232,22 @@ export async function fetchNotes() {
     return [];
   }
 }
+
+/**
+ * The vessel's navigation state (`navigation.state`), best effort —
+ * the daylight-anchored departure uses it to tell underway from
+ * moored/anchored (work doc #15). null when unavailable.
+ *
+ * @returns {Promise<string|null>}
+ */
+export async function fetchNavigationState() {
+  const unwrap = (node) =>
+    node && typeof node === "object" && "value" in node ? node.value : node;
+  try {
+    const state = await fetchJson(`${BASE}/api/vessels/self/navigation/state`);
+    const value = unwrap(state);
+    return typeof value === "string" ? value : null;
+  } catch {
+    return null;
+  }
+}

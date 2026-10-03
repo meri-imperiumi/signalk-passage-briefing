@@ -12,6 +12,7 @@ test("webapp view models", async (t) => {
   const {
     COMFORT_TIERS,
     comfortColor,
+    effectiveDeparture,
     etaTable,
     fmtLiters,
     fmtHours,
@@ -810,6 +811,169 @@ test("webapp view models", async (t) => {
       assert.match(timeline[1].detail, /−0\.8 kWh/);
       assert.match(timeline[1].detail, /battery depleted by/);
       assert.equal(timeline[1].severity, "warn");
+    },
+  );
+  await t.test("delayed departure is a timeline event; underway is not", () => {
+    const base = { fetchedAt: "2026-10-04T18:00:00.000Z" };
+    // Night at the mooring: next first light tomorrow ~06:00Z
+    const delayed = mergeTimeline(
+      {
+        passageSummary: {
+          departure: {
+            assumed: true,
+            time: "2026-10-05T06:00:00.000Z",
+            reason: "next_dawn",
+          },
+        },
+      },
+      { metadata: base },
+    );
+    const event = delayed.find((item) => item.kind === "departure");
+    assert.ok(event, "delayed departure appears");
+    assert.equal(event.label, "Departure at first light");
+    // Departure-relative: the departure is hour zero of its own schedule
+    assert.equal(event.hoursFromNow, 0);
+
+    // Prep delay variant
+    const prep = mergeTimeline(
+      {
+        passageSummary: {
+          departure: {
+            assumed: true,
+            time: "2026-10-04T19:30:00.000Z",
+            reason: "daylight_prep",
+          },
+        },
+      },
+      { metadata: base },
+    );
+    assert.equal(
+      prep.find((item) => item.kind === "departure")?.label,
+      "Departure after prep",
+    );
+
+    // Underway: the forecast sails from now — no departure event
+    const underway = mergeTimeline(
+      {
+        passageSummary: {
+          departure: {
+            assumed: false,
+            time: "2026-10-04T18:00:00.000Z",
+            reason: "underway",
+          },
+        },
+      },
+      { metadata: base },
+    );
+    assert.ok(!underway.some((item) => item.kind === "departure"));
+  });
+
+  await t.test("effectiveDeparture maps the modes", async () => {
+    const now = new Date("2026-10-04T12:00:00Z"); // Night at Tonga
+    // Auto at night: next dawn, assumed
+    const auto = effectiveDeparture({
+      mode: "auto",
+      customTime: null,
+      now,
+      lat: -21.1,
+      lon: -175.2,
+      underway: false,
+      prepHours: 1.5,
+      dawnAltitudeDeg: -6,
+    });
+    assert.equal(auto.assumed, true);
+    assert.equal(auto.reason, "next_dawn");
+    assert.ok(auto.time > now);
+
+    // Auto underway: sails from now
+    const underway = effectiveDeparture({
+      mode: "auto",
+      customTime: null,
+      now,
+      lat: -21.1,
+      lon: -175.2,
+      underway: true,
+      prepHours: 1.5,
+      dawnAltitudeDeg: -6,
+    });
+    assert.equal(underway.reason, "underway");
+    assert.equal(underway.time, now);
+
+    // Manual modes: the crew's word, never assumed
+    assert.deepEqual(
+      [
+        effectiveDeparture({
+          mode: "now",
+          customTime: null,
+          now,
+          lat: -21.1,
+          lon: -175.2,
+          underway: false,
+        }),
+        effectiveDeparture({
+          mode: "+2h",
+          customTime: null,
+          now,
+          lat: -21.1,
+          lon: -175.2,
+          underway: false,
+        }),
+        effectiveDeparture({
+          mode: "custom",
+          customTime: "2026-10-05T08:00:00.000Z",
+          now,
+          lat: -21.1,
+          lon: -175.2,
+          underway: false,
+        }),
+      ].map((r) => [r.assumed, r.reason, r.time.toISOString()]),
+      [
+        [false, "manual", "2026-10-04T12:00:00.000Z"],
+        [false, "manual", "2026-10-04T14:00:00.000Z"],
+        [false, "manual", "2026-10-05T08:00:00.000Z"],
+      ],
+    );
+  });
+  await t.test(
+    "departure-anchored timeline sorts on one scale (doc #15 regression)",
+    () => {
+      // The reported bug: the departure event (+7.8h from fetch) sorted
+      // after a zone transition stamped 4h later on the wall clock,
+      // because zone hours were departure-relative while the departure
+      // event's were fetch-relative. With the anchor active, every +Xh
+      // is hours-from-departure.
+      const fetchedAt = "2026-10-03T09:05:00.000Z";
+      const departure = {
+        assumed: true,
+        time: "2026-10-03T16:55:00.000Z", // +7.8h from fetch
+        reason: "next_dawn",
+      };
+      const timeline = mergeTimeline(
+        {
+          passageSummary: {
+            departure,
+            zoneTransitions: [
+              {
+                kind: "leave",
+                territory: { name: "Tonga", iso_ter: "TON" },
+                // Departure + 3.4h: wall clock 10-04 09:18 +13
+                hoursFromNow: 3.4,
+                timestamp: "2026-10-03T20:18:00.000Z",
+                distanceFromStartNm: 25,
+                connectivity: "ocean",
+              },
+            ],
+          },
+        },
+        { metadata: { fetchedAt }, departure },
+      );
+      const ordered = timeline
+        .filter((item) => ["departure", "zone"].includes(item.kind))
+        .map((item) => [item.kind, item.hoursFromNow, item.stamp]);
+      assert.deepEqual(ordered, [
+        ["departure", 0, "10-03 16:55Z"],
+        ["zone", 3.4, "10-03 20:18Z"],
+      ]);
     },
   );
 });

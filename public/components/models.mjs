@@ -7,7 +7,12 @@
  * @module models
  */
 
-import { isNight, serenoComfort, travelDirection } from "../sereno-physics.mjs";
+import {
+  assumedDepartureTime,
+  isNight,
+  serenoComfort,
+  travelDirection,
+} from "../sereno-physics.mjs";
 
 const DEG = Math.PI / 180;
 
@@ -232,9 +237,16 @@ export function fmtLiters(liters) {
  * @param {number} [hours=24]
  * @returns {Array<{hoursFromNow: number, comfortLevel: string, awsKnots: number, heightPct: number, color: string, title: string}>}
  */
-export function sparklineColumns(hourlyComfort, hours = 24) {
+export function sparklineColumns(hourlyComfort, hours = 24, options = {}) {
   const blocks = (hourlyComfort ?? []).slice(0, hours);
   const maxAws = Math.max(...blocks.map((b) => b.awsKnots ?? 0), 1);
+  // When the schedule anchors to an assumed departure (work doc #15),
+  // the titles read wall-clock stamps instead of hours-from-now —
+  // "first light" should read 06:00, not "+7 h"
+  const stamp = (hoursFromNow) =>
+    options.anchorMs != null
+      ? fmtShip(new Date(options.anchorMs + hoursFromNow * 3600000))
+      : `${hoursFromNow}h`;
   return blocks.map((b) => {
     const aws = b.awsKnots ?? 0;
     return {
@@ -244,7 +256,7 @@ export function sparklineColumns(hourlyComfort, hours = 24) {
       awsKnots: aws,
       heightPct: Math.max(4, Math.round((aws / maxAws) * 100)),
       color: comfortColor(b.comfortLevel),
-      title: `${b.hoursFromNow}h: ${fmtKn(aws)} AWS, ${b.comfortLevel ?? "?"}${b.slatting ? " (slatting)" : ""}`,
+      title: `${stamp(b.hoursFromNow)}: ${fmtKn(aws)} AWS, ${b.comfortLevel ?? "?"}${b.slatting ? " (slatting)" : ""}`,
     };
   });
 }
@@ -750,6 +762,82 @@ function trackNightAt(hoursFromNow, track, baseMs) {
 }
 
 /**
+ * The effective departure for the passage schedule (work doc #15):
+ * auto mode anchors to daylight via {@link assumedDepartureTime}; the
+ * manual modes are the crew's word — Now, First light, a fixed offset
+ * or a custom instant. Returns the time to feed the simulation, the
+ * reason the UI states, and whether the anchor was assumed or chosen.
+ *
+ * @param {object} params
+ * @param {"auto"|"now"|"dawn"|"+1h"|"+2h"|"custom"} params.mode
+ * @param {Date|null} params.customTime - Custom instant (mode custom)
+ * @param {Date} params.now - Reference instant (payload fetch time is
+ *   the stable choice; the caller re-checks on its own cadence)
+ * @param {number} params.lat - Start position latitude
+ * @param {number} params.lon - Start position longitude
+ * @param {boolean} params.underway - Navigation state outside the
+ *   moored/anchored set
+ * @param {number} params.prepHours - Configured prep delay (hours)
+ * @param {number} params.dawnAltitudeDeg - Configured dawn anchor
+ * @returns {{time: Date, reason: string, assumed: boolean}}
+ */
+export function effectiveDeparture({
+  mode,
+  customTime,
+  now,
+  lat,
+  lon,
+  underway,
+  prepHours,
+  dawnAltitudeDeg,
+}) {
+  if (mode === "now") {
+    return { time: now, reason: "manual", assumed: false };
+  }
+  if (mode === "+1h" || mode === "+2h") {
+    return {
+      time: new Date(now.getTime() + Number(mode.slice(1, -1)) * 3600000),
+      reason: "manual",
+      assumed: false,
+    };
+  }
+  if (mode === "custom") {
+    const time = customTime != null ? new Date(customTime) : now;
+    return {
+      time: Number.isNaN(time.getTime()) ? now : time,
+      reason: "manual",
+      assumed: false,
+    };
+  }
+  if (mode === "dawn") {
+    // Manual first light: the dawn anchor, underway or not — the crew
+    // said when, even if the state machine disagrees
+    return {
+      ...assumedDepartureTime({
+        now,
+        lat,
+        lon,
+        underway: false,
+        dawnAltitudeDeg,
+      }),
+      assumed: false,
+    };
+  }
+  // Auto: daylight-anchored, skipped entirely when underway
+  return {
+    ...assumedDepartureTime({
+      now,
+      lat,
+      lon,
+      underway,
+      prepHours,
+      dawnAltitudeDeg,
+    }),
+    assumed: true,
+  };
+}
+
+/**
  * Formats a position for the timeline detail line: degrees and
  * minutes are overkill here — one decimal and a hemisphere letter.
  *
@@ -772,9 +860,26 @@ export function mergeTimeline(exceptions, payload = null) {
     ? new Date(payload.metadata.fetchedAt).getTime()
     : null;
   const items = [];
+  // Chronology is one scale (work doc #15): when a departure anchor
+  // is active, every `+Xh` is hours-from-departure — sim-derived
+  // events already are, and timestamped payload events convert from
+  // their absolute stamps. Without an anchor (underway, or an old
+  // payload) the scale is hours-from-fetch, as it always was.
+  const anchor = summary.departure ?? payload?.departure ?? null;
+  const anchorMs =
+    anchor?.time != null ? new Date(anchor.time).getTime() : null;
+  const hoursFor = (item) => {
+    if (item.timestamp != null) {
+      const t = new Date(item.timestamp).getTime();
+      const base = anchorMs ?? fetchMs;
+      if (Number.isFinite(t) && base != null) {
+        return Math.round(((t - base) / 3600000) * 10) / 10;
+      }
+    }
+    return item.hoursFromNow ?? null;
+  };
   const push = (item) => {
     items.push({
-      hoursFromNow: null,
       timestamp: null,
       label: "?",
       detail: "",
@@ -782,8 +887,34 @@ export function mergeTimeline(exceptions, payload = null) {
       ...item,
       stamp: fmtShip(item.timestamp),
       moon: moonGlyphFor(item.timestamp, payload),
+      hoursFromNow: hoursFor(item),
     });
   };
+
+  // The assumed departure, as an event (work doc #15): a delayed
+  // departure — first light, or the prep delay — is the first thing
+  // that happens on the passage. Underway and polar-fallback cases
+  // are not delayed and read from the now-card instead.
+  const departure = summary.departure ?? payload?.departure ?? null;
+  if (
+    departure?.time != null &&
+    (departure.reason === "next_dawn" || departure.reason === "daylight_prep")
+  ) {
+    push({
+      hoursFromNow: relHours(departure.time, fetchMs),
+      timestamp: departure.time,
+      kind: "departure",
+      severity: "info",
+      label:
+        departure.reason === "next_dawn"
+          ? "Departure at first light"
+          : "Departure after prep",
+      detail:
+        departure.reason === "next_dawn"
+          ? "anchored to daylight — nobody casts off in the dark"
+          : "stow, hoist, cast off within daylight",
+    });
+  }
 
   // Sail work (work doc #5): recommendation-driven changes plus the
   // tacks/gybes the plan implies; maneuvers read as the sail work
@@ -949,7 +1080,9 @@ export function mergeTimeline(exceptions, payload = null) {
   // sail events' own bucket (the reefing logic's authoritative one)
   // is left untouched.
   const track = summary.track ?? [];
-  const baseMs = fetchMs ?? Date.now();
+  // The night test instant: hoursFromNow is departure-relative while
+  // an anchor is active (the track is too), fetch-relative otherwise
+  const baseMs = anchorMs ?? fetchMs ?? Date.now();
   for (const item of items) {
     if (item.night || item.hoursFromNow == null) {
       continue;

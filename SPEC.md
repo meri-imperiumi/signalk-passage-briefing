@@ -108,6 +108,21 @@ signalk-passage-outlook/
       "type": "number",
       "title": "Hazard Event Aging (hours)",
       "default": 72
+    },
+    "departure_daylight_auto": {
+      "type": "boolean",
+      "title": "Anchor Departure to Daylight (auto)",
+      "default": true
+    },
+    "departure_prep_hours": {
+      "type": "number",
+      "title": "Departure Prep Delay (hours)",
+      "default": 1.5
+    },
+    "departure_dawn_altitude_deg": {
+      "type": "number",
+      "title": "First Light Sun Altitude (degrees)",
+      "default": -6
     }
   }
 }
@@ -227,6 +242,11 @@ interface UnifiedWeatherPayload {
     netWh: number;              // solarWh - loadWh
     soc: number | null;         // ideal SoC 0-1 at hour end
   }[];                          // signalk-energy-predictor forecast, 48 h
+  departure?: {
+    assumed: boolean;           // auto daylight anchor vs crew override
+    time: string;               // ISO — the schedule's anchor instant
+    reason: string;             // 'underway' | 'next_dawn' | 'daylight_prep' | 'no_dawn' | 'manual'
+  };
 }
 
 interface TimeStepForecast {

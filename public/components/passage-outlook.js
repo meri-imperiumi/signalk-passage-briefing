@@ -12,15 +12,18 @@
 
 import {
   briefingAgeHours,
+  effectiveDeparture,
   fmtHours,
   fmtShip,
   parseTimezoneOffset,
   setShipTime,
   shipTimeLabel,
 } from "./models.mjs";
+
 import {
   createStream,
   fetchJson,
+  fetchNavigationState,
   fetchNotes,
   fetchShipTime,
 } from "./sk-api.js";
@@ -162,6 +165,18 @@ class PassageOutlook extends HTMLElement {
     this._briefing = null;
     this._briefingKey = null;
     this._exceptions = null;
+    // Departure anchoring (work doc #15): mode + custom instant are
+    // the crew's choice, shared by both views; navigation state drives
+    // the auto anchor; the re-check catches the dawn crossing without
+    // flapping (re-simulates only when the anchor moves > 10 min)
+    this._departureMode = "auto";
+    this._customDepartureTime = null;
+    this._navigationState = null;
+    this._simulatedDepartureMs = null;
+    this._departureTimer = setInterval(
+      () => this.recheckDeparture(),
+      10 * 60000,
+    );
 
     this.renderRoute();
     this.connectStream();
@@ -171,6 +186,92 @@ class PassageOutlook extends HTMLElement {
   disconnectedCallback() {
     this._stream?.close();
     this._worker?.terminate();
+    clearInterval(this._departureTimer);
+  }
+
+  /**
+   * The departure state the views render and the simulation anchors
+   * to (work doc #15): effective departure from the chosen mode, with
+   * the start position from the route's first waypoint (the payload
+   * is the route's). Here mode has no departure to anchor.
+   *
+   * @returns {{mode: string, customTime: string|null, departure:
+   *   {time: Date, reason: string, assumed: boolean}|null}|null}
+   */
+  departureState() {
+    const payload = this._briefing?.payload;
+    const waypoint = payload?.waypoints?.[0];
+    if (!waypoint) {
+      return null;
+    }
+    const departure = effectiveDeparture({
+      mode: this._departureMode,
+      customTime: this._customDepartureTime,
+      now: new Date(payload.metadata?.fetchedAt ?? Date.now()),
+      lat: waypoint.lat,
+      lon: waypoint.lon,
+      underway:
+        typeof this._navigationState === "string" &&
+        !["moored", "anchored"].includes(this._navigationState),
+      prepHours: this._config?.departure_prep_hours ?? 1.5,
+      dawnAltitudeDeg: this._config?.departure_dawn_altitude_deg ?? -6,
+    });
+    return {
+      mode: this._departureMode,
+      customTime: this._customDepartureTime,
+      departure,
+    };
+  }
+
+  /**
+   * The 10-minute re-check (work doc #15): the dawn anchor drifts as
+   * time passes; re-simulate only when it moved more than 10 minutes,
+   * so the view doesn't flap around the crossing.
+   */
+  recheckDeparture() {
+    if (!this._briefing?.payload || !this._exceptions) {
+      return;
+    }
+    const next = this.departureState();
+    if (!next?.departure) {
+      return;
+    }
+    const timeMs = next.departure.time.getTime();
+    if (
+      this._simulatedDepartureMs == null ||
+      Math.abs(timeMs - this._simulatedDepartureMs) > 10 * 60000
+    ) {
+      this.simulate();
+    } else {
+      // Same anchor: repaint the chip so the stamps stay current
+      this.renderDeparture(next);
+    }
+  }
+
+  /**
+   * The crew moved the control (work doc #15): manual modes override
+   * auto until it is put back; the simulation re-runs immediately.
+   *
+   * @param {{mode: string, customTime: string|null}} detail
+   */
+  onDepartureChange(detail) {
+    this._departureMode = detail.mode;
+    this._customDepartureTime = detail.customTime ?? null;
+    this.simulate();
+  }
+
+  /**
+   * Pushes the departure state into whichever view is showing (work
+   * doc #15: the control and its chip render in both, sharing the
+   * root's state).
+   *
+   * @param {object} [state]
+   */
+  renderDeparture(state = this.departureState()) {
+    const target = this._view?.querySelector(
+      "tactical-dashboard, strategic-outlook",
+    );
+    target?.setDeparture?.(state);
   }
 
   /** Signal K stream: environment mode + connectivity + ship's time. */
@@ -201,7 +302,7 @@ class PassageOutlook extends HTMLElement {
   /** Loads everything the simulation needs, then simulates. */
   async bootstrap() {
     try {
-      const [status, routes, config, matrix, polar, notes, time] =
+      const [status, routes, config, matrix, polar, notes, time, navState] =
         await Promise.all([
           fetchJson(`${PLUGIN_API}/status`),
           fetchJson(`${PLUGIN_API}/routes`),
@@ -210,12 +311,14 @@ class PassageOutlook extends HTMLElement {
           fetchJson(`${PLUGIN_API}/polar`).catch(() => null),
           fetchNotes(),
           fetchShipTime(),
+          fetchNavigationState(),
         ]);
       this._status = status;
       this._config = config;
       this._matrix = matrix;
       this._polar = polar;
       this._notes = notes;
+      this._navigationState = navState;
       if (time) {
         this.applyShipTime(time);
       }
@@ -455,6 +558,13 @@ class PassageOutlook extends HTMLElement {
     if (!payload) {
       return;
     }
+    // The effective departure anchors the whole schedule (work doc
+    // #15): auto daylight anchor or the crew's override. The simulated
+    // anchor is remembered so the 10-minute re-check can tell drift
+    // from a real change.
+    const state = this.departureState();
+    const departure = state?.departure ?? null;
+    this._simulatedDepartureMs = departure ? departure.time.getTime() : null;
     this._worker?.terminate();
     this._worker = new Worker(new URL("../worker.js", import.meta.url), {
       type: "module",
@@ -481,8 +591,19 @@ class PassageOutlook extends HTMLElement {
         // changes anchor to watch changes while it runs
         watch: this._watch ?? null,
         // The payload covers the fetch window forward; hours are read
-        // from its own timestamps
-        startTime: payload.metadata?.fetchedAt ?? new Date().toISOString(),
+        // from its own timestamps — anchored to the effective
+        // departure when one is assumed (work doc #15)
+        startTime:
+          departure?.time?.toISOString() ??
+          payload.metadata?.fetchedAt ??
+          new Date().toISOString(),
+        departure: departure
+          ? {
+              assumed: departure.assumed,
+              time: departure.time.toISOString(),
+              reason: departure.reason,
+            }
+          : null,
         // Energy forecast (work doc #10): the predictor's hourly
         // series rides the payload
         energyHourly: payload.energyHourly ?? null,
@@ -571,6 +692,9 @@ class PassageOutlook extends HTMLElement {
         // events (space, zone transitions) alongside the exceptions
         target.setPayload?.(this._briefing.payload);
       }
+      // Departure control + chip (work doc #15): shared state, both
+      // views
+      this.renderDeparture();
     }
     this.renderDisclaimer();
   }

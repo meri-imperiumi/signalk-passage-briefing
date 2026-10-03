@@ -1064,6 +1064,10 @@ function timestampZoneTransitions(transitions, rows) {
  * @param {Array<{timestamp: string, solarWh?: number, loadWh?: number}>} [params.energyHourly]
  *   Energy forecast series; falls back to the payload's own
  *   `energyHourly` (work doc #10: the series rides the payload)
+ * @param {{assumed: boolean, time: Date|string, reason: string}|
+ *   null} [params.departure] - The assumed departure the startTime
+ *   anchors to (work doc #15): passed through to the result so the UI
+ *   can state what was assumed
  * @param {object} [params.watch] - Running watch schedule
  *   (signalk-watch-schedule): sail changes anchor to watch changes
  *   while it runs
@@ -1080,6 +1084,7 @@ export function simulatePassage({
   energyHourly,
   watch = null,
   startTime = new Date(),
+  departure = null,
 }) {
   // Accept an ISO string (the payload stores fetchedAt as text) or a
   // Date — callers on the wire pass strings
@@ -1206,6 +1211,8 @@ export function simulatePassage({
     // schedule (work doc #17); undated when the crossing lies beyond
     // the simulated horizon
     zoneTransitions,
+    // The assumed departure the schedule anchors to (work doc #15)
+    departure,
     hazardAlerts: nominal.hazardAlerts,
     seaStateAnomalies: nominal.seaStateAnomalies,
     upperAirAnomalies: nominal.upperAirAnomalies,
@@ -1253,6 +1260,8 @@ export function filterExceptions(simulationResult) {
       // Territorial waters transitions with their simulated schedule
       // (work doc #17)
       zoneTransitions: simulationResult.zoneTransitions ?? [],
+      // The assumed departure the schedule anchors to (work doc #15)
+      departure: simulationResult.departure ?? null,
       // The simulated track, compact: the timeline's night indicators
       // interpolate the crew's position at each event's hour so every
       // item — not only sail changes — can say whether it happens at

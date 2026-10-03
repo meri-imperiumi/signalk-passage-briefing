@@ -137,6 +137,116 @@ export const STEEPNESS_RATIO_THRESHOLD = 3.28;
 export const NIGHT_SUN_ALTITUDE_DEG = 0;
 
 /**
+ * Default prep delay (hours) between "we could leave now" and actual
+ * departure in the daylight-anchored departure logic (work doc #15):
+ * stowing, hoisting, casting off.
+ */
+export const DEPARTURE_PREP_HOURS = 1.5;
+
+/** Clamp bounds for the configured prep delay (hours). */
+export const DEPARTURE_PREP_MIN_HOURS = 0.5;
+export const DEPARTURE_PREP_MAX_HOURS = 3;
+
+/**
+ * Sun altitude (degrees) defining "first light" for the
+ * daylight-anchored departure (work doc #15): civil dawn/dusk, −6°.
+ * The whole point of waiting for light is defeated by leaving right
+ * before dark, so the dawn anchor bounds both directions.
+ */
+export const DEPARTURE_DAWN_ALTITUDE_DEG = -6;
+
+/** Dawn search: 5-minute steps bounded at 18 h (one full night). */
+export const DEPARTURE_SEARCH_STEP_MINUTES = 5;
+export const DEPARTURE_SEARCH_BOUND_HOURS = 18;
+
+/**
+ * Daylight-anchored assumed departure time (work doc #15). While the
+ * boat is moored, the forecast timeline should anchor to a realistic
+ * departure, not to "now" — nobody casts off at 02:40 because the
+ * forecast said so. Pure function: no Signal K, no DOM.
+ *
+ * Rules (auto mode):
+ *
+ * 1. **Underway**: depart now — the forecast is already sailing.
+ * 2. **Night at the start position**: next first light — the sun
+ *    crossing the dawn altitude (civil dawn, −6°) at that position.
+ * 3. **Day at the start position**: now plus the prep delay — but
+ *    only while the sun stays above the dawn threshold: if it sets
+ *    within the prep window, the answer is the next dawn (never an
+ *    immediate departure right before dark — the recorded decision).
+ *
+ * The answer says what was assumed (`reason`) so the UI can state it
+ * instead of silently shifting numbers. Polar degeneracy (no dawn
+ * within the search bound) falls back to now and says so via the
+ * `no_dawn` reason — an addition to the work doc's three-reason set.
+ *
+ * @param {object} params
+ * @param {Date} [params.now] - Reference instant
+ * @param {number} params.lat - Start position latitude (route first
+ *   waypoint, fallback vessel position)
+ * @param {number} params.lon - Start position longitude
+ * @param {boolean} [params.underway=false] - Navigation state outside
+ *   the moored/anchored set
+ * @param {number} [params.prepHours] - Prep delay (hours; clamped to
+ *   0.5–3 by the caller per configuration)
+ * @param {number} [params.dawnAltitudeDeg] - Dawn anchor (degrees)
+ * @returns {{time: Date, reason: "underway"|"daylight_prep"|
+ *   "next_dawn"|"no_dawn"}}
+ */
+export function assumedDepartureTime({
+  now = new Date(),
+  lat,
+  lon,
+  underway = false,
+  prepHours = DEPARTURE_PREP_HOURS,
+  dawnAltitudeDeg = DEPARTURE_DAWN_ALTITUDE_DEG,
+}) {
+  if (underway) {
+    return { time: now, reason: "underway" };
+  }
+  const dayNow =
+    Number.isFinite(lat) &&
+    Number.isFinite(lon) &&
+    sunAltitudeDeg(now, lat, lon) > dawnAltitudeDeg;
+  if (dayNow) {
+    const prep = new Date(
+      now.getTime() +
+        Math.min(
+          Math.max(prepHours, DEPARTURE_PREP_MIN_HOURS),
+          DEPARTURE_PREP_MAX_HOURS,
+        ) *
+          3600000,
+    );
+    if (sunAltitudeDeg(prep, lat, lon) > dawnAltitudeDeg) {
+      return { time: prep, reason: "daylight_prep" };
+    }
+  }
+  // Next first light: the first *rising* crossing of the dawn anchor —
+  // in daylight the sun is already above it, so the plain "first
+  // instant above" would return a few minutes from now instead of the
+  // next dawn. Requiring the previous step below the anchor makes the
+  // scan find the actual dawn from either side.
+  const stepMs = DEPARTURE_SEARCH_STEP_MINUTES * 60000;
+  const boundMs = DEPARTURE_SEARCH_BOUND_HOURS * 3600000;
+  if (Number.isFinite(lat) && Number.isFinite(lon)) {
+    let previousAbove = dayNow;
+    for (
+      let t = now.getTime() + stepMs;
+      t <= now.getTime() + boundMs;
+      t += stepMs
+    ) {
+      const above = sunAltitudeDeg(new Date(t), lat, lon) > dawnAltitudeDeg;
+      if (above && !previousAbove) {
+        return { time: new Date(t), reason: "next_dawn" };
+      }
+      previousAbove = above;
+    }
+  }
+  // Polar day/night: no dawn within the bound — say so, keep now
+  return { time: now, reason: "no_dawn" };
+}
+
+/**
  * Floor for the encounter-period stretch factor. A boat surfing along
  * with a wave train it overtakes would otherwise drive Te to zero and
  * the acceleration to infinity; the floor caps the stretch. Value from

@@ -158,6 +158,9 @@ const DEFAULTS = {
   hazard_radius_offroute_nm: 500,
   hazard_radius_ahead_nm: 1000,
   hazard_max_age_hours: 72,
+  departure_daylight_auto: true,
+  departure_prep_hours: 1.5,
+  departure_dawn_altitude_deg: -6,
   /** Verified NWS High Seas Forecast feeds (METAREA XII/XV). The
    * METAREA XIV issuer (MetService) gets added as a URL once a
    * working endpoint is confirmed on board. */
@@ -198,6 +201,12 @@ module.exports = (app) => {
   let bulletinStations = DEFAULTS.bulletin_stations;
   /** GDACS hazard event config (work doc #22). */
   let hazardEventsEnabled = DEFAULTS.hazard_events_enabled;
+  /** Departure anchor config (work doc #15). */
+  let departureConfig = {
+    daylightAuto: DEFAULTS.departure_daylight_auto,
+    prepHours: DEFAULTS.departure_prep_hours,
+    dawnAltitudeDeg: DEFAULTS.departure_dawn_altitude_deg,
+  };
   let hazardFilterConfig = {
     minAlertLevel: DEFAULTS.hazard_min_alert_level,
     offRouteRadiusNm: DEFAULTS.hazard_radius_offroute_nm,
@@ -836,6 +845,37 @@ module.exports = (app) => {
     } catch (error) {
       app.debug?.(`Zone transitions failed: ${error.message}`);
     }
+    // The departure the served schedule anchors to (work doc #15):
+    // the auto daylight anchor — underway sails from now, night waits
+    // for first light, day adds the prep delay unless the sun sets
+    // within it. The webapp may override per view; external consumers
+    // see numbers consistent with the auto assumption.
+    try {
+      if (departureConfig.daylightAuto) {
+        const { assumedDepartureTime } = await import(
+          "../public/sereno-physics.mjs"
+        );
+        const navState = observations[NAVIGATION_STATE_PATH];
+        const underway =
+          typeof navState === "string" &&
+          !["moored", "anchored"].includes(navState);
+        const { time, reason } = assumedDepartureTime({
+          now: new Date(payload.metadata.fetchedAt),
+          lat: waypoints[0].lat,
+          lon: waypoints[0].lon,
+          underway,
+          prepHours: departureConfig.prepHours,
+          dawnAltitudeDeg: departureConfig.dawnAltitudeDeg,
+        });
+        payload.departure = {
+          assumed: true,
+          time: time.toISOString(),
+          reason,
+        };
+      }
+    } catch (error) {
+      app.debug?.(`Departure anchor failed: ${error.message}`);
+    }
     await attachHazardEvents(payload, vesselPosition(), waypoints);
     // Energy forecast (work doc #10): rides the payload like the here
     // mode's, powering the 24 h strip; the outlook terms ride along
@@ -1289,6 +1329,32 @@ module.exports = (app) => {
             "chart notes.",
           default: DEFAULTS.hazard_max_age_hours,
         },
+        departure_daylight_auto: {
+          type: "boolean",
+          title: "Anchor Departure to Daylight (auto)",
+          description:
+            "While the boat is moored, anchor the forecast timeline to a " +
+            "realistic departure: next civil dawn at night, prep delay " +
+            "during the day, next dawn when the sun would set within the " +
+            "prep window. The crew can override per view.",
+          default: DEFAULTS.departure_daylight_auto,
+        },
+        departure_prep_hours: {
+          type: "number",
+          title: "Departure Prep Delay (hours)",
+          description:
+            "Assumed time between deciding to leave and casting off " +
+            "(0.5–3 h).",
+          default: DEFAULTS.departure_prep_hours,
+        },
+        departure_dawn_altitude_deg: {
+          type: "number",
+          title: "First Light Sun Altitude (degrees)",
+          description:
+            "Sun altitude defining first light for the departure anchor " +
+            "(−6° = civil dawn).",
+          default: DEFAULTS.departure_dawn_altitude_deg,
+        },
         bulletin_urls: {
           type: "array",
           title: "High Seas Bulletin Sources (NAVAREA / HSF text)",
@@ -1358,6 +1424,11 @@ module.exports = (app) => {
         offRouteRadiusNm: config.hazard_radius_offroute_nm,
         aheadRadiusNm: config.hazard_radius_ahead_nm,
         maxAgeHours: config.hazard_max_age_hours,
+      };
+      departureConfig = {
+        daylightAuto: config.departure_daylight_auto !== false,
+        prepHours: config.departure_prep_hours,
+        dawnAltitudeDeg: config.departure_dawn_altitude_deg,
       };
       // Weather source (work doc #16): the server's Weather API when
       // present (signalk-weather-router-plus registers a provider over

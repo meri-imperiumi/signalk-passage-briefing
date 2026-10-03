@@ -30,6 +30,7 @@ const GLYPHS = {
   hazard: "⚠",
   line: "⌀",
   energy: "🔋",
+  departure: "⚓",
 };
 
 /**

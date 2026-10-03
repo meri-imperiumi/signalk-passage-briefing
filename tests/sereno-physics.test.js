@@ -405,3 +405,94 @@ describe("slatting & roll-dampening penalty (work doc #14)", () => {
     assert.equal(glassy.comfort, "champagne");
   });
 });
+
+describe("daylight-anchored departure (work doc #15)", () => {
+  test("underway passes now through", async () => {
+    const { assumedDepartureTime } = await physics();
+    const now = new Date("2026-10-04T20:00:00Z"); // Night in the Gulf
+    const result = assumedDepartureTime({
+      now,
+      lat: -21.1,
+      lon: -175.2,
+      underway: true,
+    });
+    assert.equal(result.time, now);
+    assert.equal(result.reason, "underway");
+  });
+
+  test("night at the start position waits for next civil dawn", async () => {
+    const { assumedDepartureTime, sunAltitudeDeg } = await physics();
+    // 12:00 UTC at 175°W ≈ 23:40 local: deep night
+    const now = new Date("2026-10-04T12:00:00Z");
+    const result = assumedDepartureTime({
+      now,
+      lat: -21.1,
+      lon: -175.2,
+    });
+    assert.ok(result.time > now, "dawn is in the future");
+    assert.ok(result.time <= new Date(now.getTime() + 18 * 3600000));
+    assert.equal(result.reason, "next_dawn");
+    // The returned time sits just past the −6° crossing
+    const alt = sunAltitudeDeg(result.time, -21.1, -175.2);
+    assert.ok(alt > -6 && alt < 0, `dawn altitude ${alt}`);
+  });
+
+  test("day + prep window inside daylight: prep delay, stated as such", async () => {
+    const { assumedDepartureTime } = await physics();
+    // Local noon at Tonga (≈ 23:40 UTC): deep day, sun far up hours later
+    const now = new Date("2026-10-04T23:00:00Z");
+    const result = assumedDepartureTime({
+      now,
+      lat: -21.1,
+      lon: -175.2,
+      prepHours: 1.5,
+    });
+    assert.equal(result.reason, "daylight_prep");
+    assert.equal(result.time.getTime(), now.getTime() + 1.5 * 3600000);
+  });
+
+  test("day but sunset inside the prep window: next dawn, never a dusk departure", async () => {
+    const { assumedDepartureTime } = await physics();
+    // Late afternoon with < 1.5 h of daylight left
+    const { sunAltitudeDeg } = await physics();
+    // Find a "day now, dusk within prep" instant: scan for one
+    let chosen = null;
+    for (let m = 0; m < 24 * 60; m += 5) {
+      const t = new Date("2026-10-04T00:00:00Z").getTime() + m * 60000;
+      const alt = sunAltitudeDeg(new Date(t), -21.1, -175.2);
+      const prepAlt = sunAltitudeDeg(
+        new Date(t + 1.5 * 3600000),
+        -21.1,
+        -175.2,
+      );
+      if (alt > -6 && prepAlt <= -6) {
+        chosen = new Date(t);
+        break;
+      }
+    }
+    assert.ok(chosen, "fixture: found a dusk-inside-prep instant");
+    const result = assumedDepartureTime({
+      now: chosen,
+      lat: -21.1,
+      lon: -175.2,
+      prepHours: 1.5,
+    });
+    assert.equal(result.reason, "next_dawn");
+    // The dawn is the *next* morning: well beyond the prep window
+    assert.ok(result.time.getTime() > chosen.getTime() + 8 * 3600000);
+    assert.ok(sunAltitudeDeg(result.time, -21.1, -175.2) > -6);
+  });
+
+  test("polar night: no dawn in the bound falls back to now and says so", async () => {
+    const { assumedDepartureTime } = await physics();
+    // High Arctic mid-winter: the sun never rises
+    const now = new Date("2026-12-21T12:00:00Z");
+    const result = assumedDepartureTime({
+      now,
+      lat: 78,
+      lon: 15,
+    });
+    assert.equal(result.reason, "no_dawn");
+    assert.equal(result.time, now);
+  });
+});

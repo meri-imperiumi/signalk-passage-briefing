@@ -6,7 +6,7 @@
  * @file components/strategic-outlook.js
  */
 
-import { etaTable, mergeTimeline, splitSevere } from "./models.mjs";
+import { etaTable, fmtShip, mergeTimeline, splitSevere } from "./models.mjs";
 import "./passage-timeline.js";
 import { SK_BASE_CSS } from "./sk-base-css.js";
 
@@ -28,9 +28,17 @@ class StrategicOutlook extends HTMLElement {
           color: var(--color-orange);
           text-transform: uppercase;
         }
+        .departure-line {
+          font-family: var(--font-data, ui-monospace, monospace);
+          font-size: 0.8rem; font-weight: 700;
+          letter-spacing: 0.08em; text-transform: uppercase;
+          color: var(--color-grey);
+          margin: 0 0 8px;
+        }
       </style>
       <section class="sk-card theme-teal">
         <h2>ETA &amp; Motor Plan</h2>
+        <div class="departure-line" id="departure-line" hidden></div>
         <table class="data">
           <thead>
             <tr><th>Percentile</th><th>Arrival (UTC)</th></tr>
@@ -41,6 +49,7 @@ class StrategicOutlook extends HTMLElement {
           <div><div class="label">Motor hours</div><div class="value-small" id="motor">—</div></div>
           <div><div class="label">Fuel</div><div class="value-small" id="fuel">—</div></div>
         </div>
+        <departure-control id="departure-control"></departure-control>
       </section>
       <section class="sk-card theme-teal">
         <h2>Passage Timeline</h2>
@@ -59,6 +68,12 @@ class StrategicOutlook extends HTMLElement {
     this._etaBody = this.shadowRoot.getElementById("eta-body");
     this._motorEl = this.shadowRoot.getElementById("motor");
     this._fuelEl = this.shadowRoot.getElementById("fuel");
+    this._departureLine = this.shadowRoot.getElementById("departure-line");
+    this._departureControl =
+      this.shadowRoot.getElementById("departure-control");
+    this._departureControl?.addEventListener("departurechange", (event) =>
+      this.onDepartureChange?.(event.detail),
+    );
     this._timeline = this.shadowRoot.getElementById("timeline");
     this._bulletinEl = this.shadowRoot.getElementById("bulletin");
     if (this._exceptions) {
@@ -100,6 +115,43 @@ class StrategicOutlook extends HTMLElement {
       mergeTimeline(this._exceptions ?? null, this._payload ?? null),
     );
   }
+
+  /**
+   * Departure state (work doc #15): the ETA header states the
+   * assumption, and the shared control renders the mode.
+   *
+   * @param {{mode: string, customTime: string|null, departure: object|
+   *   null}} state
+   */
+  setDeparture(state) {
+    this._departureState = state;
+    if (this._departureControl) {
+      this._departureControl.render(state);
+    }
+    const departure = state?.departure ?? null;
+    if (this._departureLine) {
+      if (departure?.time != null && departure.reason !== "underway") {
+        const reasonText =
+          departure.reason === "next_dawn"
+            ? "Assumed departure first light"
+            : departure.reason === "daylight_prep"
+              ? "Assumed departure after prep"
+              : "Assumed departure";
+        this._departureLine.textContent = `${reasonText} ${fmtShip(departure.time)}`;
+        this._departureLine.hidden = false;
+      } else if (departure?.reason === "underway") {
+        this._departureLine.textContent = "Underway — from now";
+        this._departureLine.hidden = false;
+      } else {
+        this._departureLine.hidden = true;
+      }
+    }
+  }
+
+  /**
+   * The root owns the departure state; the control reports changes.
+   */
+  onDepartureChange = null;
 
   /**
    * Renders from the worker's exception view.
