@@ -408,7 +408,56 @@ test("webapp view models", async (t) => {
     assert.equal(timeline[2].severity, "warn");
     assert.equal(timeline[2].detail, "ratio 2.4 · Hs 1.5 m");
     assert.equal(timeline[3].severity, "severe");
-    assert.equal(timeline[3].detail, "CAPE 1800 · K 30");
+    assert.equal(timeline[3].detail, "CAPE 1800 J/kg · K 30.0");
+  });
+
+  await t.test("mergeTimeline renders convective episodes with a range", () => {
+    const timeline = mergeTimeline({
+      passageSummary: {
+        sailChanges: [],
+        convectiveWarnings: [
+          {
+            hoursFromNow: 38.7,
+            timestamp: "2026-10-05T03:46:00.000Z",
+            untilHoursFromNow: 40.6,
+            untilTimestamp: "2026-10-05T05:38:00.000Z",
+            cape: 712.6,
+            kIndex: 28.58,
+          },
+        ],
+      },
+    });
+    assert.equal(timeline.length, 1);
+    assert.equal(timeline[0].label, "Convection risk");
+    assert.equal(timeline[0].severity, "severe");
+    assert.equal(
+      timeline[0].detail,
+      "CAPE 713 J/kg · K 28.6 · until 10-05 05:38Z",
+    );
+  });
+
+  await t.test("mergeTimeline renders marginal convection as a warning", () => {
+    const timeline = mergeTimeline({
+      passageSummary: {
+        sailChanges: [],
+        convectiveWarnings: [
+          {
+            hoursFromNow: 44.4,
+            timestamp: "2026-10-05T09:26:00.000Z",
+            untilHoursFromNow: 45.4,
+            untilTimestamp: "2026-10-05T10:26:00.000Z",
+            cape: 7.7,
+            kIndex: 28.3,
+            marginal: true,
+          },
+        ],
+      },
+    });
+    assert.equal(timeline[0].severity, "warn");
+    assert.equal(
+      timeline[0].detail,
+      "CAPE 8 J/kg · K 28.3 · until 10-05 10:26Z",
+    );
   });
 
   await t.test("mergeTimeline merges payload space and zone events", () => {

@@ -409,6 +409,106 @@ describe("simulatePassage", () => {
     assert.equal(exceptions.passageSummary.convectiveWarnings[0].cape, 1800);
   });
 
+  test("anomalies merge into episodes with peak values, marginal band drops", async () => {
+    const { filterExceptions } = await simPromise;
+    const result = {
+      hourlyComfort: [],
+      sailEvents: [],
+      hazardAlerts: [],
+      seaStateAnomalies: [
+        {
+          hoursFromNow: 5,
+          timestamp: "2026-06-21T11:00:00Z",
+          steepnessRatio: 2.4,
+          hsMeters: 1.2,
+          tpSeconds: 7,
+        },
+        {
+          hoursFromNow: 6.2,
+          timestamp: "2026-06-21T12:12:00Z",
+          steepnessRatio: 2.1,
+          hsMeters: 1.5,
+          tpSeconds: 8,
+        },
+        {
+          hoursFromNow: 20,
+          timestamp: "2026-06-22T02:00:00Z",
+          steepnessRatio: 2.8,
+          hsMeters: 1.0,
+          tpSeconds: 6,
+        },
+      ],
+      upperAirAnomalies: [
+        {
+          hoursFromNow: 38.7,
+          timestamp: "2026-06-22T20:42:00Z",
+          cape: 500,
+          kIndex: 31,
+        },
+        {
+          hoursFromNow: 39.6,
+          timestamp: "2026-06-22T21:36:00Z",
+          cape: 100,
+          kIndex: 33,
+        },
+        {
+          hoursFromNow: 40.6,
+          timestamp: "2026-06-22T22:36:00Z",
+          cape: 200,
+          kIndex: 32,
+        },
+        // Marginal band: CAPE < 400 and K < 30 never reaches the UI
+        {
+          hoursFromNow: 44.4,
+          timestamp: "2026-06-23T02:24:00Z",
+          cape: 0,
+          kIndex: 28.3,
+        },
+        {
+          hoursFromNow: 45.4,
+          timestamp: "2026-06-23T03:24:00Z",
+          cape: 7.7,
+          kIndex: 28.2,
+        },
+        // Isolated CAPE spike beyond the merged band
+        {
+          hoursFromNow: 60,
+          timestamp: "2026-06-23T18:00:00Z",
+          cape: 1200,
+          kIndex: null,
+        },
+      ],
+      energy: {},
+      runs: [],
+    };
+    const exceptions = filterExceptions(result);
+
+    const conv = exceptions.passageSummary.convectiveWarnings;
+    assert.equal(conv.length, 3);
+    assert.equal(conv[0].hoursFromNow, 38.7);
+    assert.equal(conv[0].untilHoursFromNow, 40.6);
+    assert.equal(conv[0].untilTimestamp, "2026-06-22T22:36:00Z");
+    assert.equal(conv[0].cape, 500); // Peak of the band
+    assert.equal(conv[0].kIndex, 33);
+    assert.equal(conv[0].marginal, false);
+    // The marginal band still shows, tagged non-severe
+    assert.equal(conv[1].hoursFromNow, 44.4);
+    assert.equal(conv[1].untilHoursFromNow, 45.4);
+    assert.equal(conv[1].cape, 7.7);
+    assert.equal(conv[1].kIndex, 28.3); // Peak of the band
+    assert.equal(conv[1].marginal, true);
+    assert.equal(conv[2].hoursFromNow, 60);
+    assert.equal(conv[2].cape, 1200);
+    assert.equal(conv[2].marginal, false);
+
+    const sea = exceptions.passageSummary.macroSeaAnomalies;
+    assert.equal(sea.length, 2);
+    assert.equal(sea[0].steepnessRatio, 2.1); // Most severe of the band
+    assert.equal(sea[0].hsMeters, 1.5);
+    assert.equal(sea[0].untilHoursFromNow, 6.2);
+    assert.equal(sea[1].hoursFromNow, 20);
+  });
+
   test("planned tack merges into sailEvents, sorted, and reaches the summary (doc #5)", async () => {
     const { filterExceptions, simulatePassage } = await simPromise;
     // Steady beat north on starboard tack (TWA +45); at hour 12 the

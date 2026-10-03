@@ -300,6 +300,86 @@ export function pointInPolygon(lat, lon, ring) {
  * @param {number} [radiusNm]
  * @returns {Array<object>} Hazard alerts
  */
+/**
+ * CAPE at which convection risk turns severe (J/kg) — the bar where
+ * weather services start coloring the index. Captured-but-lower
+ * values still show, as a warning rather than a red alert.
+ */
+const CONVECTIVE_CAPE_J_PER_KG = 400;
+
+/**
+ * K-index at which convection risk turns severe — the classic
+ * "moderate" thunderstorm band starts at 30.
+ */
+const CONVECTIVE_K_INDEX = 30;
+
+/**
+ * K-index above which marginal convection is captured at all: the
+ * 28–30 band shows as a plain warning (K over 28 means unstable air),
+ * not a red alert.
+ */
+const CONVECTIVE_K_INDEX_MARGINAL = 28;
+
+/**
+ * Maximum gap in hours between two hourly anomalies that still counts
+ * as one continuing episode (covers hourly forecast steps and the
+ * partial-hour arrival jitter; 3-hourly steps stay separate).
+ */
+const EPISODE_GAP_HOURS = 2;
+
+/**
+ * Peak of two optional values (null-safe).
+ *
+ * @param {number|null|undefined} a
+ * @param {number|null|undefined} b
+ * @returns {number|null}
+ */
+function maxOf(a, b) {
+  if (a == null) {
+    return b ?? null;
+  }
+  if (b == null) {
+    return a;
+  }
+  return Math.max(a, b);
+}
+
+/**
+ * Merges consecutive hourly anomalies into episodes for the timeline:
+ * a warning band that lasts five hours reads as one event with a
+ * time range and its peak values, not five lines. Input must be
+ * chronological; episodes carry the first hour plus
+ * `untilHoursFromNow`/`untilTimestamp` and the peak values chosen by
+ * `pickPeak`.
+ *
+ * @param {Array<{hoursFromNow: number, timestamp: string, [key:
+ *   string]: unknown}>} anomalies
+ * @param {(episode: object, anomaly: object) => void} pickPeak -
+ *   Merges the anomaly's values into the open episode
+ * @returns {Array<object>} Episodes, chronological
+ */
+function mergeEpisodes(anomalies, pickPeak) {
+  const episodes = [];
+  for (const anomaly of anomalies) {
+    const last = episodes.at(-1);
+    if (
+      last &&
+      anomaly.hoursFromNow - last.untilHoursFromNow <= EPISODE_GAP_HOURS
+    ) {
+      last.untilHoursFromNow = anomaly.hoursFromNow;
+      last.untilTimestamp = anomaly.timestamp;
+      pickPeak(last, anomaly);
+    } else {
+      episodes.push({
+        ...anomaly,
+        untilHoursFromNow: anomaly.hoursFromNow,
+        untilTimestamp: anomaly.timestamp,
+      });
+    }
+  }
+  return episodes;
+}
+
 export function hazardAlerts(notes, positions, radiusNm = HAZARD_RADIUS_NM) {
   const alerts = [];
   if (!Array.isArray(notes)) {
@@ -784,8 +864,8 @@ export function simulateRun({
     const cape = weather?.upperAir?.cape;
     const kIndexValue = weather?.upperAir?.kIndex;
     if (
-      (cape != null && cape > 1000) ||
-      (kIndexValue != null && kIndexValue > 28)
+      (cape != null && cape >= CONVECTIVE_CAPE_J_PER_KG) ||
+      (kIndexValue != null && kIndexValue >= CONVECTIVE_K_INDEX_MARGINAL)
     ) {
       upperAirAnomalies.push({
         hoursFromNow: Math.round(hours * 10) / 10,
@@ -1048,12 +1128,39 @@ export function filterExceptions(simulationResult) {
       // Whole-route hazard alerts (work doc #18): the unified
       // timeline slices per screen, so the summary carries them all
       hazards: simulationResult.hazardAlerts ?? [],
-      macroSeaAnomalies: (simulationResult.seaStateAnomalies ?? []).filter(
-        (a) => a.steepnessRatio < 3.28,
+      // Anomalies merge into episodes (start hour, time range, peak
+      // values) — a five-hour warning band reads as one timeline
+      // event, not five lines
+      macroSeaAnomalies: mergeEpisodes(
+        (simulationResult.seaStateAnomalies ?? []).filter(
+          (a) => a.steepnessRatio < 3.28,
+        ),
+        (episode, a) => {
+          // Most severe = lowest steepness ratio, biggest seas
+          episode.steepnessRatio = Math.min(
+            episode.steepnessRatio,
+            a.steepnessRatio,
+          );
+          episode.hsMeters = maxOf(episode.hsMeters, a.hsMeters);
+          episode.tpSeconds = maxOf(episode.tpSeconds, a.tpSeconds);
+        },
       ),
-      convectiveWarnings: (simulationResult.upperAirAnomalies ?? []).filter(
-        (u) => u.cape > 1000 || u.kIndex > 28,
-      ),
+      convectiveWarnings: mergeEpisodes(
+        simulationResult.upperAirAnomalies ?? [],
+        (episode, u) => {
+          episode.cape = maxOf(episode.cape, u.cape);
+          episode.kIndex = maxOf(episode.kIndex, u.kIndex);
+        },
+      ).map((episode) => ({
+        ...episode,
+        // Severity lives with the peak: an episode whose CAPE or
+        // K-index crosses the severe bars is a red alert, the rest
+        // (the unstable-air band below it) shows as a plain warning
+        marginal: !(
+          (episode.cape != null && episode.cape >= CONVECTIVE_CAPE_J_PER_KG) ||
+          (episode.kIndex != null && episode.kIndex >= CONVECTIVE_K_INDEX)
+        ),
+      })),
     },
   };
 }

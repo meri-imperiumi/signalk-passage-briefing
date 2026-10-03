@@ -569,6 +569,31 @@ function relHours(timestamp, fetchMs) {
 }
 
 /**
+ * Detail line for an episode-shaped timeline item: the peak-value
+ * parts, plus the episode's time range when it spans more than one
+ * step ("until <stamp>", in ship's time like every other stamp).
+ *
+ * @param {{hoursFromNow: number|null, untilHoursFromNow:
+ *   number|null, untilTimestamp: string|null}} episode
+ * @param {Array<string|null>} parts - Peak value fragments
+ * @returns {string}
+ */
+function episodeDetail(episode, parts) {
+  const all = [...parts];
+  if (
+    episode.untilHoursFromNow != null &&
+    episode.hoursFromNow != null &&
+    episode.untilHoursFromNow - episode.hoursFromNow > 0.05
+  ) {
+    const stamp = fmtShip(episode.untilTimestamp);
+    if (stamp) {
+      all.push(`until ${stamp}`);
+    }
+  }
+  return all.filter(Boolean).join(" · ");
+}
+
+/**
  * Unified passage timeline (work doc #18): every event source mapped
  * to one chronological shape — `{hoursFromNow, timestamp, stamp,
  * kind, severity, label, detail}` — sorted by time, undated last.
@@ -660,7 +685,8 @@ export function mergeTimeline(exceptions, payload = null) {
     });
   }
 
-  // Macro sea-state anomalies (steepness below the breaking ratio)
+  // Macro sea-state anomaly episodes (steepness below the breaking
+  // ratio): peak ratio and seas over the episode's time range
   for (const a of summary.macroSeaAnomalies ?? []) {
     push({
       hoursFromNow: a.hoursFromNow ?? null,
@@ -668,31 +694,28 @@ export function mergeTimeline(exceptions, payload = null) {
       kind: "sea",
       severity: "warn",
       label: "Steep sea",
-      detail: [
+      detail: episodeDetail(a, [
         a.steepnessRatio != null ? `ratio ${a.steepnessRatio}` : null,
         a.hsMeters != null ? `Hs ${a.hsMeters.toFixed(1)} m` : null,
-      ]
-        .filter(Boolean)
-        .join(" · "),
+      ]),
     });
   }
 
-  // Convective warnings (CAPE / K-index thresholds)
+  // Convective warning episodes (CAPE / K-index thresholds): peak
+  // values over the range; CAPE in J/kg, K-index to one decimal.
+  // Episodes whose peak stays under the severe bars render as plain
+  // warnings, not red
   for (const c of summary.convectiveWarnings ?? []) {
-    const parts = [];
-    if (c.cape != null) {
-      parts.push(`CAPE ${c.cape}`);
-    }
-    if (c.kIndex != null) {
-      parts.push(`K ${c.kIndex}`);
-    }
     push({
       hoursFromNow: c.hoursFromNow ?? null,
       timestamp: c.timestamp ?? null,
       kind: "convective",
-      severity: "severe",
+      severity: c.marginal ? "warn" : "severe",
       label: "Convection risk",
-      detail: parts.join(" · "),
+      detail: episodeDetail(c, [
+        c.cape != null ? `CAPE ${Math.round(c.cape)} J/kg` : null,
+        c.kIndex != null ? `K ${c.kIndex.toFixed(1)}` : null,
+      ]),
     });
   }
 

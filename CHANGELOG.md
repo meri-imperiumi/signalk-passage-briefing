@@ -53,6 +53,17 @@
   falls back to Open-Meteo for that window; the forced choices never
   fall back.
 
+### Changed
+
+- Convective warnings read as episodes, not hourly spam: consecutive
+  anomalies (and steep-sea anomalies alike) merge into one timeline
+  event with a time range and peak values — "CAPE 713 J/kg · K 28.6 ·
+  until 10-05 05:38Z". Severity follows the peak: CAPE ≥ 400 J/kg (the
+  bar where weather services start coloring the index) or K-index ≥ 30
+  is a red alert, while the unstable-air band below it (K ≥ 28 with
+  low CAPE) still shows as an orange warning with units and sane
+  precision instead of being dropped or inflated.
+
 ### Fixed
 
 - The webapp flags stale cached briefings: when a served payload was
