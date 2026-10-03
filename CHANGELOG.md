@@ -16,6 +16,14 @@
   the whole-route hazard list in `passageSummary.hazards` (the 24 h
   `next24h.sailChanges` and `next24h.hazards` slices are gone — the
   timeline slices itself).
+- Ship's time display: the webapp reads the vessel's published
+  timezone (`environment.time.timezoneOffset` / `.timezoneRegion`, as
+  served by signalk-ships-time) over the REST API and the delta
+  stream, and renders briefing stamps in ship's time (`MM-DD HH:MM
+  +13`) instead of UTC, falling back to UTC `Z` when no offset is
+  published. The offset rides on every stamp so a zone crossing
+  mid-passage reads honestly; a header pill names the zone (IANA
+  region when known, else the offset).
 - Weather source selection (`weather_source`: `auto` / `weather-api` /
   `open-meteo`, default `auto`): when the server has the Weather API
   and a provider answers — signalk-weather-router-plus serving its
@@ -31,6 +39,20 @@
   fall back.
 
 ### Fixed
+
+- The webapp flags stale cached briefings: when a served payload was
+  compiled more than a day ago, a banner above the briefing shows the
+  compile stamp and age with a Fetch now affordance, instead of
+  presenting a multi-day-old timeline's `+Xh` labels as upcoming.
+- The plugin re-fetches stale briefings without waiting for an edge
+  trigger: the oneshot fires only when the internet state changes and
+  cron windows only run while moored and charged, so a server that
+  stays up for days while the machine sits in STANDBY_OFFSHORE kept
+  serving a briefing sliding into the past. The one-minute ticker now
+  re-fetches (trigger `stale`) when online and the cached briefing
+  (active route, else last briefed, else here) is older than the
+  route TTL — at most once per six hours, and only when something is
+  actually cached.
 
 - Bulletin geography now resolves named synoptic features in area
   bounds: `SOUTH OF 09S AND WEST OF CF` and `SOUTH OF 10S, BETWEEN

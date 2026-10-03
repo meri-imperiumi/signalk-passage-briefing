@@ -40,12 +40,21 @@ export async function fetchJson(url, timeoutMs = 8000, options = {}) {
  * @param {object} handlers
  * @param {(mode: string) => void} [handlers.onMode] -
  *   `vessels.self.environment.mode` ("day"/"night")
+ * @param {(path: string, value: unknown) => void} [handlers.onTime] -
+ *   `environment.time.timezoneOffset` / `environment.time.timezoneRegion`
+ *   updates (signalk-ships-time), path-disambiguated
  * @param {(connected: boolean) => void} [handlers.onConnection]
  */
-export function createStream({ onMode, onConnection }) {
+export function createStream({ onMode, onTime, onConnection }) {
   let ws = null;
   let attempt = 0;
   let closed = false;
+
+  /** Paths the ship's-time subscription reports to {@link onTime}. */
+  const TIME_PATHS = new Set([
+    "environment.time.timezoneOffset",
+    "environment.time.timezoneRegion",
+  ]);
 
   const connect = () => {
     if (closed) {
@@ -64,6 +73,18 @@ export function createStream({ onMode, onConnection }) {
           context: "vessels.self",
           subscribe: [
             { path: "environment.mode", minRate: 5000, policy: "throttle" },
+            // Ship's time changes only on zone crossings; a throttled
+            // minute-rate subscription is plenty
+            {
+              path: "environment.time.timezoneOffset",
+              minRate: 60000,
+              policy: "throttle",
+            },
+            {
+              path: "environment.time.timezoneRegion",
+              minRate: 60000,
+              policy: "throttle",
+            },
           ],
         }),
       );
@@ -76,6 +97,8 @@ export function createStream({ onMode, onConnection }) {
           for (const { path, value } of update.values ?? []) {
             if (path === "environment.mode" && typeof value === "string") {
               onMode?.(value);
+            } else if (TIME_PATHS.has(path) && value != null) {
+              onTime?.(path, value);
             }
           }
         }
@@ -106,6 +129,30 @@ export function createStream({ onMode, onConnection }) {
       ws?.close();
     },
   };
+}
+
+/**
+ * The vessel's published timezone from the REST API (signalk-ships-time),
+ * best effort: null when the server has none — the stream subscription
+ * covers late arrivals. Leaf values arrive wrapped (`{value, ...}`)
+ * on some server versions; unwrapped otherwise.
+ *
+ * @returns {Promise<{offset: number|string, region: string|null}|null>}
+ */
+export async function fetchShipTime() {
+  const unwrap = (node) =>
+    node && typeof node === "object" && "value" in node ? node.value : node;
+  try {
+    const time = await fetchJson(`${BASE}/api/vessels/self/environment/time`);
+    const offset = unwrap(time?.timezoneOffset);
+    const region = unwrap(time?.timezoneRegion);
+    if (offset == null && region == null) {
+      return null;
+    }
+    return { offset: offset ?? null, region: region ?? null };
+  } catch {
+    return null;
+  }
 }
 
 /**

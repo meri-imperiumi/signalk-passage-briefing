@@ -1522,4 +1522,139 @@ describe("plugin", () => {
 
     plugin.stop();
   });
+
+  test("staleness backstop re-fetches an aged briefing while online", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const app = createMockApp();
+    app.getSelfPath = (path) =>
+      path === "navigation.position"
+        ? { latitude: 0, longitude: 0 }
+        : path === "navigation.course.activeRoute"
+          ? { value: { href: "/resources/routes/r1" } }
+          : null;
+    app.resourcesApi = {
+      async getResource(resType, resId) {
+        if (resType === "routes" && resId === "r1") {
+          return {
+            name: "Passage",
+            feature: {
+              geometry: {
+                coordinates: [
+                  [0, 0],
+                  [0, 1.5],
+                ],
+              },
+            },
+          };
+        }
+        throw new Error("not found");
+      },
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({});
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockOpenMeteo();
+    try {
+      // Internet comes up: the oneshot briefs the active route
+      app.getDeltaHandlers()[0]({
+        updates: [
+          { values: [{ path: "network.internet.state", value: "online" }] },
+        ],
+      });
+      await waitFor(() => /cached at/.test(app.getStatus()));
+
+      // Age the cache beyond the route TTL
+      const file = join(app.dataDir, "weather", "latest-r1.json");
+      const aged = JSON.parse(readFileSync(file, "utf8"));
+      aged.metadata.fetchedAt = new Date(
+        Date.now() - 27 * 60 * 60 * 1000,
+      ).toISOString();
+      writeFileSync(file, JSON.stringify(aged));
+
+      await plugin.refreshIfStale();
+      assert.match(app.getStatus(), /\(stale\)/);
+      const refreshed = JSON.parse(readFileSync(file, "utf8"));
+      assert.ok(
+        refreshed.metadata.fetchedAt > aged.metadata.fetchedAt,
+        "payload re-fetched",
+      );
+
+      // Rate limit: an immediate second check does nothing
+      const afterFirst = app.getStatus();
+      await plugin.refreshIfStale();
+      assert.equal(app.getStatus(), afterFirst);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    plugin.stop();
+  });
+
+  test("staleness backstop respects fresh caches and offline links", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const app = createMockApp();
+    app.getSelfPath = (path) =>
+      path === "navigation.position"
+        ? { latitude: 0, longitude: 0 }
+        : path === "navigation.course.activeRoute"
+          ? { value: { href: "/resources/routes/r1" } }
+          : null;
+    app.resourcesApi = {
+      async getResource(resType, resId) {
+        if (resType === "routes" && resId === "r1") {
+          return {
+            name: "Passage",
+            feature: {
+              geometry: {
+                coordinates: [
+                  [0, 0],
+                  [0, 1.5],
+                ],
+              },
+            },
+          };
+        }
+        throw new Error("not found");
+      },
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({});
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockOpenMeteo();
+    try {
+      // Internet comes up, the oneshot briefs the route: the cache is
+      // fresh, so the backstop must not touch it
+      app.getDeltaHandlers()[0]({
+        updates: [
+          { values: [{ path: "network.internet.state", value: "online" }] },
+        ],
+      });
+      await waitFor(() => /cached at/.test(app.getStatus()));
+      const freshStatus = app.getStatus();
+      await plugin.refreshIfStale();
+      assert.equal(app.getStatus(), freshStatus);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    // Offline: a stale cache alone must not trigger anything
+    app.getDeltaHandlers()[0]({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "offline" }] },
+      ],
+    });
+    const file = join(app.dataDir, "weather", "latest-r1.json");
+    const aged = JSON.parse(readFileSync(file, "utf8"));
+    aged.metadata.fetchedAt = new Date(
+      Date.now() - 48 * 60 * 60 * 1000,
+    ).toISOString();
+    writeFileSync(file, JSON.stringify(aged));
+    const offlineStatus = app.getStatus();
+    await plugin.refreshIfStale();
+    assert.equal(app.getStatus(), offlineStatus);
+
+    plugin.stop();
+  });
 });

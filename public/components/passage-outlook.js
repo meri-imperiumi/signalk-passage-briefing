@@ -10,7 +10,20 @@
  * @file components/passage-outlook.js
  */
 
-import { createStream, fetchJson, fetchNotes } from "./sk-api.js";
+import {
+  briefingAgeHours,
+  fmtHours,
+  fmtShip,
+  parseTimezoneOffset,
+  setShipTime,
+  shipTimeLabel,
+} from "./models.mjs";
+import {
+  createStream,
+  fetchJson,
+  fetchNotes,
+  fetchShipTime,
+} from "./sk-api.js";
 import { SK_BASE_CSS } from "./sk-base-css.js";
 
 /**
@@ -20,6 +33,14 @@ import { SK_BASE_CSS } from "./sk-base-css.js";
  * webapp's API_BASE on this server.
  */
 const PLUGIN_API = "/plugins/signalk-passage-briefing/api";
+
+/**
+ * Briefings are compiled daily (SPEC §2.2): past a day old the
+ * timeline's `+Xh` labels point at the past, so the cached compile
+ * gets an explicit age banner (work doc #18 follow-up) — the data
+ * still renders, better than nothing underway.
+ */
+const STALE_AFTER_HOURS = 24;
 
 /**
  * Friendly text for fetch failures: the 8 s/120 s abort timeouts
@@ -75,6 +96,15 @@ class PassageOutlook extends HTMLElement {
           align-items: center; flex-wrap: wrap;
         }
         .stale button { min-height: 40px; padding: 8px 12px; }
+        .outdated {
+          border: 1px solid var(--color-orange);
+          color: var(--color-orange);
+          font-family: var(--font-data, ui-monospace, monospace);
+          padding: 8px 12px; margin-bottom: 12px;
+          display: flex; justify-content: space-between; gap: 8px;
+          align-items: center; flex-wrap: wrap;
+        }
+        .outdated button { min-height: 40px; padding: 8px 12px; }
         .loading {
           border: 1px solid var(--color-grey);
           color: var(--text-muted);
@@ -87,6 +117,7 @@ class PassageOutlook extends HTMLElement {
         <h1>Passage Briefing</h1>
         <select id="route" aria-label="Route" style="max-width: 16rem"></select>
         <span class="pill" id="online">OFFLINE</span>
+        <span class="pill" id="shiptime" hidden></span>
       </header>
       <div class="tab-bar" role="tablist" id="tab-bar">
         <button id="tab-tactical" role="tab" aria-selected="true">Tactical</button>
@@ -98,6 +129,7 @@ class PassageOutlook extends HTMLElement {
 
     this._routeSelect = this.shadowRoot.getElementById("route");
     this._onlinePill = this.shadowRoot.getElementById("online");
+    this._shiptimePill = this.shadowRoot.getElementById("shiptime");
     this._tabBar = this.shadowRoot.getElementById("tab-bar");
     this._tabTactical = this.shadowRoot.getElementById("tab-tactical");
     this._tabStrategic = this.shadowRoot.getElementById("tab-strategic");
@@ -134,13 +166,23 @@ class PassageOutlook extends HTMLElement {
     this._worker?.terminate();
   }
 
-  /** Signal K stream: environment mode + connectivity pill. */
+  /** Signal K stream: environment mode + connectivity + ship's time. */
   connectStream() {
     this._stream = createStream({
       onMode: (mode) => {
         document.documentElement.dataset.mode =
           mode === "day" ? "day" : "night";
         this._view?.firstElementChild?.setAttribute("data-mode", mode);
+      },
+      onTime: (path, value) => {
+        // Offset and region arrive as separate updates; keep the
+        // latest of each
+        this._timeRaw ??= {};
+        this._timeRaw[path] = value;
+        this.applyShipTime({
+          offset: this._timeRaw["environment.time.timezoneOffset"],
+          region: this._timeRaw["environment.time.timezoneRegion"],
+        });
       },
       onConnection: (connected) => {
         this._onlinePill.classList.toggle("online", connected);
@@ -152,19 +194,24 @@ class PassageOutlook extends HTMLElement {
   /** Loads everything the simulation needs, then simulates. */
   async bootstrap() {
     try {
-      const [status, routes, config, matrix, polar, notes] = await Promise.all([
-        fetchJson(`${PLUGIN_API}/status`),
-        fetchJson(`${PLUGIN_API}/routes`),
-        fetchJson(`${PLUGIN_API}/config`).catch(() => ({})),
-        fetchJson(`${PLUGIN_API}/matrix`).catch(() => null),
-        fetchJson(`${PLUGIN_API}/polar`).catch(() => null),
-        fetchNotes(),
-      ]);
+      const [status, routes, config, matrix, polar, notes, time] =
+        await Promise.all([
+          fetchJson(`${PLUGIN_API}/status`),
+          fetchJson(`${PLUGIN_API}/routes`),
+          fetchJson(`${PLUGIN_API}/config`).catch(() => ({})),
+          fetchJson(`${PLUGIN_API}/matrix`).catch(() => null),
+          fetchJson(`${PLUGIN_API}/polar`).catch(() => null),
+          fetchNotes(),
+          fetchShipTime(),
+        ]);
       this._status = status;
       this._config = config;
       this._matrix = matrix;
       this._polar = polar;
       this._notes = notes;
+      if (time) {
+        this.applyShipTime(time);
+      }
 
       this._onlinePill.classList.toggle("online", status.online === true);
       this._onlinePill.textContent = status.online ? "ONLINE" : "OFFLINE";
@@ -249,6 +296,15 @@ class PassageOutlook extends HTMLElement {
         this._exceptions = null;
       }
       this.renderStale(false);
+      const ageHours = briefingAgeHours(this._briefing.payload);
+      this.renderOutdated(
+        ageHours != null && ageHours > STALE_AFTER_HOURS
+          ? {
+              stamp: fmtShip(this._briefing.payload.metadata?.fetchedAt),
+              age: fmtHours(ageHours),
+            }
+          : null,
+      );
       // Rebuild the view shell for the served mode: leaving "Conditions
       // here" must bring the tactical/strategic tabs back, and the
       // worker's results render into the elements this creates
@@ -261,6 +317,34 @@ class PassageOutlook extends HTMLElement {
         return;
       }
       this.showError(fetchErrorMessage(error, "Briefing unavailable"));
+    }
+  }
+
+  /**
+   * Applies the vessel's published timezone (signalk-ships-time):
+   * stamps across the app switch to ship's time, the header pill
+   * names the zone. The offset alone is required; the region label
+   * is optional and may arrive separately from the stream.
+   *
+   * @param {{offset: number|string|null, region: string|null}} time
+   */
+  applyShipTime({ offset, region }) {
+    const offsetMinutes = parseTimezoneOffset(offset);
+    if (offsetMinutes == null) {
+      return; // No usable offset (yet): keep UTC stamps
+    }
+    this._shipRegion = region ?? null;
+    setShipTime({ offsetMinutes, region: this._shipRegion });
+    if (this._shiptimePill) {
+      this._shiptimePill.textContent = shipTimeLabel();
+      this._shiptimePill.hidden = false;
+    }
+    this.renderData();
+    // Here mode stamps live outside renderData; restamp in place
+    if (this._briefing?.mode === "here" && this._briefing?.payload) {
+      this._view
+        ?.querySelector("conditions-here")
+        ?.setHere(this._briefing.payload, this._config ?? {});
     }
   }
 
@@ -292,6 +376,7 @@ class PassageOutlook extends HTMLElement {
    */
   renderLoading(message = "Loading briefing…") {
     this.shadowRoot.getElementById("stale")?.remove();
+    this.shadowRoot.getElementById("outdated")?.remove();
     this._view.innerHTML = "";
     const strip = document.createElement("div");
     strip.className = "loading";
@@ -318,6 +403,33 @@ class PassageOutlook extends HTMLElement {
       mode === "here"
         ? "No cached conditions yet"
         : "No cached briefing for this route";
+    const button = document.createElement("button");
+    button.textContent = "Fetch now";
+    button.disabled = this._status?.online !== true;
+    button.addEventListener("click", () => this.refreshBriefing());
+    strip.append(text, button);
+    this._view.before(strip);
+  }
+
+  /**
+   * "Compiled N days ago" banner above the rendered briefing: the
+   * cache is served as-is (offline-first), but a multi-day-old
+   * timeline reads as upcoming when it is already past — say so, and
+   * keep the refresh affordance at hand. Null hides the banner.
+   *
+   * @param {{stamp: string, age: string}|null} info - Compile stamp
+   *   and formatted age, or null to clear
+   */
+  renderOutdated(info) {
+    this.shadowRoot.getElementById("outdated")?.remove();
+    if (!info) {
+      return;
+    }
+    const strip = document.createElement("div");
+    strip.className = "outdated";
+    strip.id = "outdated";
+    const text = document.createElement("span");
+    text.textContent = `Briefing compiled ${info.stamp} — ${info.age} old`;
     const button = document.createElement("button");
     button.textContent = "Fetch now";
     button.disabled = this._status?.online !== true;

@@ -26,10 +26,68 @@ test("webapp view models", async (t) => {
     hereNow,
   } = await import("../public/components/models.mjs");
 
+  const {
+    briefingAgeHours,
+    fmtShip,
+    parseTimezoneOffset,
+    setShipTime,
+    shipTimeLabel,
+  } = await import("../public/components/models.mjs");
+
   await t.test("fmtUtc renders MM-DD HH:MMZ in UTC", () => {
     assert.equal(fmtUtc("2026-06-21T06:05:00.000Z"), "06-21 06:05Z");
     assert.equal(fmtUtc(null), "");
     assert.equal(fmtUtc("not a date"), "");
+  });
+
+  await t.test("parseTimezoneOffset reads (-)hhmm encodings", () => {
+    assert.equal(parseTimezoneOffset(200), 120);
+    assert.equal(parseTimezoneOffset(-930), -570);
+    assert.equal(parseTimezoneOffset("1300"), 780);
+    assert.equal(parseTimezoneOffset(0), 0);
+    // Malformed: partial-hour minutes and out-of-range zones
+    assert.equal(parseTimezoneOffset(165), null);
+    assert.equal(parseTimezoneOffset(2400), null);
+    assert.equal(parseTimezoneOffset(null), null);
+    assert.equal(parseTimezoneOffset("abc"), null);
+  });
+
+  await t.test("fmtShip renders ship's time with the offset on stamps", () => {
+    setShipTime({ offsetMinutes: 780, region: "Pacific/Tongatapu" });
+    assert.equal(fmtShip("2026-09-29T05:35:00.000Z"), "09-29 18:35 +13");
+    assert.equal(shipTimeLabel(), "Pacific/Tongatapu");
+    // Fractional zones label with minutes; the stamp shifts too
+    setShipTime({ offsetMinutes: -570 });
+    assert.equal(fmtShip("2026-06-21T06:05:00.000Z"), "06-20 20:35 -09:30");
+    assert.equal(shipTimeLabel(), "UTC-09:30");
+    // Invalid input falls back to empty like fmtUtc
+    assert.equal(fmtShip(null), "");
+    assert.equal(fmtShip("not a date"), "");
+    // No published timezone: stamps stay UTC "Z"
+    setShipTime(null);
+    assert.equal(fmtShip("2026-06-21T06:05:00.000Z"), "06-21 06:05Z");
+    assert.equal(shipTimeLabel(), "");
+  });
+
+  await t.test("briefingAgeHours measures staleness from fetchedAt", () => {
+    const now = new Date("2026-10-03T00:00:00.000Z");
+    assert.equal(
+      briefingAgeHours(
+        { metadata: { fetchedAt: "2026-09-29T00:00:00Z" } },
+        now,
+      ),
+      96,
+    );
+    assert.equal(briefingAgeHours({ metadata: {} }, now), null);
+    assert.equal(briefingAgeHours(null, now), null);
+    // Future fetch (clock skew): clamps to zero, never negative
+    assert.equal(
+      briefingAgeHours(
+        { metadata: { fetchedAt: "2026-10-03T06:00:00Z" } },
+        now,
+      ),
+      0,
+    );
   });
 
   await t.test("fmtHours buckets days, hours and minutes", () => {

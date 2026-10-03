@@ -52,6 +52,128 @@ export function fmtUtc(iso) {
 }
 
 /**
+ * Age of a briefing payload in hours, from its fetch timestamp
+ * (`metadata.fetchedAt`) to a reference time. Null when the payload
+ * carries no fetch time.
+ *
+ * @param {object|null} payload
+ * @param {Date} [now]
+ * @returns {number|null}
+ */
+export function briefingAgeHours(payload, now = new Date()) {
+  const fetched = payload?.metadata?.fetchedAt;
+  if (!fetched) {
+    return null;
+  }
+  const ms = new Date(fetched).getTime();
+  if (Number.isNaN(ms)) {
+    return null;
+  }
+  return Math.max(0, (now.getTime() - ms) / 3600000);
+}
+
+/**
+ * The vessel's published timezone (Signal K `environment.time.*`, as
+ * served by signalk-ships-time): the session-wide state behind
+ * {@link fmtShip}. `offsetMinutes` comes from
+ * `environment.time.timezoneOffset` (`(-)hhmm` encoding, parsed with
+ * {@link parseTimezoneOffset}); `region` is
+ * `environment.time.timezoneRegion` when known. The offset is the
+ * crew's *current* zone: stamps far into the passage render in it
+ * too, with the offset on every stamp making that explicit.
+ *
+ * @type {{offsetMinutes: number, region: string|null}|null}
+ */
+let shipTime = null;
+
+/**
+ * Parses a Signal K `environment.time.timezoneOffset` value
+ * (`(-)hhmm` encoding, e.g. `200` = UTC+2, `-930` = UTC-9:30) into
+ * minutes. Accepts numbers and numeric strings; null when absent or
+ * malformed (minutes ≥ 60, |hhmm| ≥ 2400, non-finite).
+ *
+ * @param {number|string|null|undefined} value
+ * @returns {number|null} Offset in minutes
+ */
+export function parseTimezoneOffset(value) {
+  const raw = typeof value === "string" ? Number(value) : value;
+  if (raw == null || !Number.isFinite(raw)) {
+    return null;
+  }
+  const abs = Math.abs(Math.round(raw));
+  const minutes = Math.trunc(abs / 100) * 60 + (abs % 100);
+  if (abs % 100 >= 60 || abs >= 2400) {
+    return null;
+  }
+  return Math.sign(raw) * minutes;
+}
+
+/**
+ * Sets the vessel's timezone for stamp rendering (see
+ * {@link shipTime}). Null clears it — stamps fall back to UTC.
+ *
+ * @param {{offsetMinutes: number, region?: string|null}|null} time
+ */
+export function setShipTime(time) {
+  shipTime =
+    time && Number.isFinite(time.offsetMinutes)
+      ? { offsetMinutes: time.offsetMinutes, region: time.region ?? null }
+      : null;
+}
+
+/**
+ * Zone label for the header pill: the IANA region when known, else
+ * the offset (`UTC+03:30`). Empty without ship's time.
+ *
+ * @returns {string}
+ */
+export function shipTimeLabel() {
+  if (!shipTime) {
+    return "";
+  }
+  if (shipTime.region) {
+    return shipTime.region;
+  }
+  return `UTC${offsetLabel(shipTime.offsetMinutes)}`;
+}
+
+/**
+ * Compact offset label: `+03` for whole hours, `-09:30` otherwise.
+ *
+ * @param {number} minutes
+ * @returns {string}
+ */
+function offsetLabel(minutes) {
+  const sign = minutes < 0 ? "-" : "+";
+  const abs = Math.abs(minutes);
+  const h = String(Math.trunc(abs / 60)).padStart(2, "0");
+  const m = abs % 60;
+  return m > 0 ? `${sign}${h}:${String(m).padStart(2, "0")}` : `${sign}${h}`;
+}
+
+/**
+ * Formats an ISO timestamp for display: in ship's time when the
+ * vessel publishes a timezone (`MM-DD HH:MM +03` — the offset rides
+ * on every stamp, so a zone crossing mid-passage reads honestly),
+ * falling back to {@link fmtUtc} otherwise.
+ *
+ * @param {string|null|undefined} iso
+ * @returns {string} Empty string when unset/invalid
+ */
+export function fmtShip(iso) {
+  if (!shipTime) {
+    return fmtUtc(iso);
+  }
+  const d = iso != null ? new Date(iso) : null;
+  if (!d || Number.isNaN(d.getTime())) {
+    return "";
+  }
+  const shifted = new Date(d.getTime() + shipTime.offsetMinutes * 60000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())} ${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())} ${offsetLabel(shipTime.offsetMinutes)}`;
+}
+
+/**
  * Formats a duration in hours as `1d 04h`, `5h 20m` or `45m`.
  *
  * @param {number|null|undefined} hours
@@ -279,7 +401,7 @@ export function hereNow(payload, rows = []) {
     currentSetDeg: step.current?.set ?? null,
     mslpHpa: mslpNow,
     mslpTrend,
-    stamp: fmtUtc(step.timestamp),
+    stamp: fmtShip(step.timestamp),
   };
 }
 
@@ -296,7 +418,7 @@ export function tacticalNow(exceptions) {
     awsKnots: block?.awsKnots ?? null,
     hoursFromNow: block?.hoursFromNow ?? null,
     color: comfortColor(block?.comfortLevel),
-    stamp: fmtUtc(block?.timestamp),
+    stamp: fmtShip(block?.timestamp),
   };
 }
 
@@ -485,7 +607,7 @@ export function mergeTimeline(exceptions, payload = null) {
       detail: "",
       night: false,
       ...item,
-      stamp: fmtUtc(item.timestamp),
+      stamp: fmtShip(item.timestamp),
     });
   };
 
@@ -623,17 +745,17 @@ export function etaTable(exceptions) {
     rows: [
       {
         label: "P10",
-        stamp: fmtUtc(summary.etaP10),
+        stamp: fmtShip(summary.etaP10),
         night: night.p10 === true,
       },
       {
         label: "P50",
-        stamp: fmtUtc(summary.etaP50),
+        stamp: fmtShip(summary.etaP50),
         night: night.p50 === true,
       },
       {
         label: "P90",
-        stamp: fmtUtc(summary.etaP90),
+        stamp: fmtShip(summary.etaP90),
         night: night.p90 === true,
       },
     ],

@@ -110,6 +110,13 @@ const ROUTE_TTL_MS = 26 * 60 * 60 * 1000;
 const CRON_TICK_INTERVAL_MS = 60 * 1000;
 
 /**
+ * Minimum spacing between staleness-backstop fetches: a failing or
+ * captive-portal "online" link must not turn the ticker into a
+ * retry storm.
+ */
+const STALE_RETRY_MS = 6 * 60 * 60 * 1000;
+
+/**
  * Age at which a here payload is flagged stale to the webapp
  * (work doc #7): the vessel position moves, so conditions at "here"
  * go stale faster than a route briefing.
@@ -200,6 +207,8 @@ module.exports = (app) => {
   /** Track-weather fetch the briefing windows call (work doc #16):
    * Weather API when selected/available, Open-Meteo otherwise. */
   let trackWeatherFetcher = null;
+  /** Last staleness-backstop fetch (rate limit anchor). */
+  let lastStaleRefreshAt = 0;
 
   /**
    * Whether the internet link currently allows fetching.
@@ -753,6 +762,70 @@ module.exports = (app) => {
   }
 
   /**
+   * Staleness backstop: the regular triggers are edge-based — the
+   * oneshot fires only when the internet state *changes* (including
+   * the first observation after startup), and cron windows run only
+   * in PERSISTENT_CRON (moored, charged). A server that stays up for
+   * days while the link never flips and the machine sits in
+   * STANDBY_OFFSHORE would otherwise keep serving a briefing that
+   * silently slides days into the past. Runs from the one-minute
+   * ticker: when online and the relevant cached briefing (active
+   * route, else last briefed, else here) is older than the route TTL,
+   * re-fetches it — at most once per retry interval, and only when
+   * something is actually cached (fresh installs stay on the
+   * oneshot).
+   *
+   * @param {Date} [now]
+   */
+  async function refreshIfStale(now = new Date()) {
+    if (!isOnline() || now.getTime() - lastStaleRefreshAt < STALE_RETRY_MS) {
+      return;
+    }
+    const activeId = activeRouteId(observations[ACTIVE_ROUTE_PATH]);
+    let lastRouteId = null;
+    try {
+      lastRouteId = (
+        await readFile(
+          join(app.getDataDirPath(), "weather", "last-route"),
+          "utf8",
+        )
+      ).trim();
+    } catch (_error) {
+      lastRouteId = null;
+    }
+    const candidates = [...new Set([activeId, lastRouteId].filter(Boolean))];
+    let ageMs = null;
+    for (const routeId of candidates) {
+      try {
+        const cached = await loadPayload(app.getDataDirPath(), routeId);
+        const fetchedAt = cached?.payload?.metadata?.fetchedAt;
+        if (fetchedAt) {
+          ageMs = now.getTime() - new Date(fetchedAt).getTime();
+          break;
+        }
+      } catch (_error) {
+        // Unreadable or missing cache: try the next candidate
+      }
+    }
+    if (ageMs == null) {
+      try {
+        const here = await loadHere();
+        const fetchedAt = here?.payload?.metadata?.fetchedAt;
+        if (fetchedAt) {
+          ageMs = now.getTime() - new Date(fetchedAt).getTime();
+        }
+      } catch (_error) {
+        ageMs = null;
+      }
+    }
+    if (ageMs == null || ageMs < ROUTE_TTL_MS) {
+      return;
+    }
+    lastStaleRefreshAt = now.getTime();
+    await runFetch("stale");
+  }
+
+  /**
    * Publishes the tile's flat scalar paths over the Signal K stream
    * (work doc #8: tile data flows over the host bus relay — the
    * widget never calls REST).
@@ -1114,6 +1187,12 @@ module.exports = (app) => {
         if (result.fetch === "cron") {
           runFetch("cron");
         }
+        // Staleness backstop: edge-triggered fetches miss the case
+        // where the server runs for days without an internet-state
+        // change while cron is gated off (sailing, metered, low SoC)
+        refreshIfStale(new Date()).catch((error) =>
+          app.debug?.(`Staleness check failed: ${error.message}`),
+        );
         // Re-emit the tile paths every tick (work doc #13): deltas
         // only travel on change, and widgets that connect after the
         // last compile would otherwise wait up to five minutes for
@@ -1521,7 +1600,11 @@ module.exports = (app) => {
     },
   };
 
-  return plugin;
+  return {
+    ...plugin,
+    /** Exposed for tests: the staleness backstop check. */
+    refreshIfStale,
+  };
 };
 
 module.exports.PLUGIN_ID = PLUGIN_ID;
