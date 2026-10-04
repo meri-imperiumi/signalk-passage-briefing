@@ -10,7 +10,13 @@
  * @file components/tactical-dashboard.js
  */
 
-import { fmtShip, mergeTimeline, splitSevere, tacticalNow } from "./models.mjs";
+import {
+  fmtShip,
+  fmtUtc,
+  mergeTimeline,
+  splitSevere,
+  tacticalNow,
+} from "./models.mjs";
 import "./passage-timeline.js";
 import { SK_BASE_CSS } from "./sk-base-css.js";
 
@@ -40,7 +46,27 @@ class TacticalDashboard extends HTMLElement {
           text-transform: uppercase; letter-spacing: 0.1em;
           font-size: 0.85rem; font-weight: 700;
         }
-        strong.sev {
+                .cap-alert { margin: 6px 0 0; }
+        .cap-severe {
+          color: var(--color-orange);
+          font-family: var(--font-data, ui-monospace, monospace);
+          font-weight: 700;
+          letter-spacing: 0.08em;
+          margin-right: 8px;
+        }
+        .cap-extreme {
+          color: var(--color-red);
+          font-family: var(--font-data, ui-monospace, monospace);
+          font-weight: 700;
+          letter-spacing: 0.08em;
+          margin-right: 8px;
+        }
+        .cap-instruction {
+          margin: 4px 0 0;
+          font-size: 0.9em;
+          opacity: 0.85;
+        }
+strong.sev {
           color: var(--color-orange);
           text-transform: uppercase;
         }
@@ -69,6 +95,10 @@ class TacticalDashboard extends HTMLElement {
       <section class="sk-card theme-red" id="blocks-card" hidden>
         <h2>Warnings On Your Waters</h2>
         <div class="console" id="blocks"></div>
+      </section>
+      <section class="sk-card theme-red" id="cap-card" hidden>
+        <h2>Official Alerts</h2>
+        <div id="cap-alerts"></div>
       </section>
       <synoptic-chart hidden></synoptic-chart>
     `;
@@ -190,6 +220,62 @@ class TacticalDashboard extends HTMLElement {
       return; // Not yet connected
     }
     this._renderTimeline();
+    this.renderCapAlerts();
+  }
+
+  /**
+   * Official Alerts (work doc #24): structured CAP warnings near the
+   * vessel or route — visually separate from the filtered METAREA
+   * text so the crew can tell authoritative machine-readable warnings
+   * from broadcast prose. Severity colours the event line; the
+   * instruction text is the crew's action.
+   *
+   * @param {object|null} payload
+   */
+  renderCapAlerts() {
+    const card = this.shadowRoot.getElementById("cap-card");
+    const list = this.shadowRoot.getElementById("cap-alerts");
+    if (!card || !list) {
+      return;
+    }
+    const alerts = this._payload?.capAlerts ?? [];
+    // The field rides every fresh payload when CAP is enabled; an old
+    // payload without it keeps the card hidden (channel not configured)
+    card.hidden = !Array.isArray(this._payload?.capAlerts);
+    list.innerHTML = "";
+    if (alerts.length === 0) {
+      // The channel is enabled and green: silence should be explicit
+      // — "checked, nothing active" — not an absent card the crew
+      // cannot tell from a dead feed
+      const none = document.createElement("div");
+      none.className = "none";
+      none.textContent = "No official alerts in effect for these waters";
+      list.appendChild(none);
+      return;
+    }
+    for (const alert of alerts) {
+      const el = document.createElement("div");
+      el.className = "cap-alert";
+      const severity = document.createElement("span");
+      severity.className =
+        alert.severity === "extreme" ? "cap-extreme" : "cap-severe";
+      severity.textContent = (alert.severity ?? "alert").toUpperCase();
+      const body = document.createElement("span");
+      body.textContent = [
+        alert.headline || alert.event || "Official alert",
+        alert.expires ? `expires ${fmtUtc(alert.expires)}` : null,
+      ]
+        .filter(Boolean)
+        .join(" — ");
+      el.append(severity, body);
+      list.appendChild(el);
+      if (alert.instruction) {
+        const instruction = document.createElement("div");
+        instruction.className = "cap-instruction";
+        instruction.textContent = alert.instruction;
+        list.appendChild(instruction);
+      }
+    }
   }
 
   /**

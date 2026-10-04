@@ -256,6 +256,28 @@ interface UnifiedWeatherPayload {
   trimmedFromNm?: number;       // when the plan trimmed to route progress (work doc #28):
                                 // the boat's distance along the original plan; the
                                 // payload's distances count from the boat
+  capAlerts?: {
+    id: string;                 // identifier + sent dedup key
+    identifier: string;         // CAP identifier
+    sent: string | null;        // ISO issue instant
+    msgType: string | null;     // 'Alert' | 'Update' | 'Cancel' | ...
+    senderName: string | null;
+    event: string | null;       // e.g. 'Tsunami Warning'
+    severity: string | null;    // 'extreme' | 'severe' | 'moderate' | 'minor'
+    urgency: string | null;
+    certainty: string | null;
+    effective: string | null;
+    expires: string | null;     // hard expiry — deterministic drop
+    headline: string | null;
+    description: string | null;
+    instruction: string | null;
+    web: string | null;
+    areaDesc: string | null;
+    geometry: {                 // native CAP geometry, mapped to the
+      type: 'polygon' | 'bbox'; // bulletin-engine types (circle → polygon)
+      coordinates: any;
+    };
+  }[];                          // CAP alerts near the vessel or route (work doc #24)
 }
 
 interface TimeStepForecast {

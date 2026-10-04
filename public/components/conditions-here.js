@@ -14,6 +14,7 @@
 
 import {
   fmtKn,
+  fmtUtc,
   hereEnergySummary,
   hereHourly,
   hereNow,
@@ -106,6 +107,13 @@ class ConditionsHere extends HTMLElement {
         }
         .refresh:disabled { opacity: 0.5; }
         .note { color: var(--color-grey); font-size: 0.85rem; margin: 4px 0 0; }
+        .noteworthy {
+          color: var(--color-orange);
+          font-family: var(--font-data, ui-monospace, monospace);
+          font-weight: 700;
+          letter-spacing: 0.08em;
+          margin-right: 8px;
+        }
       </style>
       <section class="sk-card theme-teal">
         <div class="card-head">
@@ -140,6 +148,10 @@ class ConditionsHere extends HTMLElement {
         <h3>Hazard events</h3>
         <div id="hazards"></div>
       </section>
+      <section class="sk-card" id="cap-card" hidden>
+        <h3>Official Alerts</h3>
+        <div id="cap-alerts"></div>
+      </section>
       <section class="sk-card" id="zones-card" hidden>
         <h3>Waters you are in</h3>
         <div id="zones"></div>
@@ -160,6 +172,8 @@ class ConditionsHere extends HTMLElement {
     this._eventsEl = this.shadowRoot.getElementById("events");
     this._hazardsCard = this.shadowRoot.getElementById("hazards-card");
     this._hazardsEl = this.shadowRoot.getElementById("hazards");
+    this._capCard = this.shadowRoot.getElementById("cap-card");
+    this._capEl = this.shadowRoot.getElementById("cap-alerts");
     this._zonesCard = this.shadowRoot.getElementById("zones-card");
     this._zonesEl = this.shadowRoot.getElementById("zones");
     this._refreshEl = this.shadowRoot.getElementById("refresh");
@@ -320,6 +334,42 @@ class ConditionsHere extends HTMLElement {
         .filter(Boolean)
         .join(" — ");
       this._hazardsEl.appendChild(el);
+    }
+
+    // CAP official alerts (work doc #24): authoritative structured
+    // warnings near the vessel — critical while stationary too, kept
+    // visually separate from the GDACS situational events above
+    const capAlerts = payload?.capAlerts ?? [];
+    this._capCard.hidden = !Array.isArray(payload?.capAlerts);
+    this._capEl.innerHTML = "";
+    if (capAlerts.length === 0) {
+      const none = document.createElement("div");
+      none.className = "none";
+      none.textContent = "No official alerts in effect for these waters";
+      this._capEl.appendChild(none);
+      return;
+    }
+    for (const alert of capAlerts) {
+      const el = document.createElement("div");
+      const severity = document.createElement("span");
+      severity.className =
+        alert.severity === "extreme" ? "severe" : "noteworthy";
+      severity.textContent = (alert.severity ?? "alert").toUpperCase();
+      const body = document.createElement("span");
+      body.textContent = [
+        alert.headline || alert.event || "Official alert",
+        alert.expires ? `expires ${fmtUtc(alert.expires)}` : null,
+      ]
+        .filter(Boolean)
+        .join(" — ");
+      el.append(severity, body);
+      this._capEl.appendChild(el);
+      if (alert.instruction) {
+        const instruction = document.createElement("div");
+        instruction.className = "note";
+        instruction.textContent = alert.instruction;
+        this._capEl.appendChild(instruction);
+      }
     }
 
     // Waters the vessel sits in (work doc #17): here mode reports the

@@ -303,6 +303,107 @@ async function publishHazardNotes({ store, events }) {
   return { published, pruned };
 }
 
+/**
+ * Builds one Signal K note for a CAP alert (work doc #24). The note
+ * schema is title/description/url/properties + a position — no
+ * feature field — so the native polygon rides schema-safely inside
+ * `properties.area` while the centroid places the note on the chart.
+ *
+ * @param {object} alert - Filtered CAP alert
+ * @returns {object|null} Note, null when the geometry cannot place it
+ */
+function buildCapAlertNote(alert) {
+  if (!alert?.geometry) {
+    return null;
+  }
+  const position = geometryPosition(alert.geometry);
+  if (!position) {
+    return null;
+  }
+  const headline = alert.headline || alert.event || "Official alert";
+  const title =
+    headline.length > 48 ? `${headline.slice(0, 48).trimEnd()}…` : headline;
+  const description = [
+    alert.description,
+    alert.instruction ? `INSTRUCTION: ${alert.instruction}` : null,
+    `Effective: ${alert.effective ?? alert.sent ?? "?"}`,
+    alert.expires ? `Expires: ${alert.expires}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const note = {
+    title,
+    description,
+    position,
+    ...(alert.web ? { url: alert.web } : {}),
+    properties: {
+      category: "cap-alert",
+      eventType: alert.event ?? null,
+      severity: alert.severity ?? null,
+      urgency: alert.urgency ?? null,
+      certainty: alert.certainty ?? null,
+      source: "cap",
+      sourcePlugin: "signalk-passage-briefing",
+      publishedBy: alert.senderName ?? "CAP",
+      publishedAt: alert.sent ?? null,
+      // The native CAP polygon: the note schema has no feature field,
+      // so the geometry rides the free-form properties (schema-safe,
+      // full precision — no centroid-only downgrade)
+      area: {
+        type: "Feature",
+        geometry: alert.geometry,
+        areaDesc: alert.areaDesc ?? null,
+      },
+    },
+    timestamp: alert.sent ?? null,
+  };
+  return note;
+}
+
+/**
+ * Publishes filtered CAP alerts as notes (work doc #24): ids are
+ * content-addressed on the CAP identifier+sent (repolls update in
+ * place), and the prune touches only `cap-` prefixed ids — the
+ * METAREA, hazard and other-client notes are untouched.
+ *
+ * @param {object} params
+ * @param {NotesStore} params.store
+ * @param {Array<object>} params.alerts - Filtered CAP alerts
+ * @returns {Promise<{published: string[], pruned: string[]}>}
+ */
+async function publishCapAlertNotes({ store, alerts }) {
+  if (!store) {
+    return { published: [], pruned: [] };
+  }
+  const published = [];
+  const kept = new Set();
+  for (const alert of alerts ?? []) {
+    if (!alert?.geometry) {
+      continue; // A note that cannot be placed is on the wrong spot
+    }
+    const id = `cap-${createHash("sha1")
+      .update(String(alert.identifier))
+      .digest("hex")
+      .slice(0, 12)}`;
+    const note = buildCapAlertNote(alert);
+    if (!note) {
+      continue;
+    }
+    await store.set(id, note);
+    kept.add(id);
+    published.push(id);
+  }
+  const all = await store.list();
+  const pruned = [];
+  for (const id of Object.keys(all)) {
+    if (id.startsWith("cap-") && !kept.has(id)) {
+      await store.delete(id);
+      pruned.push(id);
+    }
+  }
+  return { published, pruned };
+}
+
 module.exports = {
   noteTitle,
   geometryPosition,
@@ -312,4 +413,6 @@ module.exports = {
   clearNotes,
   buildHazardNote,
   publishHazardNotes,
+  buildCapAlertNote,
+  publishCapAlertNotes,
 };

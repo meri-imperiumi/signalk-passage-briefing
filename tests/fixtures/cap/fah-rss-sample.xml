@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:capcol="https://filtered-alert-hub.org/ns">
+  <channel>
+    <title>Latest Valid CAP alerts received, unfiltered</title>
+    <link>https://cap-alerts.s3.amazonaws.com/unfiltered/rss.xml</link>
+    <description>Latest valid CAP alerts</description>
+    <item>
+      <title>Test tsunami warning — Tonga waters</title>
+      <link>https://cap-alerts.s3.amazonaws.com/test-feed/cap-alert-1.xml</link>
+      <description>Tsunami warning test.</description>
+      <pubDate>2026-10-04T03:00:00Z</pubDate>
+      <capcol:alertId>alert-1</capcol:alertId>
+      <capcol:sourceFeed>test-feed</capcol:sourceFeed>
+    </item>
+    <item>
+      <title>Second alert — dense fog</title>
+      <link>https://cap-alerts.s3.amazonaws.com/test-feed/cap-alert-2.xml</link>
+      <description>Fog warning test.</description>
+      <pubDate>2026-10-04T02:00:00Z</pubDate>
+      <capcol:alertId>alert-2</capcol:alertId>
+    </item>
+  </channel>
+</rss>

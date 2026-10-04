@@ -64,9 +64,11 @@ const {
   clearNotes,
   publishNotes,
   publishHazardNotes,
+  publishCapAlertNotes,
 } = require("./notes-publisher.js");
 const hazardSource = require("./hazard-source.js");
 const maritimeZones = require("./maritime-zones-source.js");
+const capSource = require("./cap-source.js");
 const {
   adaptEnergyForecast,
   energyEventsFromState,
@@ -184,6 +186,9 @@ const DEFAULTS = {
   hazard_radius_offroute_nm: 500,
   hazard_radius_ahead_nm: 1000,
   hazard_max_age_hours: 72,
+  cap_enabled: true,
+  cap_urls: [capSource.CAP_DEFAULT_URL],
+  cap_min_severity: "Severe",
   departure_daylight_auto: true,
   departure_prep_hours: 1.5,
   departure_dawn_altitude_deg: -6,
@@ -227,6 +232,10 @@ module.exports = (app) => {
   let bulletinStations = DEFAULTS.bulletin_stations;
   /** GDACS hazard event config (work doc #22). */
   let hazardEventsEnabled = DEFAULTS.hazard_events_enabled;
+  /** CAP source config (work doc #24). */
+  let capEnabled = DEFAULTS.cap_enabled;
+  let capUrls = DEFAULTS.cap_urls;
+  let capMinSeverity = DEFAULTS.cap_min_severity;
   /** Departure anchor config (work doc #15). */
   let departureConfig = {
     daylightAuto: DEFAULTS.departure_daylight_auto,
@@ -890,6 +899,75 @@ module.exports = (app) => {
   }
 
   /**
+   * Refreshes the CAP feeds during the online window and attaches the
+   * track-filtered official alerts to a briefing payload (work doc
+   * #24), publishing the surviving placeable alerts as chart notes,
+   * and records one status row per feed (work doc #23). Degrades to
+   * the cached events on fetch failure.
+   *
+   * @param {object} payload - Briefing payload to attach to
+   * @param {Array<{lat: number, lon: number}>} waypoints - Route
+   *   samples or the position waypoint
+   * @returns {Promise<void>}
+   */
+  async function attachCapAlerts(payload, waypoints) {
+    if (!capEnabled || capUrls.length === 0) {
+      return;
+    }
+    let result = null;
+    let refreshError = null;
+    try {
+      result = await capSource.refreshCapAlerts({
+        dataDir: app.getDataDirPath(),
+        urls: capUrls,
+        timeoutMs: 15000,
+      });
+    } catch (error) {
+      refreshError = error;
+      app.debug?.(`CAP refresh failed: ${error.message}`);
+    }
+    // One status row per feed (work doc #23): success and failure
+    // alike, so the checklist can tell a moved URL from a dead host
+    for (const url of [...(result?.fetched ?? []), ...(result?.failed ?? [])]) {
+      const index = capUrls.indexOf(url);
+      if (index === -1) {
+        continue;
+      }
+      sourceStatus?.record({
+        id: `cap-feed-${index + 1}`,
+        label: `CAP feed ${index + 1}`,
+        kind: "bulletin",
+        url,
+        expectedRefreshMs: SOURCE_REFRESH_MS.bulletin,
+        ...(refreshError || (result?.failed ?? []).includes(url)
+          ? { error: refreshError ?? new Error("unavailable") }
+          : {}),
+        now: new Date(),
+      });
+    }
+    const events =
+      result?.events ?? (await capSource.loadCapAlerts(app.getDataDirPath()));
+    payload.capAlerts = capSource.filterCapAlerts({
+      events,
+      track: waypoints.map((w) => [w.lon, w.lat]),
+      minSeverity: capMinSeverity,
+      now: new Date(),
+    });
+    if (notesStore) {
+      const result = await publishCapAlertNotes({
+        store: notesStore,
+        alerts: payload.capAlerts,
+      });
+      if (result.published.length > 0 || result.pruned.length > 0) {
+        app.debug?.(
+          `CAP notes: ${result.published.length} published, ` +
+            `${result.pruned.length} expired`,
+        );
+      }
+    }
+  }
+
+  /**
    * Vessel position from the Signal K self path (work doc #7 here
    * mode). Both wrapped and plain value shapes are unwrapped.
    *
@@ -990,6 +1068,7 @@ module.exports = (app) => {
       observations[ENERGY_FORECAST_PATH],
     );
     attachEnergyToPayload(payload);
+    await attachCapAlerts(payload, waypoints);
     // Here mode reports the waters the vessel is in right now instead
     // of transitions (work doc #17); the disclaimer rides along and
     // everything caches together
@@ -1205,6 +1284,7 @@ module.exports = (app) => {
       observations[ENERGY_FORECAST_PATH],
     );
     attachEnergyToPayload(payload);
+    await attachCapAlerts(payload, waypoints);
     // The trim point, when the plan anchored to actual progress (work
     // doc #28): the payload's distances count from the boat, and this
     // says how far along the original plan that was
@@ -1844,6 +1924,35 @@ module.exports = (app) => {
             "(−6° = civil dawn).",
           default: DEFAULTS.departure_dawn_altitude_deg,
         },
+        cap_enabled: {
+          type: "boolean",
+          title: "CAP Official Alerts (structured warnings)",
+          description:
+            "Fetch OASIS CAP 1.2 feeds during the online window and " +
+            "surface alerts near the vessel or route as Official " +
+            "Alerts and chart notes. Tsunami warnings are the " +
+            "canonical use.",
+          default: DEFAULTS.cap_enabled,
+        },
+        cap_urls: {
+          type: "array",
+          title: "CAP Feed URLs",
+          description:
+            "Direct CAP documents (e.g. the tsunami.gov PHEBCAP feed) " +
+            "or RSS aggregations whose items link to CAP documents " +
+            "(Filtered Alert Hub per-country feeds).",
+          items: { type: "string" },
+          default: DEFAULTS.cap_urls,
+        },
+        cap_min_severity: {
+          type: "string",
+          title: "Minimum CAP Severity",
+          description:
+            "CAP's own severity vocabulary: Minor, Moderate, Severe, " +
+            "Extreme. Only alerts at or above this level surface.",
+          enum: ["Minor", "Moderate", "Severe", "Extreme"],
+          default: DEFAULTS.cap_min_severity,
+        },
         bulletin_urls: {
           type: "array",
           title: "High Seas Bulletin Sources (NAVAREA / HSF text)",
@@ -1914,6 +2023,11 @@ module.exports = (app) => {
         aheadRadiusNm: config.hazard_radius_ahead_nm,
         maxAgeHours: config.hazard_max_age_hours,
       };
+      capEnabled = config.cap_enabled !== false;
+      capUrls = Array.isArray(config.cap_urls)
+        ? config.cap_urls.filter((url) => typeof url === "string" && url)
+        : [];
+      capMinSeverity = config.cap_min_severity;
       departureConfig = {
         daylightAuto: config.departure_daylight_auto !== false,
         prepHours: config.departure_prep_hours,
