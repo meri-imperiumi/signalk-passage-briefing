@@ -2,6 +2,16 @@
 
 Offshore passage daily briefing webapp for Signal K: a plugin that plans and reviews passages for a cruising sailing vessel.
 
+## What it does
+
+- Simulates the passage hourly from the boat's actual position: speed from the vessel's polar, current added, ETA percentiles for the remaining route
+- Recommends sail changes hour by hour from what the crew actually did, learned from the electronic logbook
+- Rates every hour on the Sereno comfort scale and flags when light air in a residual swell will be worse than a gale
+- Renders one unified timeline: sail work, tacks and gybes, clock changes, territorial waters, official alerts, sky events and hazards in order
+- Fetches bulletins, official structured alerts, global disaster events and synoptic charts for the waters the route actually crosses
+- Keeps working offline: everything fetches in the online window and survives the other 23 hours from the cache
+- Shows a mini summary on the chart plotter and learns from every logbook entry the crew writes
+
 The plugin fetches weather along the planned route — from the server's Weather API when a provider answers, Open-Meteo otherwise; fetched online, or via a GRIB/text spool when offline offshore. It runs a step-forward isochrone simulation with a monohull comfort model, learns the crew's sail preferences from the electronic logbook, and serves a two-screen webapp: a 24-hour tactical dashboard and a strategic passage summary. See [SPEC.md](SPEC.md) for the full design.
 
 Part of the Lille Ø offshore suite, alongside [@meri-imperiumi/signalk-energy-predictor](https://github.com/meri-imperiumi/signalk-energy-predictator) and [@meri-imperiumi/signalk-logbook](https://github.com/meri-imperiumi/signalk-logbook).
