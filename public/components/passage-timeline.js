@@ -31,6 +31,7 @@ const GLYPHS = {
   line: "⌀",
   energy: "🔋",
   departure: "⚓",
+  time: "◷",
 };
 
 /**

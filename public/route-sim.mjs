@@ -36,6 +36,7 @@ import {
   travelDirection,
 } from "./sereno-physics.mjs";
 import { detectManeuvers } from "./tack-gybe.js";
+import tzLookup from "./vendor/tz-lookup/tz-lookup.mjs";
 
 /**
  * Simulation time step (hours).
@@ -148,6 +149,134 @@ export function destinationPoint(lat, lon, bearing, distNm) {
     lonDeg += 360;
   }
   return { lat: φ2 / DEG, lon: lonDeg };
+}
+
+/**
+ * UTC offset minutes of an IANA timezone at an instant (work doc
+ * #19): DST is whatever the platform's `Intl` database says for that
+ * instant — no dependency, no historical tables of our own.
+ *
+ * @param {string} timeZone - IANA name, e.g. `Pacific/Tongatapu`
+ * @param {Date} date - Instant the offset applies to
+ * @returns {number|null} Minutes east of UTC, null on bad input or a
+ *   platform without the `timeZoneName` support
+ */
+export function ianaOffsetMinutes(timeZone, date) {
+  if (!timeZone || !(date instanceof Date) || Number.isNaN(date.getTime())) {
+    return null;
+  }
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      timeZoneName: "longOffset",
+    }).formatToParts(date);
+    const name =
+      parts.find((part) => part.type === "timeZoneName")?.value ?? "";
+    if (name === "GMT") {
+      return 0;
+    }
+    const match = /^GMT([+-])(\d{1,2})(?::(\d{2}))?$/.exec(name);
+    if (!match) {
+      return null;
+    }
+    const minutes = Number(match[2]) * 60 + (match[3] ? Number(match[3]) : 0);
+    return match[1] === "-" ? -minutes : minutes;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Zone meridians (multiples of 15° of longitude) crossed between two
+ * positions (work doc #19). The longitudes are a simulated step
+ * apart, so the short-arc delta decides the direction; the
+ * antimeridian is the ±180 meridian and labels as `180°`.
+ *
+ * @param {number} fromLon - Degrees
+ * @param {number} toLon - Degrees
+ * @returns {Array<{meridianDeg: number, label: string, eastbound: boolean}>}
+ *   In crossing order
+ */
+export function meridianCrossings(fromLon, toLon) {
+  if (!Number.isFinite(fromLon) || !Number.isFinite(toLon)) {
+    return [];
+  }
+  let d = toLon - fromLon;
+  if (d > 180) {
+    d -= 360;
+  } else if (d <= -180) {
+    d += 360;
+  }
+  if (d === 0) {
+    return [];
+  }
+  const lo = Math.min(fromLon, fromLon + d);
+  const hi = Math.max(fromLon, fromLon + d);
+  const crossings = [];
+  for (let k = Math.floor(lo / 15) + 1; k <= Math.floor(hi / 15); k++) {
+    const m = k * 15;
+    const norm = ((((m + 180) % 360) + 360) % 360) - 180; // [-180, 180)
+    const label =
+      norm === -180
+        ? "180°"
+        : norm === 0
+          ? "0°"
+          : norm > 0
+            ? `${norm}°E`
+            : `${-norm}°W`;
+    crossings.push({ meridianDeg: norm, label, eastbound: d > 0 });
+  }
+  return crossings;
+}
+
+/**
+ * Territorial-waters stints along the route (work doc #19): the
+ * plugin's enter/leave transitions folded into distance intervals
+ * where territorial rules (and their timezones) apply. Stints opened
+ * without a matching leave run to the end of the route.
+ *
+ * @param {Array<{kind: string, distanceFromStartNm: number,
+ *   territory: object}>} transitions - Plugin-detected transitions
+ * @returns {Array<{start: number, end: number}>}
+ */
+function territorialStints(transitions) {
+  const stints = [];
+  const open = new Map();
+  const sorted = (transitions ?? [])
+    .filter((transition) => Number.isFinite(transition?.distanceFromStartNm))
+    .sort((a, b) => a.distanceFromStartNm - b.distanceFromStartNm);
+  for (const transition of sorted) {
+    const iso = transition.territory?.iso_ter ?? transition.territory?.name;
+    if (transition.kind === "enter") {
+      if (!open.has(iso)) {
+        open.set(iso, transition.distanceFromStartNm);
+      }
+    } else if (open.has(iso)) {
+      stints.push({
+        start: open.get(iso),
+        end: transition.distanceFromStartNm,
+      });
+      open.delete(iso);
+    }
+  }
+  for (const start of open.values()) {
+    stints.push({ start, end: Infinity });
+  }
+  return stints;
+}
+
+/**
+ * Whether a route distance sits inside any territorial stint.
+ *
+ * @param {Array<{start: number, end: number}>} stints
+ * @param {number} distanceFromStartNm
+ * @returns {boolean}
+ */
+function insideTerritorialWaters(stints, distanceFromStartNm) {
+  return stints.some(
+    (stint) =>
+      distanceFromStartNm >= stint.start && distanceFromStartNm < stint.end,
+  );
 }
 
 /**
@@ -692,14 +821,20 @@ export function simulateRun({
   let hours = 0;
   let motoringHours = 0;
   let fuelLiters = 0;
+  // Territorial-waters stints (work doc #19): where the plugin's
+  // boundary walk has the boat under a local timezone — meridian
+  // crossing advisories stay offshore-only
+  const territoryStints = territorialStints(payload?.zoneTransitions ?? []);
 
   const hourly = [];
   const sailEvents = [];
   const positions = [];
   const seaStateAnomalies = [];
   const upperAirAnomalies = [];
+  const timeEvents = [];
   let arrivedHours = null;
   let distanceMadeGoodNm = 0;
+  let prevLon = pos.lon;
 
   while (hours < maxHours && arrivedHours == null) {
     const target = track[targetIndex];
@@ -901,6 +1036,26 @@ export function simulateRun({
     if (nextRemaining < 1) {
       targetIndex = Math.min(targetIndex + 1, track.length - 1);
     }
+    // Zone meridian crossings (work doc #19): offshore the solar clock
+    // drifts 1 h per 15° of longitude. Each crossing becomes an
+    // advisory — what the crew does with the clock is the master's
+    // discretion. Inside territorial waters the local zone governs
+    // instead, so no advisory fires there.
+    const crossings = insideTerritorialWaters(
+      territoryStints,
+      distanceMadeGoodNm,
+    )
+      ? []
+      : meridianCrossings(prevLon, pos.lon);
+    for (const crossing of crossings) {
+      timeEvents.push({
+        hoursFromNow: Math.round(hours * 10) / 10,
+        timestamp: t.toISOString(),
+        meridian: crossing.label,
+        eastbound: crossing.eastbound,
+      });
+    }
+    prevLon = pos.lon;
     positions.push({
       hoursFromNow: Math.round(hours * 10) / 10,
       timestamp: t.toISOString(),
@@ -923,6 +1078,7 @@ export function simulateRun({
     positions,
     seaStateAnomalies,
     upperAirAnomalies,
+    timeEvents,
     hazardAlerts: hazardAlerts(notes, positions),
   };
 }
@@ -1051,6 +1207,35 @@ function timestampZoneTransitions(transitions, rows) {
 }
 
 /**
+ * Attaches the IANA timezone at a transition's crossing point plus
+ * its UTC offset at the crossing instant (work doc #19): the timeline
+ * compares that offset with the vessel's current zone to decide
+ * whether the event says "time zone UTC+13". The lookup runs once per
+ * transition, not per position; undated crossings carry the zone but
+ * no offset. Lookup failures degrade to no annotation — never a
+ * failed briefing.
+ *
+ * @param {object} transition - Dated zone transition with `lat`, `lon`
+ * @returns {object} Same transition with `zoneIana` and
+ *   `zoneOffsetMinutes` (either null when unknown)
+ */
+function annotateZoneTimezone(transition) {
+  if (!Number.isFinite(transition?.lat) || !Number.isFinite(transition?.lon)) {
+    return transition;
+  }
+  let zoneIana = null;
+  try {
+    zoneIana = tzLookup(transition.lat, transition.lon);
+  } catch {
+    return transition;
+  }
+  const zoneOffsetMinutes = transition.timestamp
+    ? ianaOffsetMinutes(zoneIana, new Date(transition.timestamp))
+    : null;
+  return { ...transition, zoneIana, zoneOffsetMinutes };
+}
+
+/**
  * Full passage simulation: the nominal run plus wind-perturbed runs
  * for the ETA percentiles, assembled into the shape the webapp's
  * `filterExceptions` consumes (SPEC §6.2).
@@ -1128,7 +1313,10 @@ export function simulatePassage({
   const zoneTransitions = timestampZoneTransitions(
     payload?.zoneTransitions ?? [],
     nominal.hourly ?? [],
-  );
+  ).map(annotateZoneTimezone);
+
+  // Zone meridian advisories from the nominal track (work doc #19)
+  const timeZoneChanges = nominal.timeEvents ?? [];
 
   const etas = runs.map((run) => run.etaHours).sort((a, b) => a - b);
   const pctHours = (p) =>
@@ -1209,8 +1397,13 @@ export function simulatePassage({
       .sort((x, y) => x.hoursFromNow - y.hoursFromNow),
     // Territorial waters transitions with their place in the passage
     // schedule (work doc #17); undated when the crossing lies beyond
-    // the simulated horizon
+    // the simulated horizon. Each carries the IANA zone at the
+    // crossing point and its offset at the crossing instant (work
+    // doc #19) so the timeline can flag a clock change.
     zoneTransitions,
+    // Offshore zone meridian crossings, solar-clock advisories
+    // (work doc #19)
+    timeZoneChanges,
     // The assumed departure the schedule anchors to (work doc #15)
     departure,
     hazardAlerts: nominal.hazardAlerts,
@@ -1258,8 +1451,10 @@ export function filterExceptions(simulationResult) {
       // Ceremonial line crossings (work doc #1)
       linesOfInterest: simulationResult.linesOfInterest ?? [],
       // Territorial waters transitions with their simulated schedule
-      // (work doc #17)
+      // (work doc #17), timezone-annotated (work doc #19)
       zoneTransitions: simulationResult.zoneTransitions ?? [],
+      // Offshore zone meridian crossing advisories (work doc #19)
+      timeZoneChanges: simulationResult.timeZoneChanges ?? [],
       // The assumed departure the schedule anchors to (work doc #15)
       departure: simulationResult.departure ?? null,
       // The simulated track, compact: the timeline's night indicators

@@ -707,8 +707,9 @@ function episodeDetail(episode, parts) {
  * to one chronological shape — `{hoursFromNow, timestamp, stamp,
  * kind, severity, label, detail}` — sorted by time, undated last.
  * Kinds: `sail`, `maneuver`, `convective`, `sea`, `zone`, `space`,
- * `hazard`; new event sources become new kinds instead of new blocks
- * (work doc #1's lines of interest will ride in as `line`).
+ * `hazard`, `time`; new event sources become new kinds instead of
+ * new blocks (work doc #1's lines of interest will ride in as
+ * `line`).
  * Severities: `info`, `warn`, `severe` — the renderer's colour
  * scale. The tactical dashboard renders the 24 h slice of this list,
  * the strategic outlook the whole passage.
@@ -724,7 +725,7 @@ function episodeDetail(episode, parts) {
  * @param {object|null} exceptions - Worker exception view
  * @param {object|null} payload - Briefing payload
  *   (UnifiedWeatherPayload; optional `spaceEvents`,
- *   `zoneTransitions`, `celestialNights`)
+ *   `zoneTransitions`, `celestialNights`, `timeZoneChanges`)
  * @returns {Array<{hoursFromNow: number|null, timestamp: string|null, stamp: string, kind: string, severity: string, label: string, detail: string, night: boolean, moon: string|null}>}
  */
 /**
@@ -1105,6 +1106,9 @@ export function mergeTimeline(exceptions, payload = null) {
   // (summary), falling back to the payload's undated transitions;
   // the timeline kind is always `zone`. Leaving territorial waters
   // carries the connectivity note — the metered-ocean boundary.
+  // When the crossing lands in another timezone than the vessel's
+  // current one, the event says so (work doc #19) — exactly the
+  // moment a crew sets watches and re-plans arrival in local time.
   for (const z of summary.zoneTransitions ?? payload?.zoneTransitions ?? []) {
     const territory = z.territory?.name ?? "?";
     push({
@@ -1120,9 +1124,29 @@ export function mergeTimeline(exceptions, payload = null) {
         z.distanceFromStartNm != null
           ? `${Math.round(z.distanceFromStartNm)} nm from departure`
           : null,
+        z.zoneOffsetMinutes != null &&
+        (shipTime == null || z.zoneOffsetMinutes !== shipTime.offsetMinutes)
+          ? `time zone ${offsetLabel(z.zoneOffsetMinutes)}`
+          : null,
       ]
         .filter(Boolean)
         .join(" · "),
+    });
+  }
+
+  // Zone meridian crossings offshore (work doc #19): solar time
+  // drifts 1 h per 15° of longitude, so watch schedules quietly
+  // desynchronize from the sun unless the clock follows. The event
+  // advises; what the crew does with the clock is the master's
+  // discretion.
+  for (const c of summary.timeZoneChanges ?? payload?.timeZoneChanges ?? []) {
+    push({
+      hoursFromNow: c.hoursFromNow ?? relHours(c.timestamp, fetchMs),
+      timestamp: c.timestamp ?? null,
+      kind: "time",
+      severity: "info",
+      label: `Crossing ${c.meridian ?? "a zone meridian"}`,
+      detail: `solar time 1 h ${c.eastbound ? "ahead" : "behind"} — clock change due`,
     });
   }
 

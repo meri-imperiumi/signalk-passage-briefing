@@ -732,6 +732,99 @@ test("webapp view models", async (t) => {
     },
   );
 
+  await t.test(
+    "mergeTimeline flags a zone change at a crossing (doc #19)",
+    () => {
+      // The vessel sits on Fiji time (UTC+12); entering Tonga's waters
+      // is a clock change — the event says so
+      setShipTime({ offsetMinutes: 720, region: "Pacific/Fiji" });
+      try {
+        const timeline = mergeTimeline({
+          passageSummary: {
+            zoneTransitions: [
+              {
+                kind: "enter",
+                territory: { name: "Tonga", iso_ter: "TON" },
+                hoursFromNow: 40.2,
+                timestamp: "2026-06-22T22:12:00.000Z",
+                distanceFromStartNm: 240.5,
+                zoneIana: "Pacific/Tongatapu",
+                zoneOffsetMinutes: 780,
+              },
+            ],
+          },
+        });
+        assert.equal(timeline.length, 1);
+        assert.equal(timeline[0].kind, "zone");
+        assert.match(timeline[0].detail, /time zone \+13/);
+
+        // Same zone as the vessel's: the plain event stands
+        const same = mergeTimeline({
+          passageSummary: {
+            zoneTransitions: [
+              {
+                kind: "enter",
+                territory: { name: "Fiji", iso_ter: "FJI" },
+                hoursFromNow: 2,
+                timestamp: "2026-06-21T08:00:00.000Z",
+                distanceFromStartNm: 12,
+                zoneIana: "Pacific/Fiji",
+                zoneOffsetMinutes: 720,
+              },
+            ],
+          },
+        });
+        assert.equal(same.length, 1);
+        assert.doesNotMatch(same[0].detail, /time zone/);
+
+        // No vessel zone published: the line still informs
+        setShipTime(null);
+        assert.match(timeline[0].detail, /time zone \+13/);
+      } finally {
+        setShipTime(null);
+      }
+    },
+  );
+
+  await t.test(
+    "mergeTimeline maps meridian crossing advisories (doc #19)",
+    () => {
+      const timeline = mergeTimeline({
+        passageSummary: {
+          timeZoneChanges: [
+            {
+              hoursFromNow: 30.4,
+              timestamp: "2026-06-22T12:24:00.000Z",
+              meridian: "165°E",
+              eastbound: true,
+            },
+            {
+              hoursFromNow: 54,
+              timestamp: "2026-06-23T12:00:00.000Z",
+              meridian: "180°",
+              eastbound: false,
+            },
+          ],
+        },
+      });
+      assert.deepEqual(
+        timeline.map((item) => [item.kind, item.severity, item.label]),
+        [
+          ["time", "info", "Crossing 165°E"],
+          ["time", "info", "Crossing 180°"],
+        ],
+      );
+      assert.equal(
+        timeline[0].detail,
+        "solar time 1 h ahead — clock change due",
+      );
+      assert.equal(
+        timeline[1].detail,
+        "solar time 1 h behind — clock change due",
+      );
+    },
+  );
+
   await t.test("every dated timeline item carries a night indicator", () => {
     // Sun truth at (-21, -175.2): 2026-10-04T09:00Z sits at solar
     // altitude -45° (deep night), 2026-10-04T01:00Z at +62° (day).
