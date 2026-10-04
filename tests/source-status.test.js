@@ -223,7 +223,7 @@ describe("source status checklist verdicts (work doc #23)", () => {
       expectedRefreshMs: 12 * 3600000,
       ...over,
     });
-    assert.deepEqual(statusVerdict(entry()), {
+    assert.deepEqual(statusVerdict(entry(), NOW), {
       bracket: "[ OK ]",
       theme: "theme-green",
       stale: false,
