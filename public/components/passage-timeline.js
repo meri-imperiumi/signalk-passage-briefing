@@ -71,6 +71,16 @@ class PassageTimeline extends HTMLElement {
         .sev-severe .glyph, .sev-severe .label { color: var(--color-red); }
         .sev-info .glyph { color: var(--color-teal); }
         .none { color: var(--text-muted); font-size: 0.85rem; }
+        /* Phone: the when gutter is too wide and squeezes the event
+         * text, so the date line goes on top at full width and the
+         * event data flows beneath it. Matches the 700px layout
+         * breakpoint used across the app. */
+        @media (max-width: 699px) {
+          .entry { grid-template-columns: auto 1fr; }
+          .when { grid-area: 1 / 1 / 2 / 3; }
+          .glyph { grid-area: 2 / 1 / 3 / 2; }
+          .body { grid-area: 2 / 2 / 3 / 3; }
+        }
       </style>
       <div id="list"></div>
     `;
@@ -117,6 +127,7 @@ class PassageTimeline extends HTMLElement {
       glyph.title = item.kind ?? "";
 
       const body = document.createElement("span");
+      body.className = "body";
       const label = document.createElement("span");
       label.className = "label";
       label.textContent = item.label ?? "?";
