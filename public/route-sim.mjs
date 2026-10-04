@@ -29,7 +29,10 @@ import {
   polarSpeedKnots,
 } from "./polar.mjs";
 import {
+  apparentWindSpeedKnots,
   isNight,
+  noSailsRegime,
+  SAILS_MAX_AWS_KNOTS,
   serenoComfort,
   steepnessRatio,
   suggestSailState,
@@ -227,6 +230,34 @@ export function meridianCrossings(fromLon, toLon) {
     crossings.push({ meridianDeg: norm, label, eastbound: d > 0 });
   }
   return crossings;
+}
+
+/**
+ * Propulsion of a canvas-down step (work doc #26): nobody motors into
+ * a storm, and drift mode idles a genuinely becalmed boat on the
+ * current alone; otherwise the engine drives. Shared by the speed
+ * decision and the sail-change events, so the event describes the rig
+ * it announces with the same rule the rows will live by. The "adrift"
+ * here is neutral physics — no propulsion means the water moves the
+ * boat — not a tactic: which storm tactic the crew rides out with is
+ * work doc #27's decision, not the simulator's.
+ *
+ * @param {number|null} twsKnots - True wind speed of the step
+ * @param {object} cfg - Simulation config (drift_mode_enabled,
+ *   motoring_tws_threshold)
+ * @returns {"adrift"|"motor"}
+ */
+function canvasDownPropulsion(twsKnots, cfg) {
+  if (twsKnots != null && twsKnots >= SAILS_MAX_AWS_KNOTS) {
+    return "adrift";
+  }
+  if (
+    cfg.drift_mode_enabled &&
+    (twsKnots == null || twsKnots < cfg.motoring_tws_threshold)
+  ) {
+    return "adrift";
+  }
+  return "motor";
 }
 
 /**
@@ -847,11 +878,29 @@ export function simulateRun({
         ? normalizeAngle(weather.surface.twd * DEG - heading)
         : 0;
 
-    // Speed choice (SPEC §5.1 decision tree)
+    // Speed choice (SPEC §5.1 decision tree). The plan's rig gates
+    // the drive (work doc #5 session feedback, refined by work doc
+    // #26): with canvas down the polars do not apply — the engine
+    // pushes (counting motor hours and fuel), except in the two
+    // canvas-off regimes: a storm lies ahull, and drift mode idles a
+    // genuinely becalmed boat on the current alone.
+    const canvasDown = sailState === "NO_SAILS";
     let stw = 0;
     let fuelRate = 0;
     let motoring = false;
-    if (tws != null && tws >= cfg.motoring_tws_threshold) {
+    if (canvasDown) {
+      // Rig down: apparent wind ≈ true wind, the canvas-off regimes
+      // read straight off TWS — one rule drives both the rows and the
+      // sail-change events. No drive is modeled in a storm: which
+      // tactic the crew rides out with is theirs (work doc #27).
+      if (canvasDownPropulsion(tws, cfg) === "adrift") {
+        stw = 0; // No propulsion: the current moves the boat, nothing else
+      } else {
+        stw = MOTOR_SPEED_KNOTS;
+        fuelRate = cfg.motor_fuel_l_per_hour ?? MOTOR_FUEL_L_PER_HOUR;
+        motoring = true;
+      }
+    } else if (tws != null && tws >= cfg.motoring_tws_threshold) {
       stw = polarSpeedKnots(polar ?? DEFAULT_POLAR_TABLE, tws, twaRad, {
         performanceFactor: pf,
       });
@@ -923,12 +972,10 @@ export function simulateRun({
     // event carries the step's propulsion mode so "no sails" reads as
     // drifting or motoring instead of bare-pole sailing.
     const night = isNight(t, pos.lat, pos.lon);
-    const propulsion =
-      tws != null && tws >= cfg.motoring_tws_threshold
-        ? "sailing"
-        : cfg.drift_mode_enabled
-          ? "adrift"
-          : "motor";
+    // What actually propelled the step (work doc #5 session
+    // feedback): the engine when it runs, the current when the mode
+    // idles the boat — never "sailing" while the plan's rig is down
+    const propulsion = motoring ? "motor" : stw > 0 ? "sailing" : "adrift";
     if (matrix) {
       const suggested = suggestSailState(
         matrix,
@@ -937,7 +984,27 @@ export function simulateRun({
         night,
       );
       const suggestedState = suggested?.preferredSailState ?? null;
-      if (suggestedState != null && suggestedState !== sailState) {
+      // Canvas-off guard (work doc #26): a NO_SAILS suggestion is a
+      // two-regime decision — apparent wind below the fill floor
+      // (slatting) or at the survival top. The boat still carries
+      // canvas here, so the apparent wind is the real one. A learned
+      // cell saying NO_SAILS mid-scale is a propulsion decision the
+      // plan must not hold; the rig persists.
+      const noSailsJustified =
+        suggestedState !== "NO_SAILS" ||
+        (tws != null &&
+          noSailsRegime({
+            awsKnots: apparentWindSpeedKnots({
+              twsKnots: tws,
+              stwKnots: stw,
+              twaRad,
+            }),
+          }) != null);
+      if (
+        suggestedState != null &&
+        suggestedState !== sailState &&
+        noSailsJustified
+      ) {
         if (
           sailState == null ||
           (suggestedState === pendingSailState &&
@@ -946,6 +1013,11 @@ export function simulateRun({
           // First rig of the passage, or the suggestion held through a
           // full step: a real change. The prior state rides along so
           // twilight anchoring can restore the plan's pre-change rig.
+          // The event's propulsion describes the rig it announces
+          // (same rule the rows will live by), and a canvas-off
+          // regime rides along so the timeline can name the decision
+          // it calls for: storm tactics are the crew's call, not the
+          // simulator's (work doc #27).
           const previousSailState = sailState;
           sailState = suggestedState;
           sailEvents.push({
@@ -954,7 +1026,14 @@ export function simulateRun({
             sailState,
             previousSailState: previousSailState ?? null,
             night,
-            propulsion,
+            propulsion:
+              sailState === "NO_SAILS"
+                ? canvasDownPropulsion(tws, cfg)
+                : propulsion,
+            canvasOffRegime:
+              sailState === "NO_SAILS" && tws != null
+                ? noSailsRegime({ awsKnots: tws })
+                : null,
           });
           pendingSailState = null;
         } else if (suggestedState !== pendingSailState) {
@@ -1390,6 +1469,7 @@ export function simulatePassage({
                 hsMeters: row.hsMeters ?? null,
                 tpSeconds: row.tpSeconds ?? null,
                 comfortLevel: row.comfortLevel ?? null,
+                slatting: Boolean(row.slatting),
               },
             }
           : event;

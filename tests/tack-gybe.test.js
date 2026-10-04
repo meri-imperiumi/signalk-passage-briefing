@@ -132,6 +132,18 @@ describe("tack & gybe detection", () => {
     assert.equal(events.length, 0);
   });
 
+  test("canvas-down hours are excluded", async () => {
+    const { detectManeuvers } = await tgPromise;
+    // NO_SAILS rows making way (motor-carried current-assisted) are
+    // course changes under power, not maneuvers
+    const events = detectManeuvers([
+      row({ headingDeg: 30, twdDeg: 60 }),
+      row({ headingDeg: 90, twdDeg: 60, sailState: "NO_SAILS" }),
+      row({ headingDeg: 150, twdDeg: 60 }),
+    ]);
+    assert.equal(events.length, 0);
+  });
+
   test("wobble below the 25° margin is rejected", async () => {
     const { detectManeuvers, MIN_TWA_MARGIN_DEG } = await tgPromise;
     assert.equal(MIN_TWA_MARGIN_DEG, 25);

@@ -84,6 +84,23 @@ class ComfortInfo extends HTMLElement {
       row.appendChild(band);
       this._pop.appendChild(row);
     }
+    const slatting = document.createElement("div");
+    slatting.className = "row";
+    const slattingName = document.createElement("span");
+    slattingName.className = "name";
+    slattingName.textContent = "SLATTING";
+    const slattingText = document.createElement("span");
+    slattingText.textContent =
+      " — Light air over a residual swell: the sails slat and bang, " +
+      "snap-rolling the boat.";
+    slatting.appendChild(slattingName);
+    slatting.appendChild(slattingText);
+    const slattingBand = document.createElement("span");
+    slattingBand.className = "band";
+    slattingBand.textContent =
+      "wind < 7–12 kn by point of sail · swell ≥ 0.6 m";
+    slatting.appendChild(slattingBand);
+    this._pop.appendChild(slatting);
   }
 }
 

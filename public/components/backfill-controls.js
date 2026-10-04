@@ -83,6 +83,9 @@ class BackfillControls extends HTMLElement {
       this._out.textContent =
         `Learned ${summary.learned} of ${summary.total} sail changes` +
         (skipped > 0 ? ` (skipped ${skipped})` : "") +
+        (summary.skippedNoSails > 0
+          ? `, ${summary.skippedNoSails} bare-poles entries kept out of the matrix`
+          : "") +
         `, ${summary.cells.length} matrix cells`;
     } catch (error) {
       this._out.classList.add("err");

@@ -366,6 +366,53 @@ export function rateApparentWind(awsKnots) {
 }
 
 /**
+ * Apparent wind speed (knots) below which canvas will not set or hold
+ * its shape: the light-air floor of the no-sails regime (work doc
+ * #26). Below it the sails slat and bang — the rig comes off and the
+ * engine drives. Mirrors the upwind slatting gate's 7 kt (work doc
+ * #14) in apparent rather than true wind: the boat's own speed moves
+ * the apparent wind, and motoring into light air is exactly when the
+ * canvas would slat.
+ */
+export const SAILS_FILL_MIN_AWS_KNOTS = 7;
+
+/**
+ * Apparent wind speed (knots) at or above which the rig comes off for
+ * wind (work doc #26): the survival regime — nothing set, the boat
+ * lies ahull; nobody motors into it. Deliberately well above the top
+ * of the Sereno AWS bands (33 kt): that band line marks seasickness
+ * likelihood, not the rig decision — a well-found boat keeps working
+ * canvas standing well into the forties. The floor sits around
+ * Beaufort 9, where crews go to storm canvas or bare poles.
+ */
+export const SAILS_MAX_AWS_KNOTS = 45;
+
+/**
+ * Which of the two canvas-off regimes (work doc #26) the apparent
+ * wind sits in: `"slatting"` below the fill floor, `"survival"` at or
+ * above the scale top, null when the wind carries canvas. Mid-scale
+ * apparent wind is sail-carrying weather: a `NO_SAILS` rig there is a
+ * propulsion decision (motoring) or a non-passage state — not
+ * something the plan should hold.
+ *
+ * @param {object} params
+ * @param {number} params.awsKnots - Apparent wind speed
+ * @returns {"slatting"|"survival"|null}
+ */
+export function noSailsRegime({ awsKnots }) {
+  if (!Number.isFinite(awsKnots)) {
+    return null;
+  }
+  if (awsKnots < SAILS_FILL_MIN_AWS_KNOTS) {
+    return "slatting";
+  }
+  if (awsKnots >= SAILS_MAX_AWS_KNOTS) {
+    return "survival";
+  }
+  return null;
+}
+
+/**
  * Rates an RMS vertical acceleration on the Sereno scale (SPEC §5.2
  * vector 2 bands, ISO 2631-1).
  *

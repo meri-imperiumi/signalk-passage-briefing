@@ -1000,3 +1000,308 @@ describe("energy consumption (work doc #10)", () => {
     assert.ok(exceptions.next24h.solarYieldKwh > 0);
   });
 });
+
+describe("zone meridian crossings (work doc #19)", () => {
+  test("meridianCrossings: eastbound and westbound across 165°E", async () => {
+    const { meridianCrossings } = await simPromise;
+    assert.deepEqual(meridianCrossings(160, 170), [
+      { meridianDeg: 165, label: "165°E", eastbound: true },
+    ]);
+    assert.deepEqual(meridianCrossings(170, 160), [
+      { meridianDeg: 165, label: "165°E", eastbound: false },
+    ]);
+  });
+
+  test("meridianCrossings: the antimeridian reads 180° either way", async () => {
+    const { meridianCrossings } = await simPromise;
+    assert.deepEqual(meridianCrossings(179, -179), [
+      { meridianDeg: -180, label: "180°", eastbound: true },
+    ]);
+    assert.deepEqual(meridianCrossings(-179, 179), [
+      { meridianDeg: -180, label: "180°", eastbound: false },
+    ]);
+  });
+
+  test("meridianCrossings: no crossing on a constant-longitude leg", async () => {
+    const { meridianCrossings } = await simPromise;
+    assert.deepEqual(meridianCrossings(170, 170), []);
+    assert.deepEqual(meridianCrossings(170, 171), []);
+    assert.deepEqual(meridianCrossings(null, 170), []);
+  });
+
+  test("meridianCrossings: a long step may cross several meridians", async () => {
+    const { meridianCrossings } = await simPromise;
+    const crossings = meridianCrossings(160, 195);
+    assert.deepEqual(
+      crossings.map((c) => c.label),
+      ["165°E", "180°", "165°W"],
+    );
+  });
+
+  test("offshore crossings become solar-clock advisories", async () => {
+    const { simulateRun } = await simPromise;
+    // Eastbound across 165°E: 10° of longitude at the equator
+    const run = simulateRun({
+      payload: buildPayload({
+        route: [
+          [160, 0],
+          [170, 0],
+        ],
+      }),
+      startTime: new Date("2026-06-21T06:00:00Z"),
+      config: {},
+    });
+    assert.equal(run.timeEvents.length, 1, JSON.stringify(run.timeEvents));
+    assert.equal(run.timeEvents[0].meridian, "165°E");
+    assert.equal(run.timeEvents[0].eastbound, true);
+    assert.ok(Number.isFinite(run.timeEvents[0].hoursFromNow));
+    assert.ok(run.timeEvents[0].timestamp);
+  });
+
+  test("no advisories when the leg crosses no meridian", async () => {
+    const { simulateRun } = await simPromise;
+    const run = simulateRun({
+      payload: buildPayload(),
+      startTime: new Date("2026-06-21T06:00:00Z"),
+      config: {},
+    });
+    assert.deepEqual(run.timeEvents, []);
+  });
+
+  test("territorial waters suppress the offshore advisories", async () => {
+    const { simulateRun } = await simPromise;
+    const payload = buildPayload({
+      route: [
+        [0, 160],
+        [0, 170],
+      ],
+    });
+    // The whole route runs inside one territory: the local zone
+    // governs, the meridian rule stays quiet
+    payload.zoneTransitions = [
+      {
+        kind: "enter",
+        territory: { name: "Test", iso_ter: "TST" },
+        lat: 0,
+        lon: 160,
+        distanceFromStartNm: 0,
+      },
+      {
+        kind: "leave",
+        territory: { name: "Test", iso_ter: "TST" },
+        lat: 0,
+        lon: 170,
+        distanceFromStartNm: 600,
+      },
+    ];
+    const run = simulateRun({
+      payload,
+      startTime: new Date("2026-06-21T06:00:00Z"),
+      config: {},
+    });
+    assert.deepEqual(run.timeEvents, []);
+  });
+
+  test("ianaOffsetMinutes reads the platform's zone database", async () => {
+    const { ianaOffsetMinutes } = await simPromise;
+    const instant = new Date("2026-06-21T06:00:00Z");
+    // Tonga runs UTC+13, Fiji UTC+12 (southern winter: no DST)
+    assert.equal(ianaOffsetMinutes("Pacific/Tongatapu", instant), 780);
+    assert.equal(ianaOffsetMinutes("Pacific/Fiji", instant), 720);
+    assert.equal(ianaOffsetMinutes("Europe/Helsinki", instant), 180);
+    // Half-hour zones
+    assert.equal(ianaOffsetMinutes("Asia/Kolkata", instant), 330);
+    assert.equal(ianaOffsetMinutes("UTC", instant), 0);
+    // Bad input degrades to null
+    assert.equal(ianaOffsetMinutes("Mars/Olympus", instant), null);
+    assert.equal(ianaOffsetMinutes("Pacific/Fiji", "not-a-date"), null);
+    assert.equal(ianaOffsetMinutes(null, instant), null);
+  });
+
+  test("simulatePassage annotates zone transitions and carries advisories", async () => {
+    const { simulatePassage, filterExceptions } = await simPromise;
+    const payload = buildPayload({
+      route: [
+        [160, 0],
+        [170, 0],
+      ],
+    });
+    // A short territorial stint early in the route: the boundary
+    // crossing is dated by the simulation against the hourly rows,
+    // then timezone-annotated; the 165°E crossing happens offshore
+    // beyond it
+    payload.zoneTransitions = [
+      {
+        kind: "enter",
+        territory: { name: "Tonga", iso_ter: "TON" },
+        lat: -21.1,
+        lon: -175.2,
+        distanceFromStartNm: 90,
+      },
+      {
+        kind: "leave",
+        territory: { name: "Tonga", iso_ter: "TON" },
+        lat: 0,
+        lon: 161.5,
+        distanceFromStartNm: 100,
+      },
+    ];
+    const result = simulatePassage({
+      payload,
+      startTime: new Date("2026-06-21T06:00:00Z"),
+    });
+    const annotated = result.zoneTransitions[0];
+    assert.equal(annotated.zoneIana, "Pacific/Tongatapu");
+    assert.equal(annotated.zoneOffsetMinutes, 780);
+    assert.ok(annotated.timestamp, "dated by the simulation");
+    // The offshore crossing rides the summary too
+    assert.equal(result.timeZoneChanges.length, 1);
+    assert.equal(result.timeZoneChanges[0].meridian, "165°E");
+
+    const exceptions = filterExceptions(result);
+    assert.equal(exceptions.passageSummary.timeZoneChanges.length, 1);
+    assert.equal(
+      exceptions.passageSummary.zoneTransitions[0].zoneIana,
+      "Pacific/Tongatapu",
+    );
+  });
+});
+
+describe("canvas-down drive (work docs #5/#26)", () => {
+  // A learned plan that keeps the canvas down; cells across the TWS
+  // bins the regime tests touch (2 kn becalmed, 10 kn mid-scale,
+  // 45 kn survival), both day and night buckets
+  const NO_SAILS_MATRIX = {
+    twsBinsKnots: [0, 5, 10, 15, 20, 25, 30, 35, 40],
+    twaBinsDegrees: [0, 30, 60, 90, 120, 150, 180],
+    matrix: [0, 2, 8].flatMap((twsBin) =>
+      [false, true].map((night) => ({
+        twsBin,
+        twaBin: 1,
+        night,
+        preferredSailState: "NO_SAILS",
+        minTwsGustTrigger: 12,
+        samplesCount: 3,
+      })),
+    ),
+  };
+
+  test("mid-scale NO_SAILS suggestions are ignored (work doc #26)", async () => {
+    const { simulateRun } = await simPromise;
+    // 10 kn of apparent wind carries canvas: a learned bare-poles
+    // cell for this bin is a propulsion decision, not a rig — the
+    // plan keeps whatever rig it had and the boat keeps sailing
+    const run = simulateRun({
+      payload: buildPayload(),
+      startTime: new Date("2026-06-21T06:00:00Z"),
+      matrix: NO_SAILS_MATRIX,
+      config: {},
+      maxHours: 6,
+    });
+    assert.ok(
+      run.hourly.every((row) => row.sailState !== "NO_SAILS"),
+      "no canvas-down rows in sail-carrying weather",
+    );
+    assert.ok(run.hourly[0].stwKnots > 3, "under sail at polar speed");
+    assert.deepEqual(
+      run.sailEvents.filter((e) => e.sailState === "NO_SAILS"),
+      [],
+    );
+  });
+
+  test("light-air canvas-down motors: engine drives, hours and fuel count", async () => {
+    const { simulatePassage } = await simPromise;
+    // 2 kn of wind: canvas would slat, the plan's rig-down cell is
+    // accepted and the engine pushes at 4.5 kn
+    const result = simulatePassage({
+      payload: buildPayload({ tws: 2 }),
+      startTime: new Date("2026-06-21T06:00:00Z"),
+      matrix: NO_SAILS_MATRIX,
+      config: { drift_mode_enabled: false },
+    });
+    assert.ok(result.motoringHours > 0, `motor hours ${result.motoringHours}`);
+    assert.ok(
+      result.fuelConsumptionLiters > 0,
+      `fuel ${result.fuelConsumptionLiters}`,
+    );
+    // The speed decision uses the step's starting rig, so the first
+    // NO_SAILS row still carries the pre-change state; the settled
+    // tail of the run carries the rig-down drive
+    const powered = result.hourlyComfort[result.hourlyComfort.length - 1];
+    assert.equal(powered.sailState, "NO_SAILS");
+    assert.equal(powered.motoring, true);
+    assert.equal(powered.stwKnots, 4.5);
+    // The event reads as motoring, not bare-pole sailing
+    const change = result.sailEvents.find((e) => e.sailState === "NO_SAILS");
+    assert.ok(change, "rig-down change recorded");
+    assert.equal(change.propulsion, "motor");
+    // Light air over the fixture's 1.5 m swell: the slatting regime,
+    // carried so the timeline says "slatting" instead of "rough"
+    assert.equal(change.conditions.slatting, true);
+  });
+
+  test("becalmed canvas-down with drift mode rides the current", async () => {
+    const { simulateRun } = await simPromise;
+    // 2 kn of wind, drift mode on: the becalmed boat idles on the
+    // current alone — 1 kn setting east, not 4.5 kn towards the target
+    const run = simulateRun({
+      payload: buildPayload({ tws: 2, drift: 1, set: 90 }),
+      startTime: new Date("2026-06-21T06:00:00Z"),
+      matrix: NO_SAILS_MATRIX,
+      config: { drift_mode_enabled: true },
+      maxHours: 8,
+    });
+    // Same one-step lag: judge the drift on the settled tail
+    const drifted = run.hourly[run.hourly.length - 1];
+    assert.equal(drifted.sailState, "NO_SAILS");
+    assert.equal(drifted.motoring, false);
+    assert.equal(drifted.stwKnots, 0);
+    // SOG is the current alone: 1 kn, set east — the boat slides
+    // sideways off the rhumb line instead of driving north
+    assert.ok(
+      drifted.sogKnots > 0.9 && drifted.sogKnots < 1.1,
+      `sog ${drifted.sogKnots}`,
+    );
+    const last = run.hourly[run.hourly.length - 1];
+    assert.ok(last.lon > 0.05, `made easting to lon ${last.lon}`);
+    assert.ok(run.fuelLiters === 0, `fuel ${run.fuelLiters}`);
+  });
+
+  test("survival canvas-down lies ahull, never motors into the storm", async () => {
+    const { simulateRun } = await simPromise;
+    // 45 kn of wind: the rig comes off for wind, the boat drifts —
+    // zero fuel even with drift mode disabled
+    const run = simulateRun({
+      payload: buildPayload({ tws: 45 }),
+      startTime: new Date("2026-06-21T06:00:00Z"),
+      matrix: NO_SAILS_MATRIX,
+      config: { drift_mode_enabled: false },
+      maxHours: 6,
+    });
+    const ahull = run.hourly[run.hourly.length - 1];
+    assert.equal(ahull.sailState, "NO_SAILS");
+    assert.equal(ahull.motoring, false);
+    assert.equal(ahull.stwKnots, 0);
+    assert.equal(run.fuelLiters, 0);
+    const change = run.sailEvents.find((e) => e.sailState === "NO_SAILS");
+    assert.ok(change, "rig-down change recorded");
+    assert.equal(change.propulsion, "adrift");
+    // The regime rides along so the timeline names the decision
+    // without claiming a tactic (work doc #27 pending)
+    assert.equal(change.canvasOffRegime, "survival");
+  });
+
+  test("no maneuvers on a canvas-down passage", async () => {
+    const { simulatePassage } = await simPromise;
+    // Light air: the plan's rig-down holds, the boat motors the
+    // whole way — nothing to tack or gybe
+    const result = simulatePassage({
+      payload: buildPayload({ tws: 2 }),
+      startTime: new Date("2026-06-21T06:00:00Z"),
+      matrix: NO_SAILS_MATRIX,
+      config: { drift_mode_enabled: false },
+    });
+    const maneuvers = result.sailEvents.filter((e) => e.maneuver);
+    assert.deepEqual(maneuvers, []);
+  });
+});

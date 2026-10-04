@@ -367,6 +367,30 @@ test("webapp view models", async (t) => {
     assert.deepEqual(mergeTimeline(null, null), []);
   });
 
+  await t.test(
+    "survival-regime canvas-off reads as storm tactics (doc #26)",
+    () => {
+      // At survival wind the tactic is the crew's call — the timeline
+      // names the decision, it does not claim one (#27 pending)
+      const timeline = mergeTimeline({
+        passageSummary: {
+          sailChanges: [
+            {
+              hoursFromNow: 20,
+              timestamp: "2026-06-22T02:00:00.000Z",
+              sailState: "NO_SAILS",
+              propulsion: "adrift",
+              canvasOffRegime: "survival",
+            },
+          ],
+        },
+      });
+      assert.equal(timeline.length, 1);
+      assert.equal(timeline[0].label, "Storm tactics");
+      assert.equal(timeline[0].severity, "info");
+    },
+  );
+
   await t.test("mergeTimeline details the conditions at sail changes", () => {
     const timeline = mergeTimeline({
       passageSummary: {
@@ -395,6 +419,27 @@ test("webapp view models", async (t) => {
     assert.equal(timeline[0].detail, "14.2 kn TWS · Hs 1.5 m · coffee");
     // Missing sea state degrades without inventing values
     assert.equal(timeline[1].detail, "8.0 kn TWS · champagne");
+
+    // The slatting regime names itself: "rough" alone would send
+    // someone looking for wind that isn't there (work doc #14)
+    const slatting = mergeTimeline({
+      passageSummary: {
+        sailChanges: [
+          {
+            hoursFromNow: 4,
+            timestamp: "2026-06-21T10:00:00.000Z",
+            sailState: "GENOA_1",
+            conditions: {
+              twsKnots: 10,
+              hsMeters: 1.7,
+              comfortLevel: "rough",
+              slatting: true,
+            },
+          },
+        ],
+      },
+    });
+    assert.equal(slatting[0].detail, "10.0 kn TWS · Hs 1.7 m · slatting");
   });
 
   await t.test("mergeTimeline maps sea, convective and hazard sources", () => {

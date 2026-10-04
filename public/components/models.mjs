@@ -306,7 +306,7 @@ export function sparklineColumns(hourlyComfort, hours = 24, options = {}) {
       awsKnots: aws,
       heightPct: Math.max(4, Math.round((aws / maxAws) * 100)),
       color: comfortColor(b.comfortLevel),
-      title: `${stamp(b.hoursFromNow)}: ${fmtKn(aws)} AWS, ${b.comfortLevel ?? "?"}${b.slatting ? " (slatting)" : ""}`,
+      title: `${stamp(b.hoursFromNow)}: ${fmtKn(aws)} AWS, ${b.slatting ? "slatting" : (b.comfortLevel ?? "?")}`,
     };
   });
 }
@@ -641,15 +641,22 @@ export function sailStateLabel(key) {
 
 /**
  * Label for one sail-change event: bare "No sails" says WHY the
- * canvas is down — the plan drifts (`No sails - drifting`) or the
- * engine pushes (`Motoring`) — instead of implying bare-pole sailing.
+ * canvas is down — the plan drifts (`No sails - drifting`), the
+ * engine pushes (`Motoring`), or the weather demands the canvas-off
+ * regime (`Storm tactics`: at survival wind the tactic — heave to,
+ * drogue, run off — is the crew's call, not the simulator's; work
+ * doc #27 will pick it up) — instead of implying bare-pole sailing.
  *
- * @param {{sailState: string|null, propulsion?: string|null}} event
+ * @param {{sailState: string|null, propulsion?: string|null,
+ *   canvasOffRegime?: string|null}} event
  * @returns {string} Human label
  */
 function sailEventLabel(event) {
   const label = sailStateLabel(event.sailState);
   if (label === "No sails") {
+    if (event.canvasOffRegime === "survival") {
+      return "Storm tactics";
+    }
     if (event.propulsion === "adrift") {
       return "No sails - drifting";
     }
@@ -983,7 +990,10 @@ export function mergeTimeline(exceptions, payload = null) {
     // Conditions at the change point (work doc #18): what the crew
     // is rigging into — true wind, sea state, comfort tier. Falls
     // back to the bare maneuver TWS for payloads without the
-    // enriched conditions block.
+    // enriched conditions block. When the tier came from the
+    // slatting penalty (work doc #14: light air over a residual
+    // swell), the detail says so — "rough" alone would send someone
+    // looking for wind that isn't there.
     const conditions = e.conditions ?? null;
     const tws = conditions?.twsKnots ?? e.twsAtManeuver ?? null;
     // Why the change sits where it sits: watch handover when a watch
@@ -1010,7 +1020,7 @@ export function mergeTimeline(exceptions, payload = null) {
         conditions?.hsMeters != null
           ? `Hs ${conditions.hsMeters.toFixed(1)} m`
           : null,
-        conditions?.comfortLevel ?? null,
+        conditions?.slatting ? "slatting" : (conditions?.comfortLevel ?? null),
         anchorText,
       ]
         .filter(Boolean)

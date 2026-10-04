@@ -33,10 +33,10 @@ class HorizonSparkline extends HTMLElement {
       <svg viewBox="0 0 240 96" preserveAspectRatio="none" role="img"
         aria-label="24 hour comfort and wind outlook">
         <defs>
-          <!-- Slatting hatch (work doc #14): Rough blocks triggered by
-            light air in a residual swell render striped — heavy-weather
-            rough keeps its solid colour. Transparent background lets
-            the card colour show between the stripes. -->
+          <!-- Slatting hatch: rough comfort triggered by light air in
+            a residual swell renders striped — heavy-weather rough keeps
+            its solid colour. Transparent background lets the card
+            colour show between the stripes. -->
           <pattern id="slatting-hatch" width="6" height="6"
             patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
             <rect width="6" height="6" fill="none"></rect>

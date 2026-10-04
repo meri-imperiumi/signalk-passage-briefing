@@ -496,3 +496,25 @@ describe("daylight-anchored departure (work doc #15)", () => {
     assert.equal(result.time, now);
   });
 });
+
+describe("no-sails regimes (work doc #26)", () => {
+  test("the two canvas-off regimes bracket sail-carrying weather", async () => {
+    const { noSailsRegime, SAILS_FILL_MIN_AWS_KNOTS, SAILS_MAX_AWS_KNOTS } =
+      await physicsPromise;
+    assert.equal(SAILS_FILL_MIN_AWS_KNOTS, 7);
+    assert.equal(SAILS_MAX_AWS_KNOTS, 45);
+    // Light air: canvas slats and bangs, the engine drives
+    assert.equal(noSailsRegime({ awsKnots: 5 }), "slatting");
+    assert.equal(noSailsRegime({ awsKnots: 6.9 }), "slatting");
+    // Sail-carrying middle: no canvas-off justification
+    assert.equal(noSailsRegime({ awsKnots: 15 }), null);
+    assert.equal(noSailsRegime({ awsKnots: 32.9 }), null);
+    // Survival: nothing set, lie ahull. The comfort bands end at
+    // 33 kt — seasickness, not the rig decision; canvas stays on
+    assert.equal(noSailsRegime({ awsKnots: 33 }), null);
+    assert.equal(noSailsRegime({ awsKnots: 40 }), null);
+    assert.equal(noSailsRegime({ awsKnots: 45 }), "survival");
+    // No wind data: no regime
+    assert.equal(noSailsRegime({ awsKnots: null }), null);
+  });
+});

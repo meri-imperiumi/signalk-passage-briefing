@@ -321,19 +321,159 @@ describe("backfillSailEvents", () => {
         getWindStats: createLogbookWindStats(entries),
       });
       assert.equal(summary.total, 3);
-      assert.equal(summary.learned, 3);
+      assert.equal(summary.learned, 2);
+      // The 90 s shake-out to bare poles in 16 kn is mid-scale: a
+      // propulsion decision, gated out of the rig matrix (work doc
+      // #26) instead of winning the bin by recency
+      assert.equal(summary.skippedNoSails, 1);
 
       const bins = db.getMatrixBins();
       assert.equal(bins.length, 2);
-      // Chronological order matters: the bin's preferred sail is the
-      // most recent observation, and the EMA runs over 16 → 16 → 8 kn
       const reefBin = bins.find((bin) => bin.twsBin === 3);
-      assert.equal(reefBin.sampleCount, 2);
-      approx(reefBin.avgTwsTrigger, 0.8 * 16 + 0.2 * 16);
-      assert.equal(reefBin.preferredSail, "NO_SAILS");
+      assert.equal(reefBin.sampleCount, 1);
+      assert.equal(reefBin.avgTwsTrigger, 16);
+      assert.equal(reefBin.preferredSail, "GENOA_1_MAIN_1_REEF");
       const lightBin = bins.find((bin) => bin.twsBin === 1);
       assert.equal(lightBin.sampleCount, 1);
       assert.equal(lightBin.preferredSail, "GENOA_1_MAIN");
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("no-sails learning gate (work doc #26)", () => {
+  const physics = require("../public/sereno-physics.mjs");
+
+  test("mid-scale NO_SAILS never wins the bin", async () => {
+    const db = makeDb();
+    try {
+      // A real rig seeded the bin...
+      const rig = applySailEvent({
+        db,
+        physics,
+        event: {
+          timestamp: "2023-03-20T09:28:00.000Z",
+          eventType: "SAIL_CHANGE",
+          sailState: "GENOA_1_MAIN_1_REEF",
+        },
+        stats: { samples: 1, twsAvg: 14, twsPeak: 16, twaAvg: 45 },
+      });
+      assert.equal(rig.preferredSail, "GENOA_1_MAIN_1_REEF");
+      // ...then a motor-sailing night (or an anchorage entry) logged
+      // bare poles in the same conditions: the cell must survive
+      const gated = applySailEvent({
+        db,
+        physics,
+        event: {
+          timestamp: "2023-03-22T21:28:00.000Z",
+          eventType: "SAIL_CHANGE",
+          sailState: "NO_SAILS",
+        },
+        stats: { samples: 1, twsAvg: 13, twsPeak: 15, twaAvg: 100 },
+      });
+      assert.equal(gated, null);
+      assert.equal(db.getMatrixBins().length, 1);
+      assert.equal(db.getMatrixBins()[0].preferredSail, "GENOA_1_MAIN_1_REEF");
+      // The wind window is still cached, so re-runs stay idempotent
+      assert.equal(
+        db.getWindHistory("2023-03-22T00:00:00Z", "2023-03-23T00:00:00Z")
+          .length,
+        1,
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  test("light-air NO_SAILS folds: the slatting regime is a rig decision", async () => {
+    const db = makeDb();
+    try {
+      // Downwind light air gates at 12 kt (work doc #14): 8 kt average
+      // qualifies
+      const cell = applySailEvent({
+        db,
+        physics,
+        event: {
+          timestamp: "2023-03-20T09:28:00.000Z",
+          eventType: "SAIL_CHANGE",
+          sailState: "NO_SAILS",
+        },
+        stats: { samples: 1, twsAvg: 8, twsPeak: 9, twaAvg: 150 },
+      });
+      assert.equal(cell.preferredSail, "NO_SAILS");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("survival NO_SAILS folds: the storm regime is a rig decision", async () => {
+    const db = makeDb();
+    try {
+      // Mid-scale average, but the window's peak gust crosses the
+      // survival floor: canvas off for wind
+      const cell = applySailEvent({
+        db,
+        physics,
+        event: {
+          timestamp: "2023-03-20T09:28:00.000Z",
+          eventType: "SAIL_CHANGE",
+          sailState: "NO_SAILS",
+        },
+        stats: { samples: 1, twsAvg: 30, twsPeak: 47, twaAvg: 90 },
+      });
+      assert.equal(cell.preferredSail, "NO_SAILS");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("without the physics module the gate stays conservative", () => {
+    const db = makeDb();
+    try {
+      // Light air would justify the observation, but with no physics
+      // loaded nothing can be proven: keep it out of the rig matrix
+      const cell = applySailEvent({
+        db,
+        event: {
+          timestamp: "2023-03-20T09:28:00.000Z",
+          eventType: "SAIL_CHANGE",
+          sailState: "NO_SAILS",
+        },
+        stats: { samples: 1, twsAvg: 4, twsPeak: 5, twaAvg: 45 },
+      });
+      assert.equal(cell, null);
+      assert.equal(db.getMatrixBins().length, 0);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("backfillSailEvents counts gated observations", async () => {
+    const db = makeDb();
+    try {
+      const events = [
+        {
+          timestamp: "2023-03-20T09:28:00.000Z",
+          eventType: "SAIL_CHANGE",
+          sailState: "NO_SAILS",
+          wind: { twsKnots: 13, twaDeg: 100 },
+        },
+      ];
+      const summary = await backfillSailEvents({
+        db,
+        events,
+        getWindStats: () => ({
+          samples: 1,
+          twsAvg: 13,
+          twsPeak: 15,
+          twaAvg: 100,
+        }),
+      });
+      assert.equal(summary.learned, 0);
+      assert.equal(summary.skippedNoSails, 1);
+      assert.equal(summary.cells.length, 0);
+      assert.equal(db.getMatrixBins().length, 0);
     } finally {
       db.close();
     }

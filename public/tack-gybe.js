@@ -52,15 +52,21 @@ export function tackSide(signedTwaDeg) {
 }
 
 /**
- * Whether a simulation hour is a sailing step: not motoring and
- * actually making way (drift-mode hours sit at SOG 0). Course
- * changes under power or while drifting are not maneuvers.
+ * Whether a simulation hour is a sailing step: not motoring, actually
+ * making way (drift-mode hours sit at SOG 0) and the plan's rig up —
+ * with canvas down there is nothing to tack or gybe (work doc #5
+ * session feedback: the engine turns the boat, the current carries
+ * it, neither is a maneuver).
  *
  * @param {object} row - Hourly simulation row
  * @returns {boolean}
  */
 function isSailing(row) {
-  return !row.motoring && (row.sogKnots ?? 0) > SAILING_SOG_KNOTS;
+  return (
+    !row.motoring &&
+    (row.sogKnots ?? 0) > SAILING_SOG_KNOTS &&
+    row.sailState !== "NO_SAILS"
+  );
 }
 
 /**

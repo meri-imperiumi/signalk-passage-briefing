@@ -334,23 +334,48 @@ function createHistoryWindStats({
  * window's peak wind. The preferred sail of a bin is the most recent
  * observation.
  *
+ * Canvas-off observations are gated (work doc #26): a `NO_SAILS`
+ * observation folds into the rig matrix only when the weather
+ * justifies it — the two-regime decision the rig actually encodes.
+ * A mid-scale one is a propulsion decision (the engine drives) or a
+ * non-passage state (anchorage, marina); folding it would teach the
+ * plan to hold bare poles through sail-carrying weather.
+ *
  * @param {object} params
  * @param {import("./sqlite-db.js").PassageDatabase} params.db
  * @param {{timestamp: string, eventType: string, sailState: string, night?: boolean, notes?: string}} params.event
  * @param {WindWindowStats} params.stats
  * @param {boolean} [params.night] - Day/night bucket of the event
  *   (defaults to the event's own flag, else day)
+ * @param {object} [params.physics] - The loaded sereno-physics module
+ *   (constants for the regime gates). Omitted, the gate stays
+ *   conservative: a `NO_SAILS` observation cannot be justified and is
+ *   kept out of the rig matrix.
  * @returns {{twsBin: number, twaBin: number, night: boolean,
  *   preferredSail: string, avgTwsTrigger: number, peakGustTrigger:
- *   number, sampleCount: number}}
+ *   number, sampleCount: number}|null} The learned cell, or null when
+ *   the observation was gated out of the rig matrix
  */
-function applySailEvent({ db, event, stats, night = event.night ?? false }) {
+function applySailEvent({
+  db,
+  event,
+  stats,
+  night = event.night ?? false,
+  physics = null,
+}) {
   db.upsertWindHistory({
     timestamp: event.timestamp,
     twsAvg: stats.twsAvg,
     twsPeak: stats.twsPeak,
     twaAvg: stats.twaAvg,
   });
+
+  if (
+    event.sailState === "NO_SAILS" &&
+    noSailsWindowRegime(stats, physics) == null
+  ) {
+    return null;
+  }
 
   const twsBin = twsBinIndex(stats.twsAvg);
   const twaBin = twaBinIndex(stats.twaAvg);
@@ -378,6 +403,40 @@ function applySailEvent({ db, event, stats, night = event.night ?? false }) {
 }
 
 /**
+ * The canvas-off regime a wind window justifies (work doc #26): the
+ * rig is already down in these observations, so apparent wind ≈ true
+ * wind and the regimes read off the window stats. Light air uses the
+ * comfort model's point-of-sail slatting gates (work doc #14: 7 kt
+ * upwind, 12 kt downwind); survival reads the window's peak gust
+ * against the top of the Sereno AWS bands.
+ *
+ * @param {WindWindowStats} stats - Window statistics
+ * @param {object|null} physics - The sereno-physics module (regime
+ *   gate constants); null keeps the gate conservative
+ * @returns {"slatting"|"survival"|null}
+ */
+function noSailsWindowRegime(stats, physics) {
+  if (!stats || !physics) {
+    return null;
+  }
+  const { twsAvg, twsPeak, twaAvg } = stats;
+  if (!Number.isFinite(twsAvg)) {
+    return null;
+  }
+  const upwind = Math.abs(Number.isFinite(twaAvg) ? twaAvg : 0) < 90;
+  const lightFloor = upwind
+    ? physics.SLATTING_TWS_UPWIND_KNOTS
+    : physics.SLATTING_TWS_DOWNWIND_KNOTS;
+  if (twsAvg < lightFloor) {
+    return "slatting";
+  }
+  if (Number.isFinite(twsPeak) && twsPeak >= physics.SAILS_MAX_AWS_KNOTS) {
+    return "survival";
+  }
+  return null;
+}
+
+/**
  * Runs the backfill over a list of sail events (SPEC §4.2). Events are
  * processed chronologically; an event already present in
  * `wind_history_cache` is skipped so re-runs are idempotent. Learned
@@ -399,7 +458,8 @@ function applySailEvent({ db, event, stats, night = event.night ?? false }) {
  *   skippedNoData: number, cells: object[]}>}
  */
 async function backfillSailEvents({ db, events, getWindStats }) {
-  const { isNight } = await loadPhysics();
+  const physics = await loadPhysics();
+  const { isNight } = physics;
   const sorted = [...events].sort(
     (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
   );
@@ -407,6 +467,7 @@ async function backfillSailEvents({ db, events, getWindStats }) {
   let learned = 0;
   let skippedCached = 0;
   let skippedNoData = 0;
+  let skippedNoSails = 0;
   const cells = [];
 
   for (const event of sorted) {
@@ -433,7 +494,15 @@ async function backfillSailEvents({ db, events, getWindStats }) {
             event.position.longitude,
           )
         : false);
-    cells.push(applySailEvent({ db, event, stats, night }));
+    const cell = applySailEvent({ db, event, stats, night, physics });
+    if (cell) {
+      cells.push(cell);
+      learned++;
+    } else {
+      // Gated out of the rig matrix (work doc #26): still cached and
+      // recorded, but nothing was learned
+      skippedNoSails++;
+    }
     db.recordSailEvent({
       timestamp: event.timestamp,
       eventType: event.eventType,
@@ -441,7 +510,6 @@ async function backfillSailEvents({ db, events, getWindStats }) {
       night,
       notes: event.notes,
     });
-    learned++;
   }
 
   return {
@@ -449,6 +517,7 @@ async function backfillSailEvents({ db, events, getWindStats }) {
     learned,
     skippedCached,
     skippedNoData,
+    skippedNoSails,
     cells,
   };
 }
