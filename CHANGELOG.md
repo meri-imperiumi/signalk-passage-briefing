@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-05
+
 ### Fixed
 - Notes resource `bbox` queries crossing the antimeridian now match notes on both sides of 180° (`plugin/notes-store.js`): a west edge east of the east edge — the natural way to frame a Pacific box around the seam — previously matched nothing, since no single longitude is simultaneously ≥ 170 and ≤ -175. Such a box now wraps the seam (matching west of the east edge or east of the west edge); regular west≤east boxes behave exactly as before
 
