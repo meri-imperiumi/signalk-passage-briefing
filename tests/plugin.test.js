@@ -2163,8 +2163,12 @@ test("serve-time bulletin re-filter: cached payload blocks recompute", async () 
   };
   try {
     // Compile the here payload: its metareaBulletin is computed at
-    // compile time, in this case with the current filter
+    // compile time, in this case with the current filter. The online
+    // transition also fired a fire-and-forget oneshot here refresh —
+    // settle it, or its late bulletin-cache write races the serve
+    // path below
     await call("/api/briefing/refresh");
+    await plugin.__settle();
 
     // Simulate a payload compiled by an older plugin version: stale
     // blocks that the current filter would never produce
