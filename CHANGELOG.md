@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-04
+
 ### Added
 
 - Timezone change events along the route (work doc #19): the briefing now says when the clock itself changes — the moment a crew sets watches and re-plans arrival in local time. Offshore, the simulated track detects crossings of the 15° zone meridians (short-arc direction from the step's longitude delta, so the antimeridian reads "180°" either way) and the unified timeline renders them as `time` events (◷ glyph): "Crossing 165°E — solar time 1 h ahead/behind — clock change due", advising but never asserting what the crew does with the clock. Crossings inside territorial waters stay quiet — the local zone governs there — using distance stints folded from the plugin's enter/leave transitions. Territorial transitions (work doc #17) are now timezone-annotated: the IANA zone at the crossing point comes from vendored tz-lookup (CC0, ~72 KB single ES module under `public/vendor/tz-lookup/` — resolved by position, which sidesteps the multi-zone-country problem entirely, and consistent with signalk-ships-time's answer) and its UTC offset at the crossing instant from the platform's `Intl` database (DST handled, no dependency); `mergeTimeline` adds the "time zone UTC+13" line when the crossing's offset differs from the vessel's current zone, or when none is published. Stamps themselves stay in the current ship's zone.
