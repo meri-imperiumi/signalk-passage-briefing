@@ -15,6 +15,7 @@ const { join } = require("node:path");
 
 const {
   collectFeatures,
+  parseAdvisory,
   extractGeometry,
   filterBulletin,
   navtexSubject,
@@ -822,26 +823,89 @@ test("fixture fqau23 (Australian BoM Western METAREA X): commencing issue line",
   );
 });
 
-test("fixture wtpz23 (NHC hurricane forecast/advisory): metadata parses, advisory family acknowledged", () => {
+test("fixture wtpz23 (NHC hurricane forecast/advisory): quadrant radii become geometry", () => {
   const raw = readFixture("wtpz23-knhc-tcmep3.txt");
   const result = filterBulletin({
     rawText: raw,
     source: "api",
-    track: [[-111, 19.4]],
+    // Inside the present 34 KT wind field
+    track: [[-112.5, 20.0]],
   });
   assert.ok(result, "bulletin retained");
-  // "0300 UTC SAT OCT 03 2026" parses
   assert.equal(result.issuedAt, "2026-10-03T03:00:00.000Z");
-  assert.ok(result.issuer, "issuer identified");
-  // KNOWN LIMITATION (documented here as the regression tripwire): the
-  // forecast/advisory geography encodes wind/sea radii per quadrant
-  // ("64 KT....... 40NE  35SE  25SW  40NW"), which the coordinate-chain
-  // extractor does not yet translate into areas — no geometry today.
-  // Building that translation is future work on the hurricane family.
-  assert.ok(
-    result.blocks.every((b) => b.geometryType == null),
-    "advisory still geometry-less; flip this when quadrant radii are supported",
+  assert.match(result.issuer, /PIERCE/);
+
+  // The advisory is ONE block carrying the structured storm
+  const block = result.blocks[0];
+  assert.ok(block.storm, "structured storm data attached");
+  assert.equal(block.storm.stormName, "HURRICANE RACHEL");
+  assert.equal(block.storm.advisoryNumber, 24);
+  assert.deepEqual(block.storm.center, { lat: 19.4, lon: -111.5 });
+  assert.equal(block.storm.movementDegrees, 280);
+  assert.equal(block.storm.movementSpeedKt, 4);
+  assert.equal(block.storm.maxWindKt, 85);
+  assert.equal(block.storm.gustKt, 105);
+  assert.equal(block.storm.severityLabel, "HURRICANE FORCE");
+
+  // Present wind fields as quadrant rings: 34/50/64 KT + 4 M SEAS
+  assert.deepEqual(
+    block.storm.fields.map((f) => f.label),
+    ["64 KT", "50 KT", "34 KT", "4 M SEAS"],
   );
+  const field34 = block.storm.fields.find((f) => f.label === "34 KT");
+  assert.deepEqual(field34.radiiNm, { ne: 130, se: 120, sw: 120, nw: 130 });
+  assert.equal(field34.geometry.type, "polygon");
+  assert.equal(field34.geometry.coordinates.length, 73); // 5° steps + closure
+  // The block geometry IS the 34 KT ring (the warning area)
+  assert.equal(block.geometryType, "polygon");
+
+  // Forecast positions with their own radii
+  assert.equal(block.storm.forecastPoints.length, 6);
+  const fc0 = block.storm.forecastPoints[0];
+  assert.match(fc0.validText, /FORECAST VALID 03\/1200Z/);
+  assert.ok(Math.abs(fc0.lat - 19.5) < 1e-9);
+  assert.ok(Math.abs(fc0.lon - -112.1) < 1e-9);
+  assert.equal(fc0.maxWindKt, 80);
+});
+
+test("fixture wtpz23 r28: degenerate zero-radius quadrant collapses onto the center", () => {
+  const storm = parseAdvisory(readFixture("wtpz23-knhc-tcmep3-r28.txt"));
+  // The last outlook carries 50 KT with 0SE 0SW 0NW: only the NE arc
+  // has area, the rest of the ring sits at the center
+  const outlook = storm.outlookPoints.at(-1);
+  const field50 = outlook.fields.find((f) => f.label === "50 KT");
+  assert.deepEqual(field50.radiiNm, { ne: 30, se: 0, sw: 0, nw: 0 });
+  const ring = field50.geometry.coordinates;
+  // Collapsed quadrants touch the outlook's own center — each forecast
+  // position's rings center on that position
+  const centerPoints = ring.filter(
+    ([lon, lat]) =>
+      Math.abs(lon - outlook.lon) < 1e-6 && Math.abs(lat - outlook.lat) < 1e-6,
+  );
+  assert.ok(centerPoints.length >= 2, "collapsed quadrant touches center");
+});
+
+test("fixture wtpz23: the advisory filters like any other geometry", () => {
+  const raw = readFixture("wtpz23-knhc-tcmep3-r28.txt");
+  // Off-track: the whole advisory is discarded
+  const off = filterBulletin({
+    rawText: raw,
+    source: "api",
+    track: [
+      [178, -21],
+      [179, -22],
+    ],
+  });
+  assert.equal(off, null);
+  // Near a forecast position: kept even when the present field does
+  // not reach
+  const forward = filterBulletin({
+    rawText: raw,
+    source: "api",
+    track: [[-121.5, 21.2]],
+  });
+  assert.ok(forward, "forecast coverage keeps the advisory");
+  assert.equal(forward.blocks[0].storm.stormName, "HURRICANE RACHEL");
 });
 
 test("issue-time formats: mixed-case months from the WMO bulletin sets", () => {

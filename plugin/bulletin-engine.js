@@ -877,6 +877,236 @@ function extractIssuer(text) {
  *   source, blocks: [{text, subject, geometryType, source}]}` — null
  *   when the whole message is discarded by the subject filter
  */
+/**
+ * Builds a quadrant-arc ring around a storm center (work doc #21):
+ * walking bearings 0..360°, each 90° quadrant carries its own radius
+ * (NE/SE/SW/NW), the four arcs join into one closed ring. A zero or
+ * missing radius collapses that quadrant's arc onto the center — the
+ * NHC "0SW" case — without breaking the ring. Points are [lon, lat].
+ *
+ * @param {object} params
+ * @param {number} params.lat - Center latitude
+ * @param {number} params.lon - Center longitude
+ * @param {{ne: number, se: number, sw: number, nw: number}} params.radiiNm
+ * @returns {number[][]|null} Closed ring, null when every radius is
+ *   zero (no area to draw)
+ */
+function quadrantRing({ lat, lon, radiiNm }) {
+  const radii = [
+    radiiNm?.ne ?? 0,
+    radiiNm?.se ?? 0,
+    radiiNm?.sw ?? 0,
+    radiiNm?.nw ?? 0,
+  ];
+  if (radii.every((r) => !(r > 0))) {
+    return null;
+  }
+  const toRad = Math.PI / 180;
+  const ring = [];
+  for (let bearing = 0; bearing < 360; bearing += 5) {
+    const quadrant = Math.floor(bearing / 90) % 4;
+    const radiusNm = radii[quadrant];
+    if (!(radiusNm > 0)) {
+      ring.push([lon, lat]); // Collapsed quadrant: touch the center
+      continue;
+    }
+    const distanceRad = radiusNm / 3440.065;
+    const bearingRad = bearing * toRad;
+    const latRad = lat * toRad;
+    const lat2 = Math.asin(
+      Math.sin(latRad) * Math.cos(distanceRad) +
+        Math.cos(latRad) * Math.sin(distanceRad) * Math.cos(bearingRad),
+    );
+    const lon2 =
+      lon * toRad +
+      Math.atan2(
+        Math.sin(bearingRad) * Math.sin(distanceRad) * Math.cos(latRad),
+        Math.cos(distanceRad) - Math.sin(latRad) * Math.sin(lat2),
+      );
+    ring.push([
+      Math.round((((lon2 / toRad + 540) % 360) - 180) * 100) / 100,
+      Math.round((lat2 / toRad) * 100) / 100,
+    ]);
+  }
+  ring.push([...ring[0]]);
+  return { type: "polygon", coordinates: ring };
+}
+
+/**
+ * Severity label for the advisory family, from the max wind threshold
+ * present (work doc #21): 64 KT and above is hurricane force, 48–63
+ * storm force, 34–47 gale.
+ *
+ * @param {number} maxWindKt
+ * @returns {string|null}
+ */
+function advisorySeverityLabel(maxWindKt) {
+  if (!(maxWindKt > 0)) {
+    return null;
+  }
+  if (maxWindKt >= 64) {
+    return "HURRICANE FORCE";
+  }
+  if (maxWindKt >= 48) {
+    return "STORM FORCE";
+  }
+  if (maxWindKt >= 34) {
+    return "GALE";
+  }
+  return null;
+}
+
+/**
+ * Parses an NHC tropical-cyclone FORECAST/ADVISORY (the WTPZ/TCM
+ * family, work doc #21) into structured storm data with native
+ * geometry: present wind radii per threshold as quadrant-arc
+ * polygons, sea-height radii as a single ring, and the forecast and
+ * outlook positions with their own radii — the plan's forward storm
+ * coverage.
+ *
+ * Radii lines carry the largest expected radius per quadrant:
+ * `64 KT....... 40NE  35SE  25SW  40NW.` — zero radii (the "0SW"
+ * case) collapse onto the center in the ring. Forecast positions:
+ * `FORECAST VALID 03/1200Z 19.5N 112.1W` followed by their own wind
+ * and radii lines.
+ *
+ * @param {string} text - Cleaned bulletin text
+ * @returns {object|null} Structured storm, null when the text is not
+ *   the advisory family
+ */
+function parseAdvisory(text) {
+  if (
+    typeof text !== "string" ||
+    !/FORECAST\/ADVISORY/i.test(text) ||
+    !/MAX SUSTAINED WINDS/i.test(text)
+  ) {
+    return null;
+  }
+  const nameMatch = text.match(
+    /\b([A-Z][A-Z .'-]+?)\s+FORECAST\/ADVISORY\s+NUMBER\s+(\d+)/i,
+  );
+  const centerMatch = text.match(
+    /CENTER LOCATED NEAR\s+(\d+(?:\.\d+)?)([NS])\s+(\d+(?:\.\d+)?)([EW])/i,
+  );
+  if (!centerMatch) {
+    return null;
+  }
+  const center = {
+    lat:
+      Number.parseFloat(centerMatch[1]) *
+      (centerMatch[2].toUpperCase() === "S" ? -1 : 1),
+    lon:
+      Number.parseFloat(centerMatch[3]) *
+      (centerMatch[4].toUpperCase() === "W" ? -1 : 1),
+  };
+  const movement = text.match(
+    /PRESENT MOVEMENT TOWARD THE ([^.]+?) OR (\d{1,3}) DEGREES AT\s+(\d+) KT/i,
+  );
+  const pressure = text.match(/MINIMUM CENTRAL PRESSURE\s+(\d+) MB/i);
+  const winds = text.match(
+    /MAX SUSTAINED WINDS\s+(\d+) KT(?:\s+WITH GUSTS TO (\d+) KT)?/i,
+  );
+  const maxWindKt = winds ? Number.parseInt(winds[1], 10) : null;
+  const gustKt = winds?.[2] ? Number.parseInt(winds[2], 10) : null;
+
+  // Radius sets: the present fields live before the first VALID line;
+  // each FORECAST/OUTLOOK VALID line starts a position block with its
+  // own fields, centered on that block's position
+  const parseRadii = (segment, centerLat, centerLon) => {
+    const fields = [];
+    const radiiRe =
+      /\b(\d{1,3})\s*(M|FT)?\s*(SEAS|KT)\s*\.{2,}\s*(\d+)\s*NE\s+(\d+)\s*SE\s+(\d+)\s*SW\s+(\d+)\s*NW/gi;
+    for (const radiiMatch of segment.matchAll(radiiRe)) {
+      const threshold = Number.parseInt(radiiMatch[1], 10);
+      const kind = radiiMatch[3].toLowerCase() === "seas" ? "seas" : "wind";
+      const source = radiiMatch[2] ? `${radiiMatch[2].toUpperCase()} ` : "";
+      const label = `${threshold} ${source}${radiiMatch[3].toUpperCase()}`;
+      const radiiNm = {
+        ne: Number.parseInt(radiiMatch[4], 10),
+        se: Number.parseInt(radiiMatch[5], 10),
+        sw: Number.parseInt(radiiMatch[6], 10),
+        nw: Number.parseInt(radiiMatch[7], 10),
+      };
+      fields.push({
+        label,
+        threshold,
+        kind,
+        radiiNm,
+        geometry: quadrantRing({
+          lat: centerLat,
+          lon: centerLon,
+          radiiNm,
+        }),
+      });
+    }
+    return fields;
+  };
+  const parsePositionBlock = (segment) => {
+    const position = segment.match(
+      /\b(\d{1,2})\/(\d{4})Z\s+(\d+(?:\.\d+)?)([NS])\s+(\d+(?:\.\d+)?)([EW])/,
+    );
+    const wind = segment.match(
+      /MAX WIND\s+(\d+) KT(?:\.{2,}|\s+)GUSTS\s+(\d+) KT/i,
+    );
+    const lat =
+      position && Number.isFinite(Number.parseFloat(position[3]))
+        ? Number.parseFloat(position[3]) *
+          (position[4].toUpperCase() === "S" ? -1 : 1)
+        : null;
+    const lon =
+      position && Number.isFinite(Number.parseFloat(position[5]))
+        ? Number.parseFloat(position[5]) *
+          (position[6].toUpperCase() === "W" ? -1 : 1)
+        : null;
+    return {
+      validText: headerMatch(segment),
+      lat,
+      lon,
+      maxWindKt: wind ? Number.parseInt(wind[1], 10) : null,
+      gustKt: wind ? Number.parseInt(wind[2], 10) : null,
+      fields: parseRadii(segment, lat ?? center.lat, lon ?? center.lon),
+    };
+  };
+  const headerMatch = (segment) =>
+    segment.match(/\b((?:FORECAST|OUTLOOK) VALID [^\n]*)/)?.[1]?.trim() ?? null;
+
+  const parts = text.split(/(?=\b(?:FORECAST|OUTLOOK) VALID )/);
+  const fields = parseRadii(parts[0] ?? "", center.lat, center.lon);
+  const forecastPoints = [];
+  const outlookPoints = [];
+  for (let i = 1; i < parts.length; i++) {
+    const block = parsePositionBlock(parts[i]);
+    if (block.lat == null) {
+      continue; // A VALID line without a position is not a storm point
+    }
+    const target = /OUTLOOK VALID/i.test(parts[i])
+      ? outlookPoints
+      : forecastPoints;
+    target.push(block);
+  }
+  const primary =
+    fields.find((field) => field.threshold === 34 && field.kind === "wind") ??
+    fields.find((field) => field.kind === "wind") ??
+    fields[0] ??
+    null;
+  return {
+    stormName: nameMatch ? nameMatch[1].trim() : null,
+    advisoryNumber: nameMatch ? Number.parseInt(nameMatch[2], 10) : null,
+    center,
+    movementText: movement ? movement[1].trim() : null,
+    movementDegrees: movement ? Number.parseInt(movement[2], 10) : null,
+    movementSpeedKt: movement ? Number.parseInt(movement[3], 10) : null,
+    pressureMb: pressure ? Number.parseInt(pressure[1], 10) : null,
+    maxWindKt,
+    gustKt,
+    severityLabel: advisorySeverityLabel(maxWindKt),
+    fields,
+    forecastPoints,
+    outlookPoints,
+    primaryGeometry: primary?.geometry ?? null,
+  };
+}
+
 function filterBulletin({
   rawText,
   source,
@@ -889,6 +1119,49 @@ function filterBulletin({
     return null;
   }
   const cleaned = stripBoilerplate(rawText);
+  const advisory = parseAdvisory(cleaned);
+  if (advisory) {
+    // Advisory family (work doc #21): one semantic unit — the whole
+    // text is the block. The track filter runs over every field
+    // (present + forecast wind/seas areas): the storm's forward
+    // coverage counts, not just its present position. Severity from
+    // the max wind threshold rides the block for the console.
+    const fieldGeometries = [
+      ...advisory.fields,
+      ...advisory.forecastPoints.flatMap((point) => point.fields),
+    ]
+      .map((field) => field.geometry)
+      .filter(Boolean);
+    const onTrack =
+      fieldGeometries.length === 0 ||
+      fieldGeometries.some((geometry) => intersectsTrack(geometry, track));
+    if (!onTrack) {
+      return null; // Storm coverage misses our waters entirely
+    }
+    const spoolWatcher = require("./spool-watcher.js");
+    return {
+      header: cleaned.split(/\r?\n/, 1)[0]?.trim() ?? "",
+      issuedAt:
+        issuedAt ??
+        spoolWatcher.extractIssuedAt(cleaned) ??
+        new Date(0).toISOString(),
+      issuer: extractIssuer(cleaned),
+      bulletinText: rawText,
+      source,
+      blocks: [
+        {
+          text: cleaned,
+          subject: subject ?? null,
+          geometryType: advisory.primaryGeometry
+            ? advisory.primaryGeometry.type
+            : null,
+          geometry: advisory.primaryGeometry,
+          storm: advisory,
+          source,
+        },
+      ],
+    };
+  }
   const features = collectFeatures(cleaned);
   const header = cleaned.split(/\r?\n/, 1)[0]?.trim() ?? "";
   const blocks = segmentBlocks(cleaned)
@@ -1105,6 +1378,9 @@ function ukhoGeometry(warning) {
 }
 
 module.exports = {
+  parseAdvisory,
+  advisorySeverityLabel,
+  quadrantRing,
   RETAINED_SUBJECTS,
   SEVERE_KEYWORDS,
   SECTION_ANCHORS,

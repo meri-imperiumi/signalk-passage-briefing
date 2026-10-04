@@ -318,6 +318,42 @@ strong.sev {
     for (const block of blocks) {
       const pre = document.createElement("div");
       pre.style.marginBottom = "8px";
+      if (block.storm) {
+        // Advisory family (work doc #21): the structured storm summary
+        // replaces the raw radii tables — what the crew needs is the
+        // storm, its force and where it is going
+        const storm = block.storm;
+        const strong = document.createElement("strong");
+        strong.className = "sev";
+        strong.textContent = [
+          storm.severityLabel ?? "TROPICAL CYCLONE",
+          storm.stormName ?? "Tropical cyclone",
+        ].join(" — ");
+        pre.appendChild(strong);
+        pre.appendChild(document.createElement("br"));
+        pre.appendChild(
+          document.createTextNode(
+            [
+              storm.center
+                ? `center ${storm.center.lat.toFixed(1)}° ${storm.center.lon.toFixed(1)}°`
+                : null,
+              storm.movementText
+                ? `moving ${storm.movementText.toLowerCase()} at ${storm.movementSpeedKt ?? "?"} kt`
+                : null,
+              storm.maxWindKt != null
+                ? `max ${storm.maxWindKt} kt, gusts ${storm.gustKt ?? "?"} kt`
+                : null,
+              storm.forecastPoints?.length
+                ? `forecast ${storm.forecastPoints.length} positions to ${storm.forecastPoints.at(-1).lat.toFixed(1)}° ${storm.forecastPoints.at(-1).lon.toFixed(1)}°`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · "),
+          ),
+        );
+        this._blocksEl.appendChild(pre);
+        continue;
+      }
       for (const token of splitSevere(block.text)) {
         if (token.severe) {
           const strong = document.createElement("strong");
