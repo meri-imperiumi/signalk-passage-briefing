@@ -66,11 +66,16 @@ function matchesQuery(note, params) {
   if (params.bbox != null) {
     const [swLon, swLat, neLon, neLat] = params.bbox;
     const { latitude, longitude } = note.position ?? {};
+    // A west edge east of the east edge declares an
+    // antimeridian-crossing box: match either side of the seam
+    const lonInBox =
+      swLon <= neLon
+        ? longitude >= swLon && longitude <= neLon
+        : longitude <= neLon || longitude >= swLon;
     if (
       latitude == null ||
       longitude == null ||
-      longitude < swLon ||
-      longitude > neLon ||
+      !lonInBox ||
       latitude < swLat ||
       latitude > neLat
     ) {

@@ -69,6 +69,16 @@ test("bbox filter: sw/ne corners, including the antimeridian edge", () => {
   );
 });
 
+test("bbox filter: a seam-crossing box matches both sides of 180°", () => {
+  // West edge east of the east edge: the box wraps the antimeridian,
+  // the natural way to frame a Pacific query around the seam
+  const box = { bbox: [170, -20, -175, -10] };
+  assert.equal(matchesQuery(note("east", -15, 179), box), true);
+  assert.equal(matchesQuery(note("west", -15, -179), box), true);
+  assert.equal(matchesQuery(note("far", -15, 150), box), false);
+  assert.equal(matchesQuery(note("far", -15, -150), box), false);
+});
+
 test("distanceMeters sanity: one degree of latitude", () => {
   const d = distanceMeters(
     { latitude: -18, longitude: 174 },
