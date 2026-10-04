@@ -285,3 +285,41 @@ export async function fetchNavigationState() {
     return null;
   }
 }
+
+/**
+ * The plugin's critical-hazard notifications
+ * (`notifications.navigation.briefing.hazards.*`), best effort — the
+ * path is absent when nothing is active.
+ *
+ * @returns {Promise<Array<{id: string, state: string, message: string}>|
+ *   null>} Active notifications (state !== normal), null when the
+ *   path or server is unavailable
+ */
+export async function fetchHazardNotifications() {
+  const unwrap = (node) =>
+    node && typeof node === "object" && "value" in node ? node.value : node;
+  try {
+    const subtree = await fetchJson(
+      `${BASE}/api/vessels/self/notifications/navigation/briefing/hazards`,
+    );
+    const node = unwrap(subtree);
+    if (!node || typeof node !== "object") {
+      return null;
+    }
+    const notifications = [];
+    for (const [id, raw] of Object.entries(node)) {
+      const value = unwrap(raw);
+      if (!value || typeof value !== "object" || value.state === "normal") {
+        continue;
+      }
+      notifications.push({
+        id,
+        state: String(value.state ?? "warn"),
+        message: String(value.message ?? ""),
+      });
+    }
+    return notifications;
+  } catch {
+    return null;
+  }
+}

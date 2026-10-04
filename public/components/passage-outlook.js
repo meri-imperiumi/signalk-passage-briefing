@@ -23,6 +23,7 @@ import {
 
 import {
   createStream,
+  fetchHazardNotifications,
   fetchJson,
   fetchNavigationState,
   fetchNotes,
@@ -121,7 +122,24 @@ class PassageOutlook extends HTMLElement {
           font-size: 0.75em;
           opacity: 0.7;
         }
+        .hazard-banner {
+          border: 1px solid var(--color-red);
+          color: var(--color-red);
+          background: var(--color-red, #c00);
+          padding: 10px 12px; margin-bottom: 12px;
+          display: flex; justify-content: space-between; gap: 8px;
+          align-items: center; flex-wrap: wrap;
+          font-weight: 700;
+        }
+        .hazard-banner .hazard-message {
+          text-transform: uppercase; letter-spacing: 0.05em;
+        }
+        .hazard-ack { min-height: 40px; padding: 6px 14px; flex: none; }
       </style>
+      <div class="hazard-banner" id="hazard-banner" hidden>
+        <span class="hazard-message" id="hazard-message"></span>
+        <button class="hazard-ack" id="hazard-ack">ACK</button>
+      </div>
       <header>
         <h1>Passage Briefing</h1>
         <select id="route" aria-label="Route" style="max-width: 16rem"></select>
@@ -138,6 +156,11 @@ class PassageOutlook extends HTMLElement {
     `;
 
     this._routeSelect = this.shadowRoot.getElementById("route");
+    this._hazardBanner = this.shadowRoot.getElementById("hazard-banner");
+    this._hazardMessage = this.shadowRoot.getElementById("hazard-message");
+    this.shadowRoot
+      .getElementById("hazard-ack")
+      ?.addEventListener("click", () => this.acknowledgeHazards());
     this._onlinePill = this.shadowRoot.getElementById("online");
     this._shiptimePill = this.shadowRoot.getElementById("shiptime");
     this._tabBar = this.shadowRoot.getElementById("tab-bar");
@@ -178,6 +201,11 @@ class PassageOutlook extends HTMLElement {
       () => this.recheckDeparture(),
       10 * 60000,
     );
+    // Critical-hazard notification poll (work doc #30): the banner
+    // overlay renders whatever Signal K notifications the escalation
+    // has raised — all connected clients see the same alarm
+    this._hazardTimer = setInterval(() => this.pollHazards(), 30000);
+    this.pollHazards();
     // Live trim progress: the plan re-anchors when the boat advanced
     // this far along the compiled track since the last simulation
     // (work doc #28) — one re-anchor per leg, not per position update
@@ -192,6 +220,7 @@ class PassageOutlook extends HTMLElement {
     this._stream?.close();
     this._worker?.terminate();
     clearInterval(this._departureTimer);
+    clearInterval(this._hazardTimer);
   }
 
   /**
@@ -782,6 +811,47 @@ class PassageOutlook extends HTMLElement {
       this.renderDeparture();
     }
     this.renderDisclaimer();
+  }
+
+  /**
+   * Critical-hazard notifications (work doc #30): polls the Signal K
+   * notifications subtree the escalation publishes to and renders the
+   * interrupting banner — an overlay above the header so an
+   * emergency is visible without scrolling, phone layout included.
+   * The acknowledge button posts the plugin's ack endpoint, which
+   * returns the notification to nominal for every connected client.
+   */
+  async pollHazards() {
+    const notifications = await fetchHazardNotifications();
+    if (!this._hazardBanner) {
+      return;
+    }
+    this._activeHazards = notifications ?? [];
+    if (!notifications || notifications.length === 0) {
+      this._hazardBanner.hidden = true;
+      return;
+    }
+    const worst =
+      notifications.find((n) => n.state === "emergency") ?? notifications[0];
+    this._hazardMessage.textContent = worst.message;
+    this._hazardBanner.hidden = false;
+  }
+
+  /** Acknowledges every currently active hazard notification. */
+  async acknowledgeHazards() {
+    for (const notification of this._activeHazards ?? []) {
+      try {
+        await fetchJson(`${PLUGIN_API}/hazards/ack`, 8000, {
+          method: "POST",
+          body: JSON.stringify({ id: notification.id }),
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch {
+        // The ack is best effort: the notification stays until the
+        // next poll if the endpoint fails
+      }
+    }
+    this._hazardBanner.hidden = true;
   }
 
   /**

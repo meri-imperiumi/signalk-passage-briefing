@@ -67,6 +67,7 @@ const {
   publishCapAlertNotes,
 } = require("./notes-publisher.js");
 const hazardSource = require("./hazard-source.js");
+const hazardAlerts = require("./hazard-alerts.js");
 const maritimeZones = require("./maritime-zones-source.js");
 const capSource = require("./cap-source.js");
 const {
@@ -104,6 +105,11 @@ const INTERNET_STATE_PATH = "network.internet.state";
 const NAVIGATION_STATE_PATH = "navigation.state";
 const HOUSE_SOC_PATH = "electrical.batteries.house.capacity.stateOfCharge";
 
+/** Live depth sounding presence gates the tsunami escalation (work
+ * doc #30): a reading means the bottom is within transducer range,
+ * i.e. shallow. */
+const DEPTH_PATH = "environment.depth.belowSurface";
+
 /**
  * Self path of the vessel's active route, as published by autopilot /
  * navigation apps (same source the dead-reckoning webapp consumes).
@@ -116,6 +122,7 @@ const WATCHED_PATHS = [
   HOUSE_SOC_PATH,
   ACTIVE_ROUTE_PATH,
   ENERGY_FORECAST_PATH,
+  DEPTH_PATH,
   ...Object.values(ENERGY_OUTLOOK_PATHS),
 ];
 
@@ -1025,6 +1032,7 @@ module.exports = (app) => {
     const waypoints = [
       { lat: position.lat, lon: position.lon, distanceFromStartNm: 0 },
     ];
+    lastCompiledWaypoints = waypoints;
     // Bulletins ride the same online window, filtered to the position
     await refreshBulletinsOnline("here", waypoints);
     await refreshSynopticsOnline("here", waypoints);
@@ -1192,6 +1200,7 @@ module.exports = (app) => {
       );
     }
     const waypoints = sampleRoutePoints(coordinates);
+    lastCompiledWaypoints = waypoints;
     // Bulletins ride the same online window as the weather (SPEC §3.1
     // metareaBulletin): pulled first so this briefing carries them
     await refreshBulletinsOnline("briefing", waypoints);
@@ -1333,6 +1342,23 @@ module.exports = (app) => {
    *
    * @param {"oneshot"|"cron"} trigger
    */
+  /** The most recent fetch run's promise: fire-and-forget callers
+   * (the delta feed's oneshot, the cron tick) don't await it, but the
+   * test harness needs to wait for the whole serialized chain to
+   * settle (CI flake: fixed sleeps raced two sequential compiles). */
+  let lastFetchRun = Promise.resolve();
+
+  /** Active critical-hazard notifications by id (work doc #30) plus
+   * per-id miss counters for the two-cycle clear hysteresis, and the
+   * acknowledged set (ack suppresses re-raise until the event leaves
+   * and returns). */
+  const activeHazardNotifications = new Map();
+  const hazardMissCounts = new Map();
+  const acknowledgedHazards = new Set();
+  /** Waypoints of the most recent compile (route or here): the
+   * escalation's track reference between refreshes. */
+  let lastCompiledWaypoints = null;
+
   async function runFetch(trigger) {
     if (!isOnline()) {
       sourceStatus?.record({ ...WEATHER_SOURCE, skip: true });
@@ -1446,6 +1472,152 @@ module.exports = (app) => {
    * (work doc #8: tile data flows over the host bus relay — the
    * widget never calls REST).
    */
+  /**
+   * Publishes one critical-hazard notification as a Signal K delta
+   * (work doc #30): every connected client — node dashboards, Vessel
+   * Systems, mobile apps — sees it, not just this plugin's webapp.
+   *
+   * @param {string} id - Content-addressed event id
+   * @param {{state: string, message: string}|null} notification - The
+   *   notification to raise, or null to clear (nominal)
+   */
+  function publishHazardNotification(id, notification) {
+    if (typeof app.handleMessage !== "function") {
+      return;
+    }
+    app.handleMessage(PLUGIN_ID, {
+      context: "vessels.self",
+      updates: [
+        {
+          timestamp: new Date().toISOString(),
+          values: [
+            {
+              path: `notifications.navigation.briefing.hazards.${id}`,
+              value: notification
+                ? {
+                    state: notification.state,
+                    method: ["visual", "sound"],
+                    message: notification.message,
+                    timestamp: new Date().toISOString(),
+                  }
+                : { state: "normal", method: [], message: "" },
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  /**
+   * The escalation runner (work doc #30): classifies the cached
+   * warning stream (GDACS events, CAP alerts, bulletin blocks)
+   * against the vessel's exposure and publishes Signal K
+   * notifications for the qualifying subset. Runs on the ticker —
+   * NOT internet-gated: a cached tsunami warning must still raise
+   * its notification with the boat offline. Hysteresis: an event
+   * needs to fall out of the matrix for two consecutive cycles
+   * before its notification clears; acknowledged events are not
+   * re-raised until they leave and return.
+   *
+   * @param {Date} [now]
+   * @returns {Promise<void>}
+   */
+  async function runHazardEscalation(now = new Date()) {
+    if (!sourceStatus) {
+      return;
+    }
+    const vessel = vesselPosition();
+    if (!vessel) {
+      return; // No position: exposure cannot be judged
+    }
+    const track = lastCompiledWaypoints?.length
+      ? lastCompiledWaypoints.map((w) => [w.lon, w.lat])
+      : [[vessel.lon, vessel.lat]];
+    const gdacsEvents = hazardSource.filterHazards({
+      events: await hazardSource.loadHazards(app.getDataDirPath()),
+      vessel,
+      waypoints: lastCompiledWaypoints ?? [],
+      minAlertLevel: "orange",
+      now,
+    });
+    const capAlerts = capSource.filterCapAlerts({
+      events: await capSource.loadCapAlerts(app.getDataDirPath()),
+      track,
+      minSeverity: capMinSeverity,
+      now,
+    });
+    // Bulletin blocks: severe-class blocks whose native geometry
+    // contains the vessel position now (direct-hit test)
+    const bulletin = await bulletinForTrack(
+      lastCompiledWaypoints ?? [
+        { lat: vessel.lat, lon: vessel.lon, distanceFromStartNm: 0 },
+      ],
+    );
+    const bulletinBlocks = (bulletin?.blocks ?? []).map((block) => ({
+      ...block,
+      id: `${bulletin.header ?? "bulletin"}|${block.text?.slice(0, 40) ?? ""}`,
+      isSevere: () =>
+        /\b(GALE|STORM|HURRICANE(?! CENTER)|TYPHOON)\b/i.test(block.text ?? ""),
+      containsPoint: (lon, lat) => {
+        if (block.geometry?.type !== "polygon") {
+          return false;
+        }
+        const { ringContains } = require("./bulletin-engine.js");
+        return ringContains(block.geometry.coordinates, lon, lat);
+      },
+    }));
+    const escalations = hazardAlerts.escalateHazards({
+      gdacsEvents,
+      capAlerts,
+      bulletinBlocks,
+      vessel,
+      navigationState: observations[NAVIGATION_STATE_PATH],
+      hasDepthReading: typeof observations[DEPTH_PATH] === "number",
+      now,
+    });
+    const { active, cleared } = hazardAlerts.applyHysteresis({
+      previous: activeHazardNotifications,
+      current: escalations,
+      missCounts: hazardMissCounts,
+    });
+    for (const [id, notification] of active) {
+      if (acknowledgedHazards.has(id)) {
+        continue; // Acked for this event instance: no re-raise
+      }
+      publishHazardNotification(id, notification);
+    }
+    for (const id of cleared) {
+      if (activeHazardNotifications.has(id)) {
+        publishHazardNotification(id, null); // Back to nominal
+        acknowledgedHazards.delete(id);
+      }
+    }
+    activeHazardNotifications.clear();
+    for (const [id, notification] of active) {
+      activeHazardNotifications.set(id, notification);
+    }
+  }
+
+  /**
+   * Acknowledges one critical-hazard notification (work doc #30): the
+   * notification returns to nominal and the event id is remembered —
+   * the escalation does not re-raise it until the event leaves the
+   * matrix and returns.
+   *
+   * @param {string} id - Event id (without the ack prefix)
+   */
+  function acknowledgeHazard(id) {
+    const wanted = String(id);
+    for (const key of [...activeHazardNotifications.keys()]) {
+      // The notification id embeds the event id; a partial match is
+      // enough (the webapp sends the event id from the message data)
+      if (key.includes(wanted)) {
+        publishHazardNotification(key, null);
+      }
+    }
+    acknowledgedHazards.add(wanted);
+  }
+
   function publishBriefMeta() {
     if (typeof app.handleMessage !== "function") {
       return;
@@ -1606,7 +1778,7 @@ module.exports = (app) => {
       soc: observations[HOUSE_SOC_PATH],
     });
     if (result.fetch === "oneshot") {
-      runFetch("oneshot");
+      lastFetchRun = runFetch("oneshot").catch(() => {});
     }
   }
 
@@ -1805,6 +1977,12 @@ module.exports = (app) => {
     // period can be traversed deterministically
     __setStartedAt: (value) => {
       startedAt = value;
+    },
+    // Test seam: resolves when the most recent fire-and-forget fetch
+    // run and the serialized refresh chain behind it have settled
+    __settle: async () => {
+      await lastFetchRun;
+      await refreshChain;
     },
 
     schema: {
@@ -2097,7 +2275,7 @@ module.exports = (app) => {
       cronTimer = setInterval(() => {
         const result = stateMachine.tick(new Date());
         if (result.fetch === "cron") {
-          runFetch("cron");
+          lastFetchRun = runFetch("cron").catch(() => {});
         }
         // Staleness backstop: edge-triggered fetches miss the case
         // where the server runs for days without an internet-state
@@ -2117,6 +2295,12 @@ module.exports = (app) => {
         // period for the server to replay current values
         recordSignalKSources().catch((error) =>
           app.debug?.(`Source status check failed: ${error.message}`),
+        );
+        // Critical hazard escalation (work doc #30): runs every tick
+        // regardless of link state — a cached tsunami warning must
+        // still raise its notification with the boat offline
+        runHazardEscalation(new Date()).catch((error) =>
+          app.debug?.(`Hazard escalation failed: ${error.message}`),
         );
       }, CRON_TICK_INTERVAL_MS);
       cronTimer.unref?.();
@@ -2378,6 +2562,20 @@ module.exports = (app) => {
           }
         }
         res.json(await bulletinForTrack(waypoints));
+      });
+
+      // Acknowledge a critical-hazard notification (work doc #30):
+      // the notification returns to nominal for every connected
+      // client, and the escalation does not re-raise the event until
+      // it leaves the matrix and returns
+      router.post("/api/hazards/ack", async (req, res) => {
+        const id = typeof req.body?.id === "string" ? req.body.id : null;
+        if (!id) {
+          res.status(400).json({ error: "id required" });
+          return;
+        }
+        acknowledgeHazard(id);
+        res.json({ acknowledged: id });
       });
 
       router.post("/api/bulletin/refresh", async (_req, res) => {
