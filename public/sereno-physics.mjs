@@ -629,6 +629,30 @@ export function sunAltitudeDeg(date, latDeg, lonDeg) {
 }
 
 /**
+ * Great-circle distance between two positions in nautical miles,
+ * antimeridian-safe by construction (the haversine cosine folds the
+ * longitude delta). Shared by the route simulation's hazard engine
+ * (which keeps its own copy under the same name) and the webapp's
+ * live plan trim (work doc #28).
+ *
+ * @param {number} lat1 - Degrees
+ * @param {number} lon1 - Degrees east
+ * @param {number} lat2 - Degrees
+ * @param {number} lon2 - Degrees east
+ * @returns {number} Distance in nautical miles
+ */
+export function greatCircleNm(lat1, lon1, lat2, lon2) {
+  const toRad = Math.PI / 180;
+  const φ1 = lat1 * toRad;
+  const φ2 = lat2 * toRad;
+  const dφ = (lat2 - lat1) * toRad;
+  const dλ = (lon2 - lon1) * toRad;
+  const a =
+    Math.sin(dφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ / 2) ** 2;
+  return 2 * 3440.065 * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/**
  * Whether it is night for sailing decisions at an instant and
  * position (sun altitude below {@link NIGHT_SUN_ALTITUDE_DEG}).
  *

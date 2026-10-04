@@ -18,6 +18,7 @@ import {
   parseTimezoneOffset,
   setShipTime,
   shipTimeLabel,
+  trimWaypointsToPosition,
 } from "./models.mjs";
 
 import {
@@ -177,6 +178,10 @@ class PassageOutlook extends HTMLElement {
       () => this.recheckDeparture(),
       10 * 60000,
     );
+    // Live trim progress: the plan re-anchors when the boat advanced
+    // this far along the compiled track since the last simulation
+    // (work doc #28) — one re-anchor per leg, not per position update
+    this._liveTrimAdvanceNm = 15;
 
     this.renderRoute();
     this.connectStream();
@@ -224,13 +229,48 @@ class PassageOutlook extends HTMLElement {
   }
 
   /**
-   * The 10-minute re-check (work doc #15): the dawn anchor drifts as
-   * time passes; re-simulate only when it moved more than 10 minutes,
-   * so the view doesn't flap around the crossing.
+   * Live re-anchor (work doc #28): when the boat advanced far enough
+   * along the compiled track since the last simulation, the simulated
+   * plan re-trims to the boat — sailed waypoints drop out, the boat
+   * position joins the track. Hysteresis: one re-anchor per
+   * {@link this._liveTrimAdvanceNm} of progress, not per position fix.
    */
-  recheckDeparture() {
+  maybeReliveTrim() {
+    const payload = this._briefing?.payload;
+    if (!payload?.waypoints) {
+      return;
+    }
+    const trimmed = trimWaypointsToPosition(
+      payload.waypoints,
+      this._vesselPosition ?? null,
+    );
+    if (!trimmed) {
+      return;
+    }
+    const last = this._simulatedTrimProgressNm;
+    if (last != null && trimmed.progressNm - last < this._liveTrimAdvanceNm) {
+      return; // Not enough advance: keep the running plan
+    }
+    this.simulate();
+  }
+
+  /**
+   * The 10-minute re-check (work doc #15): refresh the navigation
+   * state (stream fallback — the cast-off may predate the page or the
+   * stream may have missed it) and re-simulate when the anchor moved
+   * more than 10 minutes, so the plan keeps advancing while sailing.
+   */
+  async recheckDeparture() {
     if (!this._briefing?.payload || !this._exceptions) {
       return;
+    }
+    try {
+      const navState = await fetchNavigationState();
+      if (navState != null) {
+        this._navigationState = navState;
+      }
+    } catch {
+      // Best effort: the stream carries the live value
     }
     const next = this.departureState();
     if (!next?.departure) {
@@ -295,6 +335,39 @@ class PassageOutlook extends HTMLElement {
       onConnection: (connected) => {
         this._onlinePill.classList.toggle("online", connected);
         this._onlinePill.textContent = connected ? "ONLINE" : "OFFLINE";
+      },
+      // Navigation state drives the departure anchor (work doc #15):
+      // when the crew starts sailing — or drops the hook — the plan
+      // re-anchors right away instead of at the next re-check
+      onNavigationState: (value) => {
+        if (value === this._navigationState) {
+          return;
+        }
+        const was = this._navigationState;
+        this._navigationState = value;
+        if (this._briefing?.payload && this._exceptions) {
+          const next = this.departureState();
+          const nextMs = next?.departure?.time?.getTime() ?? null;
+          // Anchor moved (moored → underway flips it to now): re-simulate
+          if (
+            nextMs != null &&
+            Math.abs((nextMs ?? 0) - (this._simulatedDepartureMs ?? 0)) > 60000
+          ) {
+            this.simulate();
+          } else if (was == null) {
+            // First value: just repaint the chip/control
+            this.renderDeparture(next);
+          }
+        }
+      },
+      // Vessel position (work doc #28): the plan re-anchors to actual
+      // progress between compiles — the handler is cheap (nearest-
+      // waypoint lookup) and the hysteresis gate does the throttling
+      onPosition: (position) => {
+        this._vesselPosition = position;
+        if (this._briefing?.payload && this._exceptions) {
+          this.maybeReliveTrim();
+        }
       },
     });
   }
@@ -558,6 +631,18 @@ class PassageOutlook extends HTMLElement {
     if (!payload) {
       return;
     }
+    // Live re-anchor (work doc #28): between compiles the simulated
+    // plan starts at the boat — sailed waypoints drop out, the boat
+    // position carries the nearest waypoint's forecasts. The compile
+    // payload itself stays untouched (it is the served truth).
+    const trim = trimWaypointsToPosition(
+      payload.waypoints,
+      this._vesselPosition ?? null,
+    );
+    this._simulatedTrimProgressNm = trim?.progressNm ?? null;
+    const simPayload = trim
+      ? { ...payload, waypoints: trim.waypoints }
+      : payload;
     // The effective departure anchors the whole schedule (work doc
     // #15): auto daylight anchor or the crew's override. The simulated
     // anchor is remembered so the 10-minute re-check can tell drift
@@ -581,7 +666,7 @@ class PassageOutlook extends HTMLElement {
     this._worker.postMessage({
       type: "simulate",
       params: {
-        payload,
+        payload: simPayload,
         config: this._config ?? {},
         matrix: this._matrix,
         polar: this._polar?.table ?? null,

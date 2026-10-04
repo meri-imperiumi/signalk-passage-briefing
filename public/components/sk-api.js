@@ -45,7 +45,13 @@ export async function fetchJson(url, timeoutMs = 8000, options = {}) {
  *   updates (signalk-ships-time), path-disambiguated
  * @param {(connected: boolean) => void} [handlers.onConnection]
  */
-export function createStream({ onMode, onTime, onConnection }) {
+export function createStream({
+  onMode,
+  onTime,
+  onConnection,
+  onNavigationState,
+  onPosition,
+}) {
   let ws = null;
   let attempt = 0;
   let closed = false;
@@ -85,6 +91,13 @@ export function createStream({ onMode, onTime, onConnection }) {
               minRate: 60000,
               policy: "throttle",
             },
+            // Navigation state drives the departure anchor (work doc
+            // #15): the moment the crew starts sailing, the plan
+            // re-anchors to now instead of a stale first-light
+            { path: "navigation.state", minRate: 5000, policy: "throttle" },
+            // Vessel position drives the live plan re-anchor (work doc
+            // #28): throttled hard — the consumer gates on advance
+            { path: "navigation.position", minRate: 15000, policy: "throttle" },
           ],
         }),
       );
@@ -99,6 +112,27 @@ export function createStream({ onMode, onTime, onConnection }) {
               onMode?.(value);
             } else if (TIME_PATHS.has(path) && value != null) {
               onTime?.(path, value);
+            } else if (
+              path === "navigation.state" &&
+              typeof value === "string"
+            ) {
+              onNavigationState?.(value);
+            } else if (path === "navigation.position") {
+              // Wrapped or plain value shapes both occur
+              const position =
+                value && typeof value === "object" && value.value !== undefined
+                  ? value.value
+                  : value;
+              if (
+                position &&
+                Number.isFinite(position.latitude) &&
+                Number.isFinite(position.longitude)
+              ) {
+                onPosition?.({
+                  lat: position.latitude,
+                  lon: position.longitude,
+                });
+              }
             }
           }
         }

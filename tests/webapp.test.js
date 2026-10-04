@@ -24,6 +24,7 @@ test("webapp view models", async (t) => {
     sparklineColumns,
     splitSevere,
     tacticalNow,
+    trimWaypointsToPosition,
     hereHourly,
     hereNow,
   } = await import("../public/components/models.mjs");
@@ -1112,6 +1113,58 @@ test("webapp view models", async (t) => {
         ["departure", 0, "10-03 16:55Z"],
         ["zone", 3.4, "10-03 20:18Z"],
       ]);
+    },
+  );
+
+  await t.test(
+    "trimWaypointsToPosition re-anchors the plan to the boat",
+    async () => {
+      const waypoints = [
+        { lat: 0, lon: 0, distanceFromStartNm: 0, forecasts: [{ t: "a" }] },
+        { lat: 0.5, lon: 0, distanceFromStartNm: 30, forecasts: [{ t: "b" }] },
+        { lat: 1.0, lon: 0, distanceFromStartNm: 60, forecasts: [{ t: "c" }] },
+      ];
+      // Boat 12.5 nm in (nearest waypoint is the origin): both forward
+      // waypoints remain, distances recomputed from the boat
+      const trimmed = trimWaypointsToPosition(waypoints, {
+        lat: 0.2,
+        lon: 0.06,
+      });
+      assert.ok(trimmed, "trim produced");
+      assert.equal(trimmed.waypoints.length, 3);
+      const boat = trimmed.waypoints[0];
+      assert.equal(boat.distanceFromStartNm, 0);
+      assert.ok(Math.abs(boat.lat - 0.2) < 1e-9);
+      assert.deepEqual(boat.forecasts, [{ t: "a" }]); // Nearest forecasts
+      assert.ok(
+        trimmed.waypoints[1].distanceFromStartNm > 15 &&
+          trimmed.waypoints[1].distanceFromStartNm < 20,
+        `first ahead ${trimmed.waypoints[1].distanceFromStartNm}`,
+      );
+      assert.ok(trimmed.progressNm > 10 && trimmed.progressNm < 15);
+
+      // Boat 45 nm in: the first waypoint is behind — the plan starts
+      // at the boat carrying the nearest (30 nm) waypoint's forecasts
+      const mid = trimWaypointsToPosition(waypoints, { lat: 0.75, lon: 0 });
+      assert.equal(mid.waypoints.length, 2);
+      assert.ok(Math.abs(mid.waypoints[0].lat - 0.75) < 1e-9);
+      assert.deepEqual(mid.waypoints[0].forecasts, [{ t: "b" }]);
+      assert.ok(
+        mid.waypoints[1].distanceFromStartNm > 10 &&
+          mid.waypoints[1].distanceFromStartNm < 20,
+        `mid remaining ${mid.waypoints[1].distanceFromStartNm}`,
+      );
+
+      // Boat before the first waypoint: the boat replaces it (carrying
+      // its forecasts), both forward waypoints keep their shifted spots
+      const before = trimWaypointsToPosition(waypoints, { lat: -0.1, lon: 0 });
+      assert.equal(before.waypoints.length, 3);
+      assert.equal(before.waypoints[0].distanceFromStartNm, 0);
+      assert.ok(before.waypoints[1].distanceFromStartNm > 20);
+
+      // Degenerate inputs
+      assert.equal(trimWaypointsToPosition(null, { lat: 0, lon: 0 }), null);
+      assert.equal(trimWaypointsToPosition(waypoints, null), null);
     },
   );
 });

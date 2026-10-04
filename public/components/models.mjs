@@ -9,6 +9,7 @@
 
 import {
   assumedDepartureTime,
+  greatCircleNm,
   isNight,
   serenoComfort,
   travelDirection,
@@ -895,6 +896,77 @@ export function effectiveDeparture({
       dawnAltitudeDeg,
     }),
     assumed: true,
+  };
+}
+
+/**
+ * Trims a compiled waypoint list to the boat's actual position (work
+ * doc #28, live re-anchor): the briefing is forward-looking, so
+ * between compiles the simulated plan starts at the boat, not the
+ * route origin — sailed waypoints drop out, the boat position joins
+ * the track carrying the nearest waypoint's forecasts (weather at
+ * 15 nm offset differs little; the simulation interpolates the rest),
+ * and distances recompute from the boat.
+ *
+ * Pure geometry, no re-fetch: the payload's waypoint forecasts carry
+ * timestamps, and the simulation interpolates weather at the boat's
+ * position. Null when there is nothing to trim (no position, short
+ * track).
+ *
+ * @param {Array<{lat: number, lon: number, distanceFromStartNm:
+ *   number, forecasts: Array<object>}>} waypoints - Compiled payload
+ *   waypoints (30 nm resample of the plan)
+ * @param {{lat: number, lon: number}|null} vessel - Vessel position
+ * @returns {{waypoints: Array<object>, progressNm: number}|null} The
+ *   trimmed list (first entry is the boat) and the boat's progress
+ *   along the compiled plan (nm)
+ */
+export function trimWaypointsToPosition(waypoints, vessel) {
+  if (
+    !Array.isArray(waypoints) ||
+    waypoints.length < 2 ||
+    !vessel ||
+    !Number.isFinite(vessel.lat) ||
+    !Number.isFinite(vessel.lon)
+  ) {
+    return null;
+  }
+  let nearest = 0;
+  let best = Infinity;
+  waypoints.forEach((waypoint, index) => {
+    const d = greatCircleNm(vessel.lat, vessel.lon, waypoint.lat, waypoint.lon);
+    if (d < best) {
+      best = d;
+      nearest = index;
+    }
+  });
+  const anchor = waypoints[nearest];
+  // The boat's progress: the compiled distance up to the nearest
+  // waypoint, plus the hop from it to the boat (cross-track included —
+  // sailing to the next waypoint from here is what the crew will do)
+  const progressNm =
+    anchor.distanceFromStartNm +
+    greatCircleNm(vessel.lat, vessel.lon, anchor.lat, anchor.lon);
+  // The boat replaces the anchor waypoint; waypoints still ahead keep
+  // their forecasts, distances recomputed from the boat. A waypoint
+  // that now sits behind (the boat passed it) drops out.
+  const boat = {
+    ...anchor,
+    lat: vessel.lat,
+    lon: vessel.lon,
+    distanceFromStartNm: 0,
+  };
+  const ahead = waypoints
+    .slice(nearest + 1)
+    .map((w) => ({
+      ...w,
+      distanceFromStartNm:
+        Math.round((w.distanceFromStartNm - progressNm) * 10) / 10,
+    }))
+    .filter((w) => w.distanceFromStartNm >= 0);
+  return {
+    waypoints: [boat, ...ahead],
+    progressNm: Math.round(progressNm * 10) / 10,
   };
 }
 

@@ -2157,3 +2157,138 @@ test("serve-time bulletin re-filter: cached payload blocks recompute", async () 
 
   plugin.stop();
 });
+
+test("route progress: briefing trims to the sailed legs (work doc #28)", async () => {
+  const { mockOpenMeteo } = require("./openmeteo-mock.js");
+  const app = createMockApp();
+  // Vessel 30 nm into the 90 nm meridian route ([0,0] → [0,0.5] →
+  // [0,1.5]), past the 0.5° waypoint, navigating toward the last point
+  app.getSelfPath = (path) =>
+    path === "navigation.position"
+      ? { latitude: 0.5, longitude: 0 }
+      : path === "navigation.course.activeRoute"
+        ? {
+            href: "/resources/routes/r1",
+            pointIndex: 2,
+          }
+        : null;
+  app.resourcesApi = {
+    async getResource(resType, resId) {
+      if (resType === "routes" && resId === "r1") {
+        return {
+          name: "Meridian leg",
+          feature: {
+            geometry: {
+              coordinates: [
+                [0, 0],
+                [0, 0.5],
+                [0, 1.5],
+              ],
+            },
+          },
+        };
+      }
+      throw new Error("not found");
+    },
+  };
+  const plugin = pluginFactory(app);
+  plugin.start({});
+  plugin.registerWithRouter(app.router);
+  const feed = app.getDeltaHandlers()[0];
+  const call = async (path, options = {}) => {
+    const r = app.getRoutes().find((x) => x.path === path);
+    const res = {
+      code: null,
+      payload: null,
+      status(c) {
+        this.code = c;
+        return this;
+      },
+      json(p) {
+        this.payload = p;
+      },
+    };
+    await r.handler({ query: options.query ?? {} }, res);
+    return res;
+  };
+  feed({
+    updates: [
+      { values: [{ path: "network.internet.state", value: "online" }] },
+    ],
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = mockOpenMeteo();
+  try {
+    const refreshRes = await call("/api/briefing/refresh", {
+      query: { route: "r1" },
+    });
+    console.log(
+      "REFRESH:",
+      refreshRes.code,
+      JSON.stringify(refreshRes.payload),
+    );
+    assert.equal(
+      refreshRes.code,
+      null,
+      `refresh: ${JSON.stringify(refreshRes.payload)}`,
+    );
+    const res = await call("/api/briefing", { query: { route: "r1" } });
+    assert.ok(res.payload?.payload, `serve: ${JSON.stringify(res.payload)}`);
+    const payload = res.payload.payload;
+    // The plan starts at the boat: first waypoint is the vessel
+    // position, and the sailed leg (origin → 0.5°N) drops out
+    assert.ok(
+      Math.abs(payload.waypoints[0].lat - 0.5) < 0.01,
+      `first waypoint ${payload.waypoints[0].lat}`,
+    );
+    assert.equal(payload.waypoints[0].distanceFromStartNm, 0);
+    // Trim point stamped: ~30 nm along the original plan
+    assert.ok(
+      payload.trimmedFromNm > 25 && payload.trimmedFromNm < 35,
+      `trimmedFromNm ${payload.trimmedFromNm}`,
+    );
+    // The remaining distance is what is left of the 90 nm leg
+    const last = payload.waypoints.at(-1);
+    assert.ok(
+      Math.abs(last.distanceFromStartNm - 60) < 2,
+      `remaining ${last.distanceFromStartNm}`,
+    );
+
+    // A reversed route navigates toward lower indices: same boat, the
+    // plan now runs boat → 0.5° → origin
+    app.getSelfPath = (path) =>
+      path === "navigation.position"
+        ? { latitude: 1.0, longitude: 0 }
+        : path === "navigation.course.activeRoute"
+          ? {
+              href: "/resources/routes/r1",
+              pointIndex: 1,
+              reverse: true,
+            }
+          : null;
+    await call("/api/briefing/refresh", { query: { route: "r1" } });
+    const reversed = await call("/api/briefing", { query: { route: "r1" } });
+    const revPayload = reversed.payload.payload;
+    assert.ok(
+      Math.abs(revPayload.waypoints[0].lat - 1.0) < 0.01,
+      `reversed start ${revPayload.waypoints[0].lat}`,
+    );
+    // Travel order: target 0.5° first, then the origin
+    // Travel order: latitudes descend from the boat toward the origin
+    // (the resampler may add even-spacing points between)
+    const lats = revPayload.waypoints.map((w) => w.lat);
+    assert.ok(
+      lats.every((lat, i) => i === 0 || lat <= lats[i - 1] + 1e-9),
+      `travel order ${JSON.stringify(lats)}`,
+    );
+    assert.ok(Math.abs(revPayload.waypoints.at(-1).lat) < 0.01);
+    assert.ok(
+      revPayload.trimmedFromNm > 55 && revPayload.trimmedFromNm < 65,
+      `reversed trimmedFromNm ${revPayload.trimmedFromNm}`,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  plugin.stop();
+});

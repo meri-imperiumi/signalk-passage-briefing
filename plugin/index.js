@@ -431,6 +431,88 @@ module.exports = (app) => {
    * UKHO structured warnings and portal text from several zones ride
    * the same cache). */
   const MERGE_BULLETINS = 4;
+  /**
+   * Trims a route plan to the actual progress (work doc #28): the
+   * briefing is forward-looking, so when the course provider reports
+   * the vessel navigating THIS route, the plan starts where the boat
+   * is — sailing from here to the waypoint it is heading for
+   * (`activeRoute.pointIndex` into the route's own geometry) and then
+   * the remaining points. Everything behind drops out.
+   *
+   * No course-provider progress, no point index, or a briefing for a
+   * different route than the active one: no trim — the full plan is
+   * the right answer for a hypothetical passage. The start point is
+   * the vessel's actual position when available, else the last passed
+   * waypoint.
+   *
+   * @param {string} routeId - Route being briefed
+   * @param {Array<[number, number]>} raw - Route geometry ([lon, lat])
+   * @returns {{coordinates: Array<[number, number]>, trimmedFromNm:
+   *   number}|null} Trimmed geometry and the trim point's distance
+   *   along the original route (null = no trim, full plan)
+   */
+  function routeTrimFor(routeId, raw) {
+    if (!Array.isArray(raw) || raw.length < 3) {
+      return null;
+    }
+    const unwrap = (v) =>
+      v && typeof v === "object" && v.value !== undefined ? v.value : v;
+    const active = unwrap(
+      observations[ACTIVE_ROUTE_PATH] !== undefined
+        ? observations[ACTIVE_ROUTE_PATH]
+        : typeof app.getSelfPath === "function"
+          ? app.getSelfPath(ACTIVE_ROUTE_PATH)
+          : null,
+    );
+    const href = unwrap(active?.href);
+    const match =
+      typeof href === "string"
+        ? href.match(/\/resources\/routes\/([^/?#]+)/)
+        : null;
+    if (!match || decodeURIComponent(match[1]) !== routeId) {
+      return null; // Briefing for a route the boat is not navigating
+    }
+    const pointIndex = active?.pointIndex;
+    const reverse = active?.reverse === true;
+    if (
+      !Number.isInteger(pointIndex) ||
+      pointIndex < 0 ||
+      pointIndex >= raw.length ||
+      (reverse && pointIndex >= raw.length - 1)
+    ) {
+      return null; // Not past the first point, or an index we cannot use
+    }
+    // Travel order decides what remains: forward navigates toward
+    // higher indices, reverse toward lower ones (the course provider's
+    // `reverse` flag). The start point is the vessel's actual position
+    // when available, else the last passed waypoint.
+    const target = raw[pointIndex];
+    const vessel = vesselPosition();
+    const start = vessel
+      ? [vessel.lon, vessel.lat]
+      : reverse
+        ? raw[pointIndex + 1]
+        : raw[pointIndex - 1];
+    const remaining = reverse
+      ? raw.slice(0, pointIndex + 1).reverse()
+      : raw.slice(pointIndex);
+    // Distance along the stored plan from its start to the trim point:
+    // the boat sits between the target and the last passed point
+    const reference = reverse ? target : raw[pointIndex - 1];
+    const anchorSlice = reverse
+      ? raw.slice(0, pointIndex + 1)
+      : raw.slice(0, pointIndex);
+    const trimmedFromNm =
+      Math.round(
+        (routeDistanceNm(anchorSlice) +
+          distanceNmLatLon(reference[1], reference[0], start[1], start[0])) *
+          10,
+      ) / 10;
+    return {
+      coordinates: [start, ...remaining],
+      trimmedFromNm,
+    };
+  }
 
   /** Filtered blocks for one cache entry against a track: structured
    * UKHO JSON entries skip the text pipeline entirely. */
@@ -1019,6 +1101,17 @@ module.exports = (app) => {
     if (!Array.isArray(coordinates) || coordinates.length < 2) {
       throw new Error(`Route ${routeId} has no track`);
     }
+    // Forward-looking (work doc #28): when the boat is navigating this
+    // route, the plan starts where the boat is — the sailed legs drop
+    // out, and the trim point's distance along the original plan rides
+    // the payload
+    const trim = routeTrimFor(routeId, coordinates);
+    if (trim) {
+      coordinates = trim.coordinates;
+      app.debug?.(
+        `Briefing trimmed to route progress: ${trim.trimmedFromNm} nm in`,
+      );
+    }
     const waypoints = sampleRoutePoints(coordinates);
     // Bulletins ride the same online window as the weather (SPEC §3.1
     // metareaBulletin): pulled first so this briefing carries them
@@ -1112,6 +1205,12 @@ module.exports = (app) => {
       observations[ENERGY_FORECAST_PATH],
     );
     attachEnergyToPayload(payload);
+    // The trim point, when the plan anchored to actual progress (work
+    // doc #28): the payload's distances count from the boat, and this
+    // says how far along the original plan that was
+    if (trim) {
+      payload.trimmedFromNm = trim.trimmedFromNm;
+    }
     await savePayload(app.getDataDirPath(), routeId, payload);
     await writeFile(
       join(app.getDataDirPath(), "weather", "last-route"),

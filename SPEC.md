@@ -253,6 +253,9 @@ interface UnifiedWeatherPayload {
     time: string;               // ISO — the schedule's anchor instant
     reason: string;             // 'underway' | 'next_dawn' | 'daylight_prep' | 'no_dawn' | 'manual'
   };
+  trimmedFromNm?: number;       // when the plan trimmed to route progress (work doc #28):
+                                // the boat's distance along the original plan; the
+                                // payload's distances count from the boat
 }
 
 interface TimeStepForecast {
