@@ -1482,7 +1482,38 @@ describe("plugin", () => {
     assert.deepEqual(await providers[0].methods.listResources(), {});
   });
 
-  test("oneshot fetch prefers the active route over the last briefed one", async () => {
+  /**
+ * Waits until a predicate holds, polling with a deadline — the
+ * fire-and-forget refresh chains (`runFetch` is not awaited by the
+ * delta feed) need wall-clock-independent waiting on slow CI.
+ *
+ * @param {() => boolean} predicate
+ * @param {number} [timeoutMs=5000]
+ * @returns {Promise<void>} Rejects when the deadline passes
+ */
+async function waitFor(predicate, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) {
+      throw new Error("waitFor: predicate never held");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+/**
+ * Waits until a file exists (parent directories auto-created by the
+ * plugin's cache writes) with a deadline.
+ *
+ * @param {string} filePath
+ * @param {number} [timeoutMs=5000]
+ * @returns {Promise<void>}
+ */
+async function waitForFile(filePath, timeoutMs = 5000) {
+  await waitFor(() => existsSync(filePath), timeoutMs);
+}
+
+test("oneshot fetch prefers the active route over the last briefed one", async () => {
     const { mockOpenMeteo } = require("./openmeteo-mock.js");
     const app = createMockApp();
     const geometry = (lat) => ({
@@ -1530,11 +1561,13 @@ describe("plugin", () => {
           },
         ],
       });
-      await new Promise((resolve) => setTimeout(resolve, 30));
     } finally {
       globalThis.fetch = originalFetch;
     }
 
+    // The oneshot fetch is fire-and-forget: wait for the r2 briefing
+    // to land instead of racing it with a fixed sleep
+    await waitForFile(join(app.dataDir, "weather", "latest-r2.json"));
     assert.ok(
       existsSync(join(app.dataDir, "weather", "latest-r2.json")),
       "active route r2 briefed",
