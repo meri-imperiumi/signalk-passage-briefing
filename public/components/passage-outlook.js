@@ -82,6 +82,10 @@ class PassageOutlook extends HTMLElement {
           display: flex; flex-wrap: wrap; gap: 8px;
           align-items: center; margin-bottom: 12px;
         }
+        /* Author display rules beat the UA's [hidden] { display: none }
+         * regardless of specificity — the embed mode's hidden header
+         * needs this spelled out */
+        header[hidden] { display: none; }
         h1 { flex: 1; margin: 0; }
         .pill {
           font-family: var(--font-data, ui-monospace, monospace);
@@ -124,17 +128,29 @@ class PassageOutlook extends HTMLElement {
         }
         .hazard-banner {
           border: 1px solid var(--color-red);
-          color: var(--color-red);
+          color: var(--bg-base);
           background: var(--color-red, #c00);
           padding: 10px 12px; margin-bottom: 12px;
           display: flex; justify-content: space-between; gap: 8px;
           align-items: center; flex-wrap: wrap;
           font-weight: 700;
         }
+        /* Same cascade rule: without this the banner renders always,
+         * empty, red — with an ACK that has nothing to acknowledge */
+        .hazard-banner[hidden] { display: none; }
         .hazard-banner .hazard-message {
           text-transform: uppercase; letter-spacing: 0.05em;
         }
-        .hazard-ack { min-height: 40px; padding: 6px 14px; flex: none; }
+        .hazard-ack {
+          min-height: 40px; padding: 6px 14px; flex: none;
+          border-color: var(--bg-base);
+          color: var(--bg-base);
+        }
+        .hazard-ack:hover,
+        .hazard-ack:active {
+          background-color: var(--bg-base);
+          color: var(--color-red);
+        }
       </style>
       <div class="hazard-banner" id="hazard-banner" hidden>
         <span class="hazard-message" id="hazard-message"></span>
