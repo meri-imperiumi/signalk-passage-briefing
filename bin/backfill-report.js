@@ -2,10 +2,10 @@
 /**
  * Logbook backfill & sail usage report.
  *
- * Runs the SPEC §4.2 sail preference backfill over a
- * `signalk-logbook` store using the wind snapshots written in the log
- * entries (no History API needed — usable ashore against a copy of
- * the log repository), then reports:
+ * Runs the SPEC §4.2 sail preference backfill over the logbook
+ * entries served by a Signal K server's `logentries` resource (the
+ * signalk-logbook contract), using the wind snapshots written in the
+ * log entries (no History API needed), then reports:
  *
  * 1. the learned sail preference matrix (SPEC §3.2);
  * 2. the conditions actually experienced per sail combination, next
@@ -15,11 +15,13 @@
  *
  * Usage:
  *
- *   node bin/backfill-report.js [--dir <logbook-dir>] [--sails <json>]
- *        [--from <iso>] [--to <iso>] [--db <sqlite-file>] [--json]
+ *   node bin/backfill-report.js [--url <server>] [--token <jwt>]
+ *        [--sails <json>] [--from <iso>] [--to <iso>] [--db <sqlite-file>]
+ *        [--json]
  *
- * Defaults: `--dir ~/.signalk/plugin-config-data/signalk-logbook`,
- * `--sails ~/.signalk/plugin-config-data/sailsconfiguration.json`.
+ * Defaults: `--url http://localhost:3000` (a `readonly` token is
+ * enough for reads), `--sails
+ * ~/.signalk/plugin-config-data/sailsconfiguration.json`.
  *
  * Once on board, re-run the backfill through the plugin's
  * `POST /api/backfill?source=history&baseUrl=<server>` route to learn
@@ -34,7 +36,7 @@ const { join } = require("node:path");
 
 const { PassageDatabase } = require("../plugin/sqlite-db.js");
 const {
-  readLogbookEntries,
+  readLogbookEntriesRest,
   readLogbookSailEvents,
 } = require("../plugin/logbook-source.js");
 const {
@@ -48,6 +50,11 @@ const {
 } = require("../plugin/sails-configuration.js");
 
 const SIGNALK_DIR = join(homedir(), ".signalk", "plugin-config-data");
+
+/**
+ * Server to read the logbook from when `--url` is not given.
+ */
+const DEFAULT_SERVER_URL = "http://localhost:3000";
 
 /**
  * Parses argv into a `{flag: value}` map (`--flag value`, boolean
@@ -77,10 +84,9 @@ function parseArgs(argv) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const logbookDir =
-    typeof args.dir === "string"
-      ? args.dir
-      : join(SIGNALK_DIR, "signalk-logbook");
+  const serverUrl =
+    typeof args.url === "string" ? args.url : DEFAULT_SERVER_URL;
+  const token = typeof args.token === "string" ? args.token : undefined;
   const sailsFile =
     typeof args.sails === "string"
       ? args.sails
@@ -94,54 +100,75 @@ function main() {
   );
   const db = new PassageDatabase(dataDir);
 
-  return Promise.all([
-    readLogbookEntries(logbookDir),
-    readSailsConfiguration(sailsFile),
-  ])
-    .then(async ([entries, sails]) => {
-      const knownSailKeys =
-        sails.length > 0
-          ? new Set(sails.map((sail) => sail.nameKey))
-          : undefined;
-      const events = await readLogbookSailEvents({
-        dir: logbookDir,
+  (async () => {
+    try {
+      const report = await collectReport({
+        serverUrl,
+        token,
+        sailsFile,
         from,
         to,
-        knownSailKeys,
-      });
-      const summary = await backfillSailEvents({
         db,
-        events,
-        getWindStats: createLogbookWindStats(entries),
       });
-      const matrix = db.getSailPreferenceMatrix();
-      const usage = summarizeSailUsage(
-        db.getSailEvents({ limit: 10000 }),
-        db.getWindHistory("0000-01-01T00:00:00Z", "9999-12-31T23:59:59Z"),
-      );
-      return {
-        logbook: logbookDir,
-        entries: entries.length,
-        events: events.length,
-        summary,
-        matrix,
-        usage,
-        sails,
-      };
-    })
-    .then((report) => {
-      db.close();
       if (asJson) {
         console.log(JSON.stringify(report, null, 2));
         return;
       }
       printReport(report);
-    })
-    .catch((error) => {
-      db.close();
+    } catch (error) {
       console.error(`backfill-report: ${error.message}`);
       process.exitCode = 1;
-    });
+    } finally {
+      db.close();
+    }
+  })();
+}
+
+/**
+ * Reads the logbook over the resources API and runs the backfill.
+ *
+ * @param {object} options
+ * @param {string} options.serverUrl - Signal K server base URL
+ * @param {string|undefined} options.token - Bearer token for reads
+ * @param {string} options.sailsFile - Sails configuration JSON path
+ * @param {string|undefined} options.from - Event window start
+ * @param {string|undefined} options.to - Event window end
+ * @param {object} options.db - Passage database
+ * @returns {Promise<object>} Report for printReport/JSON output
+ */
+async function collectReport({ serverUrl, token, sailsFile, from, to, db }) {
+  const entries = await readLogbookEntriesRest({
+    baseUrl: serverUrl,
+    token,
+  });
+  const sails = await readSailsConfiguration(sailsFile);
+  const knownSailKeys =
+    sails.length > 0 ? new Set(sails.map((sail) => sail.nameKey)) : undefined;
+  const events = await readLogbookSailEvents({
+    entries,
+    from,
+    to,
+    knownSailKeys,
+  });
+  const summary = await backfillSailEvents({
+    db,
+    events,
+    getWindStats: createLogbookWindStats(entries),
+  });
+  const matrix = db.getSailPreferenceMatrix();
+  const usage = summarizeSailUsage(
+    db.getSailEvents({ limit: 10000 }),
+    db.getWindHistory("0000-01-01T00:00:00Z", "9999-12-31T23:59:59Z"),
+  );
+  return {
+    logbook: serverUrl,
+    entries: entries.length,
+    events: events.length,
+    summary,
+    matrix,
+    usage,
+    sails,
+  };
 }
 
 /**

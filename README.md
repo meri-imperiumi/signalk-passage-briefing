@@ -28,7 +28,7 @@ Part of the Lille Ø offshore suite, alongside [@meri-imperiumi/signalk-energy-p
 - Resources API — route geometries and polar tables
 - History API (on board) — wind/attempt snapshots for the sail-event backfill
 - Published tile paths — `navigation.briefing.generatedAt` / `.route` / `.hasNew` / `.comfort` drive the plotter-extension tile (`.acknowledgedAt` is writable to clear the NEW badge)
-- [signalk-logbook](https://github.com/meri-imperiumi/signalk-logbook) store — crewed sail events (reefs, sail changes) that train the preference matrix
+- `logentries` resource API (for example [signalk-logbook](https://github.com/meri-imperiumi/signalk-logbook)) — crewed sail events (reefs, sail changes) that train the preference matrix; any provider implementing the resource contract works
 - [signalk-ships-time](https://github.com/meri-imperiumi/signalk-ships-time) — `environment.time.timezoneOffset` / `.timezoneRegion`, the vessel's published timezone: briefing stamps render in ship's time when available (the offset rides on every stamp), falling back to UTC `Z` when nothing is published
 - [signalk-watch-schedule](https://github.com/hoeken/signalk-watch-schedule) — `watch.state.onWatch`, `watch.state.startedAt`, `watch.system` and `watch.schedule`: the running watch rotation. While a watch is running, planned sail changes anchor to the previous watch handover (both teams awake) instead of sunrise/sunset; boundaries are extrapolated across the forecast horizon from the rotation cycle
 - [@signalk/sailsconfiguration](https://www.npmjs.com/package/@signalk/sailsconfiguration) — sail inventory used to filter free-text noise out of log entries

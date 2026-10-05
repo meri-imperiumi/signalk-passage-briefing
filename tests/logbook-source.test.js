@@ -1,16 +1,27 @@
 const { test, describe } = require("node:test");
 const assert = require("node:assert/strict");
-const { mkdtempSync, writeFileSync, mkdirSync } = require("node:fs");
-const { tmpdir } = require("node:os");
-const { join } = require("node:path");
 
 const {
   parseSailsString,
   sailStateKey,
   classifySailChange,
   extractSailEvents,
+  normalizeLogEntry,
+  readLogbookEntries,
   readLogbookSailEvents,
 } = require("../plugin/logbook-source.js");
+
+/**
+ * Asserts two numbers are equal within float noise (the SI
+ * conversions round-trip exactly in formula, not in IEEE 754).
+ *
+ * @param {number} actual
+ * @param {number} expected
+ * @param {number} [epsilon]
+ */
+function approx(actual, expected, epsilon = 1e-9) {
+  assert.ok(Math.abs(actual - expected) < epsilon, `${actual} ≈ ${expected}`);
+}
 
 describe("parseSailsString", () => {
   test("parses a plain sail list", () => {
@@ -242,83 +253,215 @@ describe("extractSailEvents", () => {
   });
 });
 
-describe("readLogbookSailEvents", () => {
-  test("walks day files chronologically and filters the range", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "passage-logbook-"));
-    writeFileSync(
-      join(dir, "2023-03-19.yml"),
-      `- datetime: 2023-03-19T09:00:00.000Z
-  text: "Motor stopped, sailing with Main, Genoa 1"
-  wind:
-    speed: 10.0
-    direction: 200
-`,
-    );
-    writeFileSync(
-      join(dir, "2023-03-20.yml"),
-      `- datetime: 2023-03-20T08:00:00.000Z
-  text: "Sails set: Main (1st reef), Genoa 1"
-  wind:
-    speed: 16.0
-    direction: 210
-- datetime: 2023-03-20T10:00:00.000Z
-  text: "Sails down, motoring"
-  wind:
-    speed: 8.0
-    direction: 220
-`,
-    );
-    // Unrelated file must be ignored
-    writeFileSync(join(dir, "notes.txt"), "hello");
+describe("normalizeLogEntry", () => {
+  test("converts SI telemetry to the consumer units", () => {
+    const entry = normalizeLogEntry({
+      id: "1b4e28ba-2fa1-11d2-883f-b9a761bde3fb",
+      datetime: "2023-03-20T14:19:16.099Z",
+      text: "Sails set: Main (1st reef), Genoa 1",
+      telemetry: [
+        {
+          path: "navigation.position",
+          value: {
+            latitude: 59.9,
+            longitude: 24.9,
+            altitude: 0,
+            source: "GPS",
+          },
+        },
+        {
+          path: "environment.wind.speedOverGround",
+          value: 5.144444444444445,
+        },
+        {
+          path: "environment.wind.directionTrue",
+          value: 3.9269908169872414,
+        },
+      ],
+      author: "",
+      origin: "auto",
+      category: "navigation",
+    });
+    assert.deepEqual(entry.position, { latitude: 59.9, longitude: 24.9 });
+    approx(entry.wind.speed, 10);
+    approx(entry.wind.direction, 225);
+    // Logbook fields beyond the consumer shape are dropped
+    assert.equal(entry.id, undefined);
+    assert.equal(entry.origin, undefined);
+  });
 
-    const all = await readLogbookSailEvents({ dir });
+  test("takes the first usable pathvalue when a path repeats", () => {
+    const entry = normalizeLogEntry({
+      datetime: "2023-03-20T14:19:16.099Z",
+      telemetry: [
+        { path: "environment.wind.speedOverGround", value: 5.14, $source: "a" },
+        {
+          path: "environment.wind.speedOverGround",
+          value: 10.28,
+          $source: "b",
+        },
+      ],
+    });
+    approx(entry.wind.speed, 5.14 * (3600 / 1852));
+  });
+
+  test("entries without telemetry still parse", () => {
+    assert.deepEqual(
+      normalizeLogEntry({
+        datetime: "2023-03-20T14:19:16.099Z",
+        text: "Sails set: Main",
+      }),
+      {
+        datetime: "2023-03-20T14:19:16.099Z",
+        text: "Sails set: Main",
+      },
+    );
+    assert.deepEqual(normalizeLogEntry({}), {});
+    assert.equal(normalizeLogEntry(null), null);
+  });
+});
+
+describe("readLogbookEntries", () => {
+  test("lists the resource map chronologically through the resources API", async () => {
+    const queries = [];
+    const app = {
+      resourcesApi: {
+        async listResources(type, query) {
+          assert.equal(type, "logentries");
+          queries.push(query);
+          return {
+            "uuid-b": {
+              datetime: "2023-03-20T08:00:00.000Z",
+              text: "Sails set: Main (1st reef), Genoa 1",
+            },
+            "uuid-a": {
+              datetime: "2023-03-19T09:00:00.000Z",
+              text: "Motor stopped, sailing with Main, Genoa 1",
+            },
+          };
+        },
+      },
+    };
+    const entries = await readLogbookEntries(app);
+    assert.equal(entries.length, 2);
+    assert.equal(entries[0].datetime, "2023-03-19T09:00:00.000Z");
+    assert.equal(entries[1].datetime, "2023-03-20T08:00:00.000Z");
+    // The listing contract requires an explicit window or limit
+    assert.ok(queries[0].from && queries[0].to);
+  });
+
+  test("no resources API or no provider reads as an empty store", async () => {
+    assert.deepEqual(await readLogbookEntries({}), []);
+    const failing = {
+      resourcesApi: {
+        async listResources() {
+          throw new Error("no provider for the type");
+        },
+      },
+    };
+    assert.deepEqual(await readLogbookEntries(failing), []);
+  });
+});
+
+describe("readLogbookSailEvents", () => {
+  test("extracts events from the resources API and filters the range", async () => {
+    const app = {
+      resourcesApi: {
+        async listResources() {
+          return {
+            "uuid-b": {
+              datetime: "2023-03-20T08:00:00.000Z",
+              text: "Sails set: Main (1st reef), Genoa 1",
+              telemetry: [
+                {
+                  path: "environment.wind.speedOverGround",
+                  value: 8.231111111111111,
+                },
+                {
+                  path: "environment.wind.directionTrue",
+                  value: 3.665191429188092,
+                },
+              ],
+            },
+            "uuid-c": {
+              datetime: "2023-03-20T10:00:00.000Z",
+              text: "Sails down, motoring",
+              telemetry: [
+                {
+                  path: "environment.wind.speedOverGround",
+                  value: 4.115555555555556,
+                },
+              ],
+            },
+            "uuid-a": {
+              datetime: "2023-03-19T09:00:00.000Z",
+              text: "Motor stopped, sailing with Main, Genoa 1",
+              telemetry: [
+                {
+                  path: "environment.wind.speedOverGround",
+                  value: 5.144444444444445,
+                },
+                {
+                  path: "environment.wind.directionTrue",
+                  value: 3.490658503988659,
+                },
+              ],
+            },
+          };
+        },
+      },
+    };
+
+    const all = await readLogbookSailEvents({ app });
     assert.equal(all.length, 2);
     assert.equal(all[0].eventType, "REEF_INCREASE");
+    approx(all[0].twsKnots, 16);
     assert.equal(all[1].eventType, "SAIL_CHANGE");
 
     const windowed = await readLogbookSailEvents({
-      dir,
+      app,
       from: "2023-03-20T00:00:00.000Z",
       to: "2023-03-20T09:00:00.000Z",
     });
     assert.equal(windowed.length, 1);
     assert.equal(windowed[0].eventType, "REEF_INCREASE");
-
-    // Missing store is not fatal
-    const none = await readLogbookSailEvents({
-      dir: join(dir, "nope"),
-    });
-    assert.deepEqual(none, []);
   });
 
   test("state tracking reaches back before the requested range", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "passage-logbook-"));
-    writeFileSync(
-      join(dir, "2023-03-19.yml"),
-      `- datetime: 2023-03-19T09:00:00.000Z
-  text: "Sails set: Main (1st reef)"
-`,
-    );
-    writeFileSync(
-      join(dir, "2023-03-20.yml"),
-      `- datetime: 2023-03-20T08:00:00.000Z
-  text: "Sails set: Main (2nd reef)"
-`,
-    );
+    const app = {
+      resourcesApi: {
+        async listResources() {
+          return {
+            "uuid-a": {
+              datetime: "2023-03-19T09:00:00.000Z",
+              text: "Sails set: Main (1st reef)",
+            },
+            "uuid-b": {
+              datetime: "2023-03-20T08:00:00.000Z",
+              text: "Sails set: Main (2nd reef)",
+            },
+          };
+        },
+      },
+    };
     const windowed = await readLogbookSailEvents({
-      dir,
+      app,
       from: "2023-03-20T00:00:00.000Z",
     });
     assert.equal(windowed.length, 1);
-    // Classified against the state from the previous day's file
+    // Classified against the state from the previous day's entry
     assert.equal(windowed[0].eventType, "REEF_INCREASE");
   });
 
-  test("skips corrupt day files", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "passage-logbook-"));
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "2023-03-20.yml"), "{{{{ not yaml");
-    const events = await readLogbookSailEvents({ dir });
-    assert.deepEqual(events, []);
+  test("missing provider is not fatal", async () => {
+    const failing = {
+      resourcesApi: {
+        async listResources() {
+          throw new Error("no provider for the type");
+        },
+      },
+    };
+    assert.deepEqual(await readLogbookSailEvents({ app: failing }), []);
+    assert.deepEqual(await readLogbookSailEvents({ app: {} }), []);
   });
 });

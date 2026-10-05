@@ -1,11 +1,14 @@
 /**
- * Sail-change event source: signalk-logbook's on-disk YAML store.
+ * Sail-change event source: the signalk-logbook `logentries` resource.
  *
- * The logbook writes one YAML file per UTC day at
- * `<configPath>/plugin-config-data/signalk-logbook/<YYYY-MM-DD>.yml`,
- * with human-friendly units (knots, degrees). Sail changes land in the
- * entry `text` field written by the logbook's automatic triggers, plus
- * manual edits the crew appended afterwards:
+ * signalk-logbook serves its entries as a Signal K v2 resource of type
+ * `logentries` (the contract documented in that repo's
+ * `docs/logentries-resource.md`): each entry is `{id, datetime, text,
+ * telemetry[], author, origin, category}`, where `telemetry` carries
+ * flattened delta pathvalues — `{path, value, $source?}` — in Signal K
+ * SI units. Sail changes land in the entry `text` field written by the
+ * logbook's automatic triggers, plus manual edits the crew appended
+ * afterwards:
  *
  * - `Sails set: Main (1st reef), Genoa 1 (20% furled)` — sail change
  *   while sailing;
@@ -18,28 +21,38 @@
  * - free-text suffixes after the sail list (`. Gusts up to 27kt. …`)
  *   from manual edits are ignored.
  *
- * The reader walks the day files chronologically and tracks the
- * continuously-known sail state so events can be classified into
- * REEF_INCREASE / REEF_DECREASE / SAIL_CHANGE against the previous
- * state (SPEC §4.1 event types).
- *
- * This module is the *only* place that knows the logbook storage
- * format. The Signal K Resource API will expose logbooks as resources
- * in the future — when it lands, swap the implementations of
- * {@link readLogbookEntries} / {@link readLogbookSailEvents} for a
- * Resource API client; the extracted event shape stays the same.
+ * The reader lists entries through `app.resourcesApi` (in-process, no
+ * tokens) and normalizes the resource representation into the shape
+ * the event extractor and the wind-stats builder consume: position
+ * from the `navigation.position` pathvalue, wind snapshots from
+ * `environment.wind.speedOverGround` (m/s → knots) and
+ * `environment.wind.directionTrue` (radians → degrees). This module
+ * is the *only* place that knows the resource representation.
  *
  * @file logbook-source.js
  */
 
-const { readdir, readFile } = require("node:fs/promises");
-const path = require("node:path");
-const { parse: parseYaml } = require("yaml");
+/**
+ * The Signal K resource type signalk-logbook registers.
+ */
+const RESOURCE_TYPE = "logentries";
 
 /**
- * Logbook day file name pattern.
+ * The `logentries` listing contract requires an explicit window or
+ * limit (a bare listing answers 400); these bound "all history".
  */
-const DAY_FILE_RE = /^\d{4}-\d{2}-\d{2}\.yml$/;
+const ALL_HISTORY_FROM = "1970-01-01T00:00:00.000Z";
+const ALL_HISTORY_TO = "9999-12-31T23:59:59.999Z";
+
+/**
+ * m/s → knots (1852 m per NM).
+ */
+const MS_TO_KNOTS = 3600 / 1852;
+
+/**
+ * Radians → degrees.
+ */
+const RAD_TO_DEG = 180 / Math.PI;
 
 /**
  * Entry texts that declare a new sail state as a sail *action* (the
@@ -381,60 +394,199 @@ function foldTwaDegrees(degrees) {
 }
 
 /**
- * Reads every logbook entry from the on-disk store, in chronological
- * (day file) order. Day files are tiny; the walk is cheap even for
- * years of logs.
+ * Normalizes a `logentries` resource entry into the shape the event
+ * extractor and wind-stats builder consume: `datetime` and `text`
+ * pass through; `position` comes from the `navigation.position`
+ * pathvalue; the wind snapshot comes from
+ * `environment.wind.speedOverGround` (m/s → kn) and
+ * `environment.wind.directionTrue` (rad → deg). The same path may
+ * appear more than once (multiple `$source`s per the Multiple Values
+ * logic) — the first usable value wins. Unknown paths and logbook
+ * fields are ignored: this consumer needs the snapshot only.
  *
- * @param {string} dir - Logbook store directory
- *   (`<configPath>/plugin-config-data/signalk-logbook`)
- * @returns {Promise<Array<object>>} All entries across all day files
+ * @param {object} entry - Resource entry (`{id, datetime, text, telemetry[], …}`)
+ * @returns {{datetime?: string, text?: string, position?: {latitude: number, longitude: number}, wind?: {speed?: number, direction?: number}}|null}
+ *   Normalized entry, or null for non-objects
  */
-async function readLogbookEntries(dir) {
-  let files;
-  try {
-    files = (await readdir(dir)).filter((f) => DAY_FILE_RE.test(f)).sort();
-  } catch (_error) {
-    return []; // No logbook store (plugin not installed)
+function normalizeLogEntry(entry) {
+  if (!entry || typeof entry !== "object") {
+    return null;
   }
-  const entries = [];
-  for (const file of files) {
-    let dayEntries;
-    try {
-      const content = await readFile(path.join(dir, file), "utf8");
-      dayEntries = content.trim() ? parseYaml(content) : [];
-    } catch (_error) {
-      continue; // Corrupt day file — skip, not fatal
+  /** @type {ReturnType<typeof normalizeLogEntry>} */
+  const out = {};
+  if (typeof entry.datetime === "string") {
+    out.datetime = entry.datetime;
+  }
+  if (typeof entry.text === "string") {
+    out.text = entry.text;
+  }
+  const telemetry = Array.isArray(entry.telemetry) ? entry.telemetry : [];
+  for (const pathvalue of telemetry) {
+    if (
+      !pathvalue ||
+      typeof pathvalue.path !== "string" ||
+      pathvalue.value == null
+    ) {
+      continue;
     }
-    if (Array.isArray(dayEntries)) {
-      entries.push(...dayEntries);
+    const { path, value } = pathvalue;
+    if (path === "navigation.position") {
+      if (
+        !out.position &&
+        typeof value.latitude === "number" &&
+        typeof value.longitude === "number"
+      ) {
+        out.position = { latitude: value.latitude, longitude: value.longitude };
+      }
+    } else if (path === "environment.wind.speedOverGround") {
+      if (
+        out.wind?.speed === undefined &&
+        typeof value === "number" &&
+        Number.isFinite(value)
+      ) {
+        out.wind = { ...out.wind, speed: value * MS_TO_KNOTS };
+      }
+    } else if (path === "environment.wind.directionTrue") {
+      if (
+        out.wind?.direction === undefined &&
+        typeof value === "number" &&
+        Number.isFinite(value)
+      ) {
+        out.wind = { ...out.wind, direction: value * RAD_TO_DEG };
+      }
     }
   }
-  return entries;
+  return out;
 }
 
 /**
- * Reads the logbook store and extracts sail-change events, optionally
- * bounded to a window (state tracking always starts from the earliest
- * day file so mid-history ranges still classify correctly).
+ * Lists every logbook entry through the server's resources API, in
+ * chronological order. The `logentries` listing contract requires an
+ * explicit window, so "all history" is an explicit epoch-to-eternity
+ * range.
+ *
+ * A missing resources API (old server) or a failed listing (the
+ * logbook plugin not installed — no provider for the type) reads as
+ * an empty store, never a failure: this consumer degrades, the same
+ * way a missing store directory used to.
+ *
+ * @param {object} app - Signal K plugin `app`
+ * @returns {Promise<Array<object>>} Normalized entries, oldest first
+ */
+async function readLogbookEntries(app) {
+  if (typeof app?.resourcesApi?.listResources !== "function") {
+    return []; // No resources API on this server
+  }
+  let resourceMap;
+  try {
+    resourceMap = await app.resourcesApi.listResources(RESOURCE_TYPE, {
+      from: ALL_HISTORY_FROM,
+      to: ALL_HISTORY_TO,
+    });
+  } catch (_error) {
+    return []; // No provider for the type (logbook not installed)
+  }
+  if (!resourceMap || typeof resourceMap !== "object") {
+    return [];
+  }
+  return Object.values(resourceMap)
+    .map(normalizeLogEntry)
+    .filter(Boolean)
+    .sort(
+      (a, b) =>
+        new Date(a.datetime ?? 0).getTime() -
+        new Date(b.datetime ?? 0).getTime(),
+    );
+}
+
+/**
+ * Lists every logbook entry over the REST surface of the resources
+ * API — the transport for tools run outside the server process
+ * (ashore, against a reachable Signal K server). Unlike the
+ * in-process reader this one is loud: failures throw, since a CLI
+ * run by a human should report why it found nothing.
  *
  * @param {object} [options]
- * @param {string} [options.dir] - Logbook store directory
+ * @param {string} [options.baseUrl] - Server base URL
+ *   (default `http://localhost:3000`)
+ * @param {string} [options.token] - Bearer token (readonly suffices
+ *   for reads)
+ * @returns {Promise<Array<object>>} Normalized entries, oldest first
+ */
+async function readLogbookEntriesRest({ baseUrl, token } = {}) {
+  const base = (baseUrl ?? "http://localhost:3000").replace(/\/+$/, "");
+  const query = new URLSearchParams({
+    from: ALL_HISTORY_FROM,
+    to: ALL_HISTORY_TO,
+  });
+  const url = `${base}/signalk/v2/api/resources/${RESOURCE_TYPE}?${query}`;
+  const response = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    throw new Error(
+      `logentries listing returned ${response.status}: ${response.statusText}`,
+    );
+  }
+  const resourceMap = await response.json();
+  if (!resourceMap || typeof resourceMap !== "object") {
+    return [];
+  }
+  return Object.values(resourceMap)
+    .map(normalizeLogEntry)
+    .filter(Boolean)
+    .sort(
+      (a, b) =>
+        new Date(a.datetime ?? 0).getTime() -
+        new Date(b.datetime ?? 0).getTime(),
+    );
+}
+
+/**
+ * Whether the `logentries` resource is being served on this server
+ * (the signalk-logbook provider is registered). Probed with a
+ * one-entry listing — cheap even on years of logs.
+ *
+ * @param {object} app - Signal K plugin `app`
+ * @returns {Promise<boolean>}
+ */
+async function logbookAvailable(app) {
+  if (typeof app?.resourcesApi?.listResources !== "function") {
+    return false;
+  }
+  try {
+    await app.resourcesApi.listResources(RESOURCE_TYPE, { limit: 1 });
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+/**
+ * Reads the logbook through the resources API and extracts
+ * sail-change events, optionally bounded to a window (state tracking
+ * always starts from the oldest entry so mid-history ranges still
+ * classify correctly).
+ *
+ * @param {object} [options]
+ * @param {object} [options.app] - Signal K plugin `app`; omitted when
+ *   `entries` is given
  * @param {Date|string} [options.from] - Window start (inclusive)
  * @param {Date|string} [options.to] - Window end (inclusive)
- * @param {Array<object>} [options.entries] - Pre-read entries (tests);
- *   overrides `dir`
+ * @param {Array<object>} [options.entries] - Pre-read entries (tests,
+ *   tools that already listed); overrides `app`
  * @param {Set<string>} [options.knownSailKeys] - Sail inventory name
  *   keys to accept (see {@link parseSailsString})
  * @returns {Promise<Array<LogbookSailEvent>>}
  */
 async function readLogbookSailEvents({
-  dir,
+  app,
   from,
   to,
   entries,
   knownSailKeys,
 } = {}) {
-  const all = entries || (await readLogbookEntries(dir));
+  const all = entries || (await readLogbookEntries(app));
   const events = extractSailEvents(all, { knownSailKeys });
   if (from == null && to == null) {
     return events;
@@ -448,16 +600,16 @@ async function readLogbookSailEvents({
 }
 
 module.exports = {
-  DAY_FILE_RE,
-  SAIL_CHANGE_RE,
-  SAIL_STATE_RE,
-  SAILS_DOWN_RE,
+  RESOURCE_TYPE,
   normalizeSailName,
   parseSailsString,
   sailStateKey,
   classifySailChange,
   extractSailEvents,
+  normalizeLogEntry,
   readLogbookEntries,
+  readLogbookEntriesRest,
+  logbookAvailable,
   readLogbookSailEvents,
   foldTwaDegrees,
 };

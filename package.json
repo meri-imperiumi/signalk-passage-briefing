@@ -46,8 +46,7 @@
   "dependencies": {
     "@openwaters/maritime-zones": "^0.2.1",
     "astronomy-engine": "^2.1.19",
-    "satellite.js": "^7.1.0",
-    "yaml": "^2.9.0"
+    "satellite.js": "^7.1.0"
   },
   "devDependencies": {
     "@signalk/server-api": "^2.30.0"

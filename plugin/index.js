@@ -20,17 +20,12 @@
 
 const { join } = require("node:path");
 const { homedir } = require("node:os");
-const {
-  mkdir,
-  readdir,
-  readFile,
-  unlink,
-  writeFile,
-} = require("node:fs/promises");
+const { mkdir, readFile, unlink, writeFile } = require("node:fs/promises");
 
 const { PassageStateMachine } = require("./state-machine.js");
 const { PassageDatabase } = require("./sqlite-db.js");
 const {
+  logbookAvailable,
   readLogbookEntries,
   readLogbookSailEvents,
 } = require("./logbook-source.js");
@@ -1782,18 +1777,6 @@ module.exports = (app) => {
     }
   }
 
-  /**
-   * Location of the signalk-logbook on-disk store. When the Signal K
-   * Resource API grows logbook support, this (and the logbook-source
-   * module behind it) is the swap point.
-   *
-   * @returns {string}
-   */
-  function logbookStoreDir() {
-    const configPath = app.config?.configPath ?? app.dataDir;
-    return join(configPath, "plugin-config-data", "signalk-logbook");
-  }
-
   /** Startup grace (ms) before the delta-fed path sources are
    * recorded in the status registry (work doc #23, bergie session
    * note): the server replays current values to new subscriptions a
@@ -1932,19 +1915,12 @@ module.exports = (app) => {
         now,
       });
     }
-    let logbookReadable = false;
-    try {
-      await readdir(logbookStoreDir());
-      logbookReadable = true;
-    } catch (_error) {
-      logbookReadable = false;
-    }
     sourceStatus.record({
       id: "sk-logbook",
       label: "Logbook (signalk-logbook)",
       kind: "signalk",
-      url: logbookStoreDir(),
-      ...(logbookReadable ? {} : { absent: true }),
+      url: "resources/logentries",
+      ...((await logbookAvailable(app)) ? {} : { absent: true }),
       now,
     });
   }
@@ -2440,7 +2416,7 @@ module.exports = (app) => {
       router.get("/api/logbook-events", async (req, res) => {
         try {
           const events = await readLogbookSailEvents({
-            dir: logbookStoreDir(),
+            app,
             from:
               typeof req.query.from === "string" ? req.query.from : undefined,
             to: typeof req.query.to === "string" ? req.query.to : undefined,
@@ -2700,7 +2676,7 @@ module.exports = (app) => {
           const to =
             typeof req.query.to === "string" ? req.query.to : undefined;
           const events = await readLogbookSailEvents({
-            dir: logbookStoreDir(),
+            app,
             from,
             to,
             knownSailKeys: await knownSailKeys(),
@@ -2709,9 +2685,7 @@ module.exports = (app) => {
             req.query.source === "history" &&
             typeof req.query.baseUrl === "string"
               ? createHistoryWindStats({ baseUrl: req.query.baseUrl })
-              : createLogbookWindStats(
-                  await readLogbookEntries(logbookStoreDir()),
-                );
+              : createLogbookWindStats(await readLogbookEntries(app));
           const summary = await backfillSailEvents({
             db,
             events,

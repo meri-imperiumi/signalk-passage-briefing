@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Logbook reading moved from signalk-logbook's on-disk YAML store to the Signal K v2 Resources API: the plugin now consumes the `logentries` resource type (the contract signalk-logbook documents in `docs/logentries-resource.md` and serves as its reference provider) through `app.resourcesApi` — in-process, no tokens, no filesystem coupling to another plugin's storage layout. The reader normalizes the resource representation at one boundary (`navigation.position` pathvalue for position, `environment.wind.speedOverGround` m/s → kn and `environment.wind.directionTrue` rad → deg for the wind snapshots); the sail-text parsing and event classification are unchanged. The source-status checklist row probes the resource type instead of the store directory. `bin/backfill-report.js` reads over the REST surface (`--url`/`--token`, a `readonly` token suffices) instead of a local YAML copy — usable ashore against any reachable server. The `yaml` dependency is dropped.
+
 ## [0.7.1] - 2026-10-05
 
 ### Fixed
