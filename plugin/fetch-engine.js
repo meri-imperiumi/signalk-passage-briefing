@@ -564,11 +564,21 @@ async function fetchWeatherAlongTrack({
   if (currentsResponse != null) {
     models.push("marine:smoc_currents");
   }
+  const fetchedAt = new Date().toISOString();
   return {
     metadata: {
-      fetchedAt: new Date().toISOString(),
+      fetchedAt,
       source: "api",
       models,
+      // Where this forecast came from (work doc #31): the canonical
+      // per-position Open-Meteo forecast page for the first waypoint
+      provenance: {
+        kind: "forecast",
+        label: `Open-Meteo · ${models.join(", ")}`,
+        url: `https://open-meteo.com/en/docs?latitude=${waypoints[0].lat}&longitude=${waypoints[0].lon}`,
+        viewerBase: null,
+        at: fetchedAt,
+      },
     },
     waypoints: payloadWaypoints,
   };

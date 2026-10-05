@@ -186,6 +186,7 @@ function computePasses({ tles, lat, lon, from, hours }) {
           // Pass risen: remember where it came over the horizon
           above = {
             satellite: tle.displayName,
+            line1: tle.line1,
             rise: {
               timestamp: date.toISOString(),
               azimuthDeg: look != null ? (look.azimuth * 180) / Math.PI : 0,
@@ -218,9 +219,27 @@ function computePasses({ tles, lat, lon, from, hours }) {
 }
 
 /**
+ * NORAD catalog number from a TLE line 1 (columns 3–7): the key
+ * tracker pages key on (work doc #31 provenance).
+ *
+ * @param {string} line1 - TLE line 1
+ * @returns {string|null} Catalog number, null when unparseable
+ */
+function catalogNumber(line1) {
+  if (typeof line1 !== "string" || line1.length < 7) {
+    return null;
+  }
+  const value = line1.slice(2, 7).trim();
+  return /^[A-Z0-9]+$/.test(value) ? value : null;
+}
+
+/**
  * Builds the satellite-pass events for a position and window, with
  * the full tactical visibility gate: peak over 15° (the haze line),
- * nautical night at the peak, forecast sky clear enough.
+ * nautical night at the peak, forecast sky clear enough. Each event
+ * carries its provenance (work doc #31): the TLE data origin is the
+ * CelesTrak stations file, the verification link a live tracker page
+ * for the catalog number.
  *
  * @param {object} params
  * @param {Array<{name: string, displayName: string, line1: string,
@@ -261,14 +280,25 @@ function computeSatelliteEvents({
       continue;
     }
     const magnitude = magnitudeEstimate(pass.peak.rangeKm);
+    const catalog = catalogNumber(pass.line1);
     events.push({
       kind: "satellite",
       timestamp: pass.peak.timestamp,
       tactical: true,
       name: pass.satellite,
+      catalogNumber: catalog,
       maxElevationDeg: Math.round(pass.peak.elevationDeg),
       magnitude: Math.round(magnitude * 10) / 10,
       description: `${pass.satellite} pass: approaching from ${azimuthCompass(pass.rise.azimuthDeg)}, peaks ${Math.round(pass.peak.elevationDeg)}° up (mag ${magnitude >= 0 ? "+" : "−"}${Math.abs(magnitude).toFixed(1)})`,
+      provenance: catalog
+        ? {
+            kind: "feed",
+            label: "CelesTrak TLE · live tracker",
+            url: `https://www.n2yo.com/satellite/?s=${catalog}`,
+            viewerUrl: null,
+            at: null,
+          }
+        : undefined,
     });
   }
   return events;
@@ -309,6 +339,7 @@ module.exports = {
   TRACKED_PREFIXES,
   PASS_STEP_MS,
   parseTLEs,
+  catalogNumber,
   magnitudeEstimate,
   azimuthCompass,
   computePasses,

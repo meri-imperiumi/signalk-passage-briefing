@@ -238,10 +238,19 @@ function twilightTimes(date, lat, lon) {
 
 /**
  * Daily night context for the briefing payload (`celestialNights`):
- * one entry per day with the twilight times of that night and the
- * moon phase/illumination at nightfall. The timeline's night glyph
- * and any future "when is it really dark" display read this instead
- * of re-deriving astronomy in the browser.
+ * one entry per day with the twilight times of that night, the moon
+ * phase/illumination at nightfall, and the sun/moon rise and set
+ * stamps bracketing the night (work doc #33 — the sky line reads
+ * these instead of re-deriving astronomy in the browser). The
+ * timeline's night glyph and any future "when is it really dark"
+ * display read this instead of re-deriving astronomy in the browser.
+ *
+ * Rise/set search semantics: sunset is the setting crossing before
+ * the night's civil dusk, sunrise the rising crossing after the dusk
+ * anchor; moonrise/moonset are the moon's next crossings after dusk
+ * (a moon already up at dusk reports tomorrow's rise — the set stamp
+ * is tonight's). Polar day/night and missing crossings degrade to
+ * null like the twilight bounds.
  *
  * @param {object} params
  * @param {Date} params.from - Window start
@@ -252,21 +261,61 @@ function twilightTimes(date, lat, lon) {
  *   moonIllumination: number, civilDusk: string|null,
  *   nauticalDusk: string|null, astronomicalDusk: string|null,
  *   astronomicalDawn: string|null, nauticalDawn: string|null,
- *   civilDawn: string|null}>}
+ *   civilDawn: string|null, sunrise: string|null, sunset: string|null,
+ *   moonrise: string|null, moonset: string|null}>}
  */
 function celestialNights({ from, days = 8, lat, lon }) {
   const nights = [];
+  const observer = observerAt(lat, lon);
+  // First rise/set crossing of a body after `start`; missing
+  // crossings (polar day/night, no crossing within the window)
+  // degrade to null
+  const riseSet = (body, direction, start) => {
+    try {
+      const found = A.SearchRiseSet(
+        body,
+        observer,
+        direction,
+        A.MakeTime(start),
+        1.5,
+      );
+      return found ? found.date.toISOString() : null;
+    } catch (_error) {
+      return null;
+    }
+  };
   for (let d = 0; d < days; d++) {
     const base = new Date(from.getTime() + d * 86400000);
     const twilights = twilightTimes(base, lat, lon);
     const anchor = twilights.nauticalDusk
       ? new Date(twilights.nauticalDusk)
       : base;
+    // Sunset: the setting crossing before this night's civil dusk —
+    // search from a day back so the search's forward window covers it
+    const civilDuskMs = twilights.civilDusk
+      ? new Date(twilights.civilDusk).getTime()
+      : null;
+    const sunset = civilDuskMs
+      ? riseSet(A.Body.Sun, -1, new Date(civilDuskMs - 18 * 3600000))
+      : null;
+    // Dawn side: the next rising after the dusk anchor (the same
+    // night's sunrise); the +2 min skips the numerical tangency at
+    // the crossing itself, as the dawn chain does
+    const afterDusk = new Date(anchor.getTime() + 120000);
+    const sunrise = riseSet(A.Body.Sun, 1, afterDusk);
+    // Moon brackets (work docs #32/#33): the next set and rise after
+    // dusk — a moon already up at dusk reports tomorrow's rise
+    const moonset = riseSet(A.Body.Moon, -1, afterDusk);
+    const moonrise = riseSet(A.Body.Moon, 1, afterDusk);
     nights.push({
       timestamp: anchor.toISOString(),
       moonPhaseDeg: Math.round(moonPhaseDeg(anchor) * 10) / 10,
       moonIllumination: Math.round(moonIllumination(anchor) * 1000) / 1000,
       ...twilights,
+      sunset,
+      sunrise,
+      moonrise,
+      moonset,
     });
   }
   return nights;

@@ -80,6 +80,20 @@ class PassageTimeline extends HTMLElement {
           color: var(--text-muted);
           white-space: nowrap;
         }
+        /* Night-darkness context (work doc #32): the cloud mark rides
+         * the moon glyph, opacity scaling with the cover — a clear
+         * night carries no mark at all */
+        .cloud { margin-left: 3px; }
+        /* Provenance (work doc #31): one muted arrow when the item
+         * names a source — the on-board viewer or the external
+         * origin. Metadata, not severity: no new colours. */
+        .prov {
+          margin-left: 6px;
+          color: inherit;
+          opacity: 0.7;
+          text-decoration: none;
+        }
+        .prov:hover, .prov:focus { opacity: 1; }
         .glyph { text-align: center; }
         .label { color: var(--text-main); }
         .detail {
@@ -115,7 +129,9 @@ class PassageTimeline extends HTMLElement {
    *
    * @param {Array<{hoursFromNow: number|null, stamp: string, kind:
    *   string, severity: string, label: string, detail: string,
-   *   night: boolean, comfortLevel: string|null, slatting: boolean}>|null}
+   *   night: boolean, moon: string|null, cloudCover: number|null,
+   *   comfortLevel: string|null, slatting: boolean,
+   *   provenance: object|null>}|null>
    *   timeline - From `mergeTimeline()`
    */
   setTimeline(timeline) {
@@ -147,8 +163,29 @@ class PassageTimeline extends HTMLElement {
       const when = document.createElement("span");
       when.className = "when";
       const hours = item.hoursFromNow != null ? `+${item.hoursFromNow}h` : "—";
-      when.textContent =
-        `${hours} ${item.stamp || ""}${item.night ? ` ${item.moon || "☾"}` : ""}`.trim();
+      when.append(
+        document.createTextNode(
+          `${hours} ${item.stamp || ""}${item.night ? ` ${item.moon || "☾"}` : ""}`.trim(),
+        ),
+      );
+      // Cloud mark beside the moon glyph (work doc #32): how dark
+      // the night actually is. Every night entry with a known cover
+      // carries the mark — a clear night shows the cloud faint
+      // instead of absent, so "no mark" unambiguously means the
+      // source publishes none (provider mode). Opacity scales with
+      // the cover.
+      const cover = item.cloudCover;
+      if (item.night && Number.isFinite(cover)) {
+        const cloud = document.createElement("span");
+        cloud.className = "cloud";
+        cloud.textContent = "☁";
+        cloud.style.opacity = (
+          0.3 +
+          0.7 * (Math.min(cover, 100) / 100)
+        ).toFixed(2);
+        cloud.title = `cloud ${Math.round(cover)} %`;
+        when.append(cloud);
+      }
 
       const glyph = document.createElement("span");
       glyph.className = "glyph";
@@ -166,6 +203,20 @@ class PassageTimeline extends HTMLElement {
         detail.className = "detail";
         detail.textContent = ` — ${item.detail}`;
         body.appendChild(detail);
+      }
+      // Provenance (work doc #31): the on-board viewer wins when
+      // installed (it works underway); the external origin is the
+      // fallback. No URL — no glyph.
+      const provUrl = item.provenance?.viewerUrl || item.provenance?.url;
+      if (provUrl) {
+        const prov = document.createElement("a");
+        prov.className = "prov";
+        prov.href = provUrl;
+        prov.target = "_blank";
+        prov.rel = "noopener";
+        prov.textContent = "↗";
+        prov.title = item.provenance.label ?? "source";
+        body.appendChild(prov);
       }
 
       row.append(tab, when, glyph, body);

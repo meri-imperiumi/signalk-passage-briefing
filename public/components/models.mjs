@@ -180,6 +180,26 @@ export function fmtShip(iso) {
 }
 
 /**
+ * Formats an ISO timestamp's clock time only (`HH:MM`), in ship's
+ * time when the vessel publishes a timezone, UTC otherwise. The sky
+ * line uses it — rise/set stamps never carry a date, the sky line's
+ * night context supplies it.
+ *
+ * @param {string|null|undefined} iso
+ * @returns {string} Empty string when unset/invalid
+ */
+export function fmtHm(iso) {
+  const d = iso != null ? new Date(iso) : null;
+  if (!d || Number.isNaN(d.getTime())) {
+    return "";
+  }
+  const off = shipTime?.offsetMinutes ?? 0;
+  const shifted = new Date(d.getTime() + off * 60000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}`;
+}
+
+/**
  * Formats a duration in hours as `1d 04h`, `5h 20m` or `45m`.
  *
  * @param {number|null|undefined} hours
@@ -489,6 +509,7 @@ export function hereNow(payload, rows = []) {
       currentSetDeg: null,
       mslpHpa: null,
       mslpTrend: null,
+      cloudCover: null,
       stamp: "",
     };
   }
@@ -511,6 +532,7 @@ export function hereNow(payload, rows = []) {
     currentSetDeg: step.current?.set ?? null,
     mslpHpa: mslpNow,
     mslpTrend,
+    cloudCover: step.surface?.cloudCover ?? null,
     stamp: fmtShip(step.timestamp),
   };
 }
@@ -734,7 +756,7 @@ function episodeDetail(episode, parts) {
  * @param {object|null} payload - Briefing payload
  *   (UnifiedWeatherPayload; optional `spaceEvents`,
  *   `zoneTransitions`, `celestialNights`, `timeZoneChanges`)
- * @returns {Array<{hoursFromNow: number|null, timestamp: string|null, stamp: string, kind: string, severity: string, label: string, detail: string, night: boolean, moon: string|null}>}
+ * @returns {Array<{hoursFromNow: number|null, timestamp: string|null, stamp: string, kind: string, severity: string, label: string, detail: string, night: boolean, moon: string|null, cloudCover: number|null, comfortLevel: string|null, slatting: boolean, provenance: object|null}>}
  */
 /**
  * Night glyph for a moon phase angle (work doc #3: the actual moon
@@ -750,6 +772,38 @@ export function moonGlyph(phaseDeg) {
 }
 
 /**
+ * The night entry nearest an instant from the payload's
+ * `celestialNights` — the shared lookup behind the night glyphs
+ * (moon phase at nightfall) and the sky line (work docs #17, #33).
+ *
+ * @param {string|null} timestamp - Event instant (ISO)
+ * @param {object|null} payload - Briefing payload
+ * @returns {object|null} The nearest `celestialNights` entry
+ */
+function nearestNight(timestamp, payload) {
+  const nights = payload?.celestialNights;
+  if (timestamp == null || !Array.isArray(nights) || nights.length === 0) {
+    return null;
+  }
+  const t = new Date(timestamp).getTime();
+  if (!Number.isFinite(t)) {
+    return null;
+  }
+  return (
+    nights.reduce((best, entry) => {
+      const et = new Date(entry.timestamp).getTime();
+      if (!Number.isFinite(et)) {
+        return best;
+      }
+      const distance = Math.abs(et - t);
+      return best == null || distance < best.distance
+        ? { distance, entry }
+        : best;
+    }, null)?.entry ?? null
+  );
+}
+
+/**
  * Night glyph for an instant from the payload's `celestialNights`
  * (nearest nightly entry), or null when the payload predates the
  * field or carries no timestamp.
@@ -759,42 +813,100 @@ export function moonGlyph(phaseDeg) {
  * @returns {string|null}
  */
 function moonGlyphFor(timestamp, payload) {
-  const nights = payload?.celestialNights;
-  if (timestamp == null || !Array.isArray(nights) || nights.length === 0) {
-    return null;
-  }
-  const t = new Date(timestamp).getTime();
-  if (!Number.isFinite(t)) {
-    return null;
-  }
-  const nearest = nights.reduce((best, entry) => {
-    const et = new Date(entry.timestamp).getTime();
-    if (!Number.isFinite(et)) {
-      return best;
-    }
-    const distance = Math.abs(et - t);
-    return best == null || distance < best.distance
-      ? { distance, entry }
-      : best;
-  }, null);
-  return nearest && Number.isFinite(nearest.entry.moonPhaseDeg)
-    ? moonGlyph(nearest.entry.moonPhaseDeg)
+  const nearest = nearestNight(timestamp, payload);
+  return nearest && Number.isFinite(nearest.moonPhaseDeg)
+    ? moonGlyph(nearest.moonPhaseDeg)
     : null;
 }
 
 /**
- * Night test for a timeline item: the crew's position at that hour,
- * interpolated along the simulated track, tested against the sun
- * (the same sunset threshold the sail logic buckets by). One uniform
- * answer to "does this happen at night", anchored at the payload's
- * fetch time — the same base the `+Xh` labels use.
+ * The sky line (work doc #33): the night's sun/moon times plus the
+ * cloud cover at an instant, as labelled segments the views join
+ * with separators. Times render `HH:MM` ship time; arrows mark
+ * rise/set; ☾ marks nautical dusk, the briefing's own night
+ * boundary. Moon stamps appear only inside the night window (dusk to
+ * sunrise) — a moon already up at dusk reports its set for tonight
+ * and its next rise lands outside the window, so both cases stay
+ * quiet rather than confusing. Cloud cover rides separately: null
+ * (provider mode, or unknown hour) omits the segment, never invents.
+ *
+ * @param {object|null} payload - Briefing payload (`celestialNights`
+ *   with the work-doc-#33 rise/set fields; older payloads degrade to
+ *   whatever fields they carry)
+ * @param {object} [options]
+ * @param {string|null} [options.timestamp] - Instant the night is
+ *   picked for (default: the payload's fetch time)
+ * @param {number|null} [options.cloudCover] - Cloud cover percent at
+ *   that instant
+ * @returns {Array<{text: string, title: string}>} Empty when the
+ *   payload predates the sky data
+ */
+export function skySegments(
+  payload,
+  { timestamp = null, cloudCover = null } = {},
+) {
+  const night = nearestNight(
+    timestamp ?? payload?.metadata?.fetchedAt ?? null,
+    payload,
+  );
+  if (!night) {
+    return [];
+  }
+  const segments = [];
+  if (night.sunset) {
+    segments.push({
+      text: `☀ ${fmtHm(night.sunset)}↓`,
+      title: `sunset ${fmtShip(night.sunset)}`,
+    });
+  }
+  if (night.nauticalDusk) {
+    segments.push({
+      text: `☾ ${fmtHm(night.nauticalDusk)}`,
+      title: `nautical dusk — dark from ${fmtShip(night.nauticalDusk)}`,
+    });
+  }
+  const windowStart = night.nauticalDusk
+    ? new Date(night.nauticalDusk).getTime()
+    : null;
+  const windowEnd = night.sunrise ? new Date(night.sunrise).getTime() : null;
+  const inNight = (iso) => {
+    if (windowStart == null || windowEnd == null) {
+      return false;
+    }
+    const t = new Date(iso).getTime();
+    return Number.isFinite(t) && t >= windowStart && t <= windowEnd;
+  };
+  if (night.moonrise && inNight(night.moonrise)) {
+    segments.push({
+      text: `☽↑ ${fmtHm(night.moonrise)}`,
+      title: `moonrise ${fmtShip(night.moonrise)}`,
+    });
+  }
+  if (night.moonset && inNight(night.moonset)) {
+    segments.push({
+      text: `☽↓ ${fmtHm(night.moonset)}`,
+      title: `moonset ${fmtShip(night.moonset)}`,
+    });
+  }
+  if (cloudCover != null && Number.isFinite(cloudCover)) {
+    segments.push({
+      text: `☁ ${Math.round(cloudCover)}%`,
+      title: `cloud cover ${Math.round(cloudCover)} %`,
+    });
+  }
+  return segments;
+}
+
+/**
+ * The crew's position at an item's hour, interpolated along the
+ * simulated track (the shared geometry behind the night test and the
+ * per-item weather-viewer links of work doc #31).
  *
  * @param {number} hoursFromNow - Item hour in the passage schedule
  * @param {Array<{hoursFromNow: number, lat: number, lon: number}>} track
- * @param {number} baseMs - Epoch ms the schedule is relative to
- * @returns {boolean|null} Null when no track is available
+ * @returns {{lat: number, lon: number}|null} Null when no track
  */
-function trackNightAt(hoursFromNow, track, baseMs) {
+function trackPositionAt(hoursFromNow, track) {
   if (!Array.isArray(track) || track.length === 0) {
     return null;
   }
@@ -820,7 +932,31 @@ function trackNightAt(hoursFromNow, track, baseMs) {
     lat = before.lat + f * (after.lat - before.lat);
     lon = before.lon + f * (after.lon - before.lon);
   }
-  return isNight(new Date(baseMs + hoursFromNow * 3600000), lat, lon);
+  return { lat, lon };
+}
+
+/**
+ * Night test for a timeline item: the crew's position at that hour,
+ * interpolated along the simulated track, tested against the sun
+ * (the same sunset threshold the sail logic buckets by). One uniform
+ * answer to "does this happen at night", anchored at the payload's
+ * fetch time — the same base the `+Xh` labels use.
+ *
+ * @param {number} hoursFromNow - Item hour in the passage schedule
+ * @param {Array<{hoursFromNow: number, lat: number, lon: number}>} track
+ * @param {number} baseMs - Epoch ms the schedule is relative to
+ * @returns {boolean|null} Null when no track is available
+ */
+function trackNightAt(hoursFromNow, track, baseMs) {
+  const position = trackPositionAt(hoursFromNow, track);
+  if (!position) {
+    return null;
+  }
+  return isNight(
+    new Date(baseMs + hoursFromNow * 3600000),
+    position.lat,
+    position.lon,
+  );
 }
 
 /**
@@ -859,6 +995,11 @@ function trackConditionsAt(hoursFromNow, track) {
   return {
     comfortLevel: reference.comfortLevel,
     slatting: Boolean(reference.slatting),
+    // Night-darkness context (work doc #32): null when the source
+    // publishes no cloud field (provider mode) — never invented
+    cloudCover: Number.isFinite(reference.cloudCover)
+      ? reference.cloudCover
+      : null,
   };
 }
 
@@ -1058,6 +1199,8 @@ export function mergeTimeline(exceptions, payload = null) {
       night: false,
       comfortLevel: null,
       slatting: false,
+      cloudCover: null,
+      provenance: null,
       ...item,
       stamp: fmtShip(item.timestamp),
       moon: moonGlyphFor(item.timestamp, payload),
@@ -1143,6 +1286,7 @@ export function mergeTimeline(exceptions, payload = null) {
       // change point — authoritative over the track's nearest hour
       comfortLevel: conditions?.comfortLevel ?? null,
       slatting: Boolean(conditions?.slatting),
+      cloudCover: conditions?.cloudCover ?? null,
     });
   }
 
@@ -1181,7 +1325,8 @@ export function mergeTimeline(exceptions, payload = null) {
   }
 
   // Hazard notes along the track (whole passage; the tactical slice
-  // picks up its share by hoursFromNow)
+  // picks up its share by hoursFromNow). Provenance (work doc #31):
+  // the note's url is the GDACS event page the note was built from
   for (const h of summary.hazards ?? []) {
     push({
       hoursFromNow: h.hoursFromNow ?? null,
@@ -1193,11 +1338,22 @@ export function mergeTimeline(exceptions, payload = null) {
         h.distanceNm != null && h.distanceNm > 0
           ? `${h.distanceNm} nm off`
           : "",
+      provenance: h.url
+        ? {
+            kind: "warning",
+            label: "GDACS",
+            url: h.url,
+            viewerUrl: null,
+            at: h.timestamp ?? null,
+          }
+        : null,
     });
   }
 
   // Space events (work doc #3): aurora-class alerts are tactical,
-  // comet notes are strategic sky items
+  // comet notes are strategic sky items. Provenance (work doc #31)
+  // rides the event — satellite passes carry the tracker link,
+  // computed ephemeris carries none
   for (const e of payload?.spaceEvents ?? []) {
     push({
       hoursFromNow: relHours(e.timestamp, fetchMs),
@@ -1205,6 +1361,7 @@ export function mergeTimeline(exceptions, payload = null) {
       kind: "space",
       severity: e.tactical ? "warn" : "info",
       label: e.description ?? e.kind ?? "Sky event",
+      provenance: e.provenance ?? null,
     });
   }
 
@@ -1225,6 +1382,7 @@ export function mergeTimeline(exceptions, payload = null) {
       ]
         .filter(Boolean)
         .join(" · "),
+      provenance: h.provenance ?? null,
     });
   }
 
@@ -1258,6 +1416,7 @@ export function mergeTimeline(exceptions, payload = null) {
       ]
         .filter(Boolean)
         .join(" · "),
+      provenance: z.provenance ?? null,
     });
   }
 
@@ -1287,6 +1446,47 @@ export function mergeTimeline(exceptions, payload = null) {
   // The night test instant: hoursFromNow is departure-relative while
   // an anchor is active (the track is too), fetch-relative otherwise
   const baseMs = anchorMs ?? fetchMs ?? Date.now();
+  // Weather provenance chain (work doc #31): the simulated items are
+  // the forecast's output — they chain to the payload's weather
+  // provenance record, deep-linking the on-board viewer to the
+  // item's own hour and position when the sibling webapp is
+  // installed. Items with no record stay quiet: absence never
+  // implies external authority.
+  const weatherProv = payload?.metadata?.provenance ?? null;
+  const SIMULATED_KINDS = new Set(["sail", "maneuver", "convective", "sea"]);
+  const derivedProvenance = (item) => {
+    if (!weatherProv || item.hoursFromNow == null) {
+      return null;
+    }
+    const position = trackPositionAt(item.hoursFromNow, track);
+    let viewerUrl = null;
+    if (weatherProv.viewerBase && position) {
+      const at = new Date(baseMs + item.hoursFromNow * 3600000);
+      viewerUrl = `${weatherProv.viewerBase}?lat=${position.lat.toFixed(4)}&lon=${position.lon.toFixed(4)}&time=${at.toISOString()}&layer=wind`;
+    }
+    // The external origin follows the item too (work doc #31 session
+    // feedback): the Open-Meteo page for the patch of ocean the boat
+    // plans to be at, not the departure's. Provider mode publishes
+    // no external origin — only the viewer link carries depth there.
+    let url = weatherProv.url ?? null;
+    if (url && position) {
+      try {
+        const origin = new URL(url);
+        origin.searchParams.set("latitude", position.lat.toFixed(4));
+        origin.searchParams.set("longitude", position.lon.toFixed(4));
+        url = origin.toString();
+      } catch (_error) {
+        // Keep the payload-level origin rather than dropping it
+      }
+    }
+    return {
+      kind: "derived",
+      label: `Simulated on board · ${weatherProv.label}`,
+      url,
+      viewerUrl,
+      at: weatherProv.at ?? null,
+    };
+  };
   for (const item of items) {
     if (!item.night && item.hoursFromNow != null) {
       item.night = trackNightAt(item.hoursFromNow, track, baseMs) ?? false;
@@ -1300,6 +1500,17 @@ export function mergeTimeline(exceptions, payload = null) {
         item.comfortLevel = conditions.comfortLevel;
         item.slatting = conditions.slatting;
       }
+    }
+    // Night-darkness context (work doc #32): cloud cover at the
+    // item's hour — null when the source publishes none
+    if (item.hoursFromNow != null && item.cloudCover == null) {
+      const conditions = trackConditionsAt(item.hoursFromNow, track);
+      if (conditions) {
+        item.cloudCover = conditions.cloudCover;
+      }
+    }
+    if (!item.provenance && SIMULATED_KINDS.has(item.kind)) {
+      item.provenance = derivedProvenance(item);
     }
   }
 
@@ -1385,6 +1596,29 @@ export function mergeTimeline(exceptions, payload = null) {
 export function etaTable(exceptions, payload = null) {
   const summary = exceptions?.passageSummary ?? {};
   const night = summary.etaNight ?? {};
+  // Cloud cover at a night arrival (work doc #32): the ETA hour on
+  // the same schedule scale mergeTimeline uses (departure-anchored
+  // when an anchor runs, fetch-relative otherwise), read off the
+  // track's nearest row — null beyond the simulated horizon
+  const track = summary.track ?? [];
+  const anchor = summary.departure ?? payload?.departure ?? null;
+  const anchorMs =
+    anchor?.time != null ? new Date(anchor.time).getTime() : null;
+  const fetchMs = payload?.metadata?.fetchedAt
+    ? new Date(payload.metadata.fetchedAt).getTime()
+    : null;
+  const cloudFor = (timestamp) => {
+    if (timestamp == null) {
+      return null;
+    }
+    const t = new Date(timestamp).getTime();
+    const base = anchorMs ?? fetchMs;
+    if (!Number.isFinite(t) || base == null) {
+      return null;
+    }
+    const hours = Math.round(((t - base) / 3600000) * 10) / 10;
+    return trackConditionsAt(hours, track)?.cloudCover ?? null;
+  };
   const row = (label, timestamp, isNight) => ({
     label,
     stamp: fmtShip(timestamp),
@@ -1393,6 +1627,9 @@ export function etaTable(exceptions, payload = null) {
     // the payload predates celestialNights — the renderer falls back
     // to the fixed crescent
     moon: isNight === true ? moonGlyphFor(timestamp, payload) : null,
+    // Night-darkness context (work doc #32): null when the source
+    // publishes no cloud field or the ETA is off the track
+    cloud: isNight === true ? cloudFor(timestamp) : null,
   });
   return {
     rows: [

@@ -51,6 +51,17 @@ class StrategicOutlook extends HTMLElement {
           font-size: 0.9em;
           opacity: 0.85;
         }
+        .cap-prov, .block-prov {
+          color: inherit;
+          opacity: 0.7;
+          text-decoration: none;
+          font-family: var(--font-data, ui-monospace, monospace);
+        }
+        .cap-prov:hover, .cap-prov:focus,
+        .block-prov:hover, .block-prov:focus { opacity: 1; }
+        /* Night-darkness cloud mark (work doc #32): opacity scales
+         * with the cover, set inline by the renderer */
+        .cloud { margin-left: 3px; }
 strong.sev {
           color: var(--color-orange);
           text-transform: uppercase;
@@ -180,6 +191,18 @@ strong.sev {
         .filter(Boolean)
         .join(" — ");
       el.append(severity, body);
+      // Provenance (work doc #31): the sender's page or the feed
+      const provUrl = alert.provenance?.url ?? alert.web ?? alert.sourceUrl;
+      if (provUrl) {
+        const prov = document.createElement("a");
+        prov.className = "cap-prov";
+        prov.href = provUrl;
+        prov.target = "_blank";
+        prov.rel = "noopener";
+        prov.textContent = "↗";
+        prov.title = alert.provenance?.label ?? "source";
+        el.append(" ", prov);
+      }
       list.appendChild(el);
       if (alert.instruction) {
         const instruction = document.createElement("div");
@@ -264,6 +287,21 @@ strong.sev {
         : row.stamp || "—";
       if (row.night) {
         tdStamp.title = "Night arrival at destination";
+        // Cloud mark beside the moon glyph (work doc #32): how dark
+        // the arrival night actually is — every night row with a
+        // known cover carries it, clear nights faint (work doc #32
+        // session feedback); absent only when unknown
+        if (Number.isFinite(row.cloud)) {
+          const cloud = document.createElement("span");
+          cloud.className = "cloud";
+          cloud.textContent = "☁";
+          cloud.style.opacity = (
+            0.3 +
+            0.7 * (Math.min(row.cloud, 100) / 100)
+          ).toFixed(2);
+          cloud.title = `cloud ${Math.round(row.cloud)} %`;
+          tdStamp.append(cloud);
+        }
       }
       tr.append(tdLabel, tdStamp);
       this._etaBody.appendChild(tr);
@@ -311,6 +349,17 @@ strong.sev {
         }
       }
       blocksEl.appendChild(pre);
+      // Provenance (work doc #31): the feed the text arrived from
+      if (block.sourceUrl) {
+        const prov = document.createElement("a");
+        prov.className = "block-prov";
+        prov.href = block.sourceUrl;
+        prov.target = "_blank";
+        prov.rel = "noopener";
+        prov.textContent = "↗ source";
+        prov.title = "bulletin feed";
+        blocksEl.appendChild(prov);
+      }
     }
   }
 }

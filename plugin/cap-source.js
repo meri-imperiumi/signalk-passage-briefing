@@ -27,6 +27,13 @@ const { tagValue, unescapeXml } = require("./hazard-source.js");
 /** Severity ranking for CAP's own vocabulary. */
 const SEVERITY_RANK = { extreme: 3, severe: 2, moderate: 1, minor: 0 };
 
+/**
+ * Instruction placeholders some senders ship (PTWC's CAP documents
+ * carry a literal "N/A"): rendered as the crew's action, so a bare
+ * placeholder is no instruction at all.
+ */
+const INSTRUCTION_PLACEHOLDER = /^n\/?a\.?$/i;
+
 /** Default feed: the NWS Pacific tsunami warning center. */
 const CAP_DEFAULT_URL = "https://www.tsunami.gov/events/xml/PHEBCAP.xml";
 
@@ -218,6 +225,7 @@ function parseCapAlert(xml, { sourceUrl = null, raw = null } = {}) {
   const info = pickInfoBlock(xml) ?? "";
   const expires = capText(info, "expires") || null;
   const geometry = infoGeometry(info);
+  const instruction = capText(info, "instruction") || null;
   return {
     id: `${identifier}|${sent ?? ""}`,
     identifier,
@@ -232,7 +240,10 @@ function parseCapAlert(xml, { sourceUrl = null, raw = null } = {}) {
     expires,
     headline: capText(info, "headline") || null,
     description: capText(info, "description") || null,
-    instruction: capText(info, "instruction") || null,
+    instruction:
+      instruction && !INSTRUCTION_PLACEHOLDER.test(instruction)
+        ? instruction
+        : null,
     web: capText(info, "web") || null,
     areaDesc: capText(info, "areaDesc") || null,
     geometry,

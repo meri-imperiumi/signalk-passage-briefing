@@ -14,6 +14,7 @@ import {
   fmtShip,
   fmtUtc,
   mergeTimeline,
+  skySegments,
   splitSevere,
   tacticalNow,
 } from "./models.mjs";
@@ -66,6 +67,14 @@ class TacticalDashboard extends HTMLElement {
           font-size: 0.9em;
           opacity: 0.85;
         }
+        .cap-prov, .block-prov {
+          color: inherit;
+          opacity: 0.7;
+          text-decoration: none;
+          font-family: var(--font-data, ui-monospace, monospace);
+        }
+        .cap-prov:hover, .cap-prov:focus,
+        .block-prov:hover, .block-prov:focus { opacity: 1; }
 strong.sev {
           color: var(--color-orange);
           text-transform: uppercase;
@@ -77,6 +86,19 @@ strong.sev {
           color: var(--color-grey);
           margin: 8px 0 0;
         }
+        /* Sky line (work doc #33): tonight's sun/moon times and the
+         * now cloud cover, one dense monospace line — watch planning
+         * reads off one row */
+        .sky {
+          font-family: var(--font-data, ui-monospace, monospace);
+          font-size: 0.8rem;
+          color: var(--text-muted);
+          margin: 6px 0 0;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .sky span { margin-right: 10px; }
       </style>
       <section class="sk-card theme-teal">
         <h2>Next 24 Hours</h2>
@@ -87,6 +109,7 @@ strong.sev {
           <comfort-info id="cinfo"></comfort-info>
         </div>
         <div class="departure-chip" id="departure-chip" hidden></div>
+        <div class="sky" id="sky"></div>
         <horizon-sparkline id="spark"></horizon-sparkline>
         <departure-control id="departure-control"></departure-control>
         <div id="energy"></div>
@@ -221,6 +244,33 @@ strong.sev {
     }
     this._renderTimeline();
     this.renderCapAlerts();
+    this.renderSky();
+  }
+
+  /**
+   * The sky line (work doc #33): tonight's sunset, nautical dusk and
+   * moon brackets plus the now cloud cover — watch planning reads
+   * off one line instead of guesswork around dusk. Empty when the
+   * payload predates the sky data.
+   */
+  renderSky() {
+    const el = this.shadowRoot.getElementById("sky");
+    if (!el) {
+      return;
+    }
+    el.innerHTML = "";
+    const nowCloud =
+      this._payload?.waypoints?.[0]?.forecasts?.[0]?.surface?.cloudCover ??
+      null;
+    const segments = skySegments(this._payload ?? null, {
+      cloudCover: nowCloud,
+    });
+    for (const segment of segments) {
+      const span = document.createElement("span");
+      span.textContent = segment.text;
+      span.title = segment.title;
+      el.appendChild(span);
+    }
   }
 
   /**
@@ -268,6 +318,18 @@ strong.sev {
         .filter(Boolean)
         .join(" — ");
       el.append(severity, body);
+      // Provenance (work doc #31): the sender's page or the feed
+      const provUrl = alert.provenance?.url ?? alert.web ?? alert.sourceUrl;
+      if (provUrl) {
+        const prov = document.createElement("a");
+        prov.className = "cap-prov";
+        prov.href = provUrl;
+        prov.target = "_blank";
+        prov.rel = "noopener";
+        prov.textContent = "↗";
+        prov.title = alert.provenance?.label ?? "source";
+        el.append(" ", prov);
+      }
       list.appendChild(el);
       if (alert.instruction) {
         const instruction = document.createElement("div");
@@ -365,6 +427,17 @@ strong.sev {
         }
       }
       this._blocksEl.appendChild(pre);
+      // Provenance (work doc #31): the feed the text arrived from
+      if (block.sourceUrl) {
+        const prov = document.createElement("a");
+        prov.className = "block-prov";
+        prov.href = block.sourceUrl;
+        prov.target = "_blank";
+        prov.rel = "noopener";
+        prov.textContent = "↗ source";
+        prov.title = "bulletin feed";
+        this._blocksEl.appendChild(prov);
+      }
     }
   }
 }

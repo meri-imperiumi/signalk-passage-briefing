@@ -78,6 +78,28 @@ describe("satellite passes (doc #3 Phase 2)", () => {
     assert.match(events[0].description, /mag/);
     assert.equal(events[1].timestamp, "2008-09-21T08:14:30.000Z");
     assert.equal(events[0].tactical, true);
+    // Provenance (work doc #31): NORAD catalog number from TLE line 1
+    // keys the live-tracker verification link
+    assert.equal(events[0].catalogNumber, "25544");
+    assert.equal(events[0].provenance.kind, "feed");
+    assert.equal(
+      events[0].provenance.url,
+      "https://www.n2yo.com/satellite/?s=25544",
+    );
+  });
+
+  test("catalogNumber reads TLE line 1 columns", () => {
+    assert.equal(S.catalogNumber(ISS_TLE.split("\n")[1]), "25544");
+    // Five-digit alphanumeric catalog numbers parse too; garbage does
+    // not
+    assert.equal(
+      S.catalogNumber(
+        "1 99999U 21035A   23001.00000000  .00000000  00000-0  00000-0 0  9990",
+      ),
+      "99999",
+    );
+    assert.equal(S.catalogNumber("bad"), null);
+    assert.equal(S.catalogNumber(undefined), null);
   });
 
   test("overridden night gate lets bright daytime passes through", () => {

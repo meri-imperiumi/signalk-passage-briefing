@@ -136,6 +136,16 @@ describe("buildApiPayload", () => {
     assert.deepEqual(payload.metadata.models, [
       "weather-api:ECMWF IFS 0.25° open data",
     ]);
+    // Provenance (work doc #31): label-only — the provider publishes
+    // no human page per point; the viewer link attaches at compile
+    assert.equal(payload.metadata.provenance.kind, "forecast");
+    assert.match(payload.metadata.provenance.label, /ECMWF IFS/);
+    assert.equal(payload.metadata.provenance.url, null);
+    assert.equal(payload.metadata.provenance.viewerBase, null);
+    assert.equal(
+      new Date(payload.metadata.provenance.at).toISOString(),
+      payload.metadata.fetchedAt,
+    );
     assert.equal(payload.waypoints.length, 2);
     assert.equal(payload.waypoints[0].distanceFromStartNm, 0);
     assert.equal(payload.waypoints[0].forecasts[0].surface.tws, 12);

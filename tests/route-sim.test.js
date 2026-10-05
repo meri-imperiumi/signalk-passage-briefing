@@ -129,6 +129,22 @@ describe("weatherAt", () => {
     approx(mid.current.drift, 0.75);
     assert.equal(mid.surface.gust, 18);
 
+    // Cloud cover interpolates too when the steps carry it
+    // (work doc #32); provider mode's nulls stay null
+    forecasts[0].surface.cloudCover = 20;
+    forecasts[1].surface.cloudCover = 80;
+    approx(
+      weatherAt(forecasts, new Date("2026-06-21T00:30:00Z")).surface.cloudCover,
+      50,
+    );
+    forecasts[1].surface.cloudCover = null;
+    assert.equal(
+      weatherAt(forecasts, new Date("2026-06-21T00:30:00Z")).surface.cloudCover,
+      null,
+    );
+    delete forecasts[0].surface.cloudCover;
+    delete forecasts[1].surface.cloudCover;
+
     const before = weatherAt(forecasts, new Date("2026-06-20T23:00:00Z"));
     assert.equal(before.clamped, true);
     approx(before.surface.tws, 12);
@@ -310,6 +326,7 @@ describe("hazardAlerts", () => {
       {
         id: "area",
         description: "Firing range",
+        url: "https://www.gdacs.org/report.aspx?eventid=99",
         feature: {
           geometry: {
             type: "Polygon",
@@ -339,6 +356,10 @@ describe("hazardAlerts", () => {
     assert.equal(alerts[0].hoursFromNow, 1);
     assert.equal(alerts[0].distanceNm, 1.2); // 0.02° lon at lat 1
     assert.equal(alerts[1].distanceNm, 0); // Containment
+    // The note's source url rides the alert (work doc #31); notes
+    // without one degrade to null
+    assert.equal(alerts[0].url, null);
+    assert.equal(alerts[1].url, "https://www.gdacs.org/report.aspx?eventid=99");
   });
 
   test("pointInPolygon ray casting", async () => {
@@ -390,6 +411,16 @@ describe("simulatePassage", () => {
     assert.equal(exceptions.next24h.solarYieldKwh, 12);
     assert.equal(exceptions.next24h.energyDeficitAlert, true);
     assert.equal(exceptions.passageSummary.etaP50, result.eta.p50);
+    // The compact track carries the cloud cover per hour (work doc
+    // #32): null when the source publishes none, never invented
+    for (const row of exceptions.passageSummary.track) {
+      assert.equal(row.cloudCover, null);
+    }
+    for (const change of exceptions.passageSummary.sailChanges) {
+      if (change.conditions) {
+        assert.equal(change.conditions.cloudCover, null);
+      }
+    }
     assert.equal(
       exceptions.passageSummary.totalMotorHours,
       result.motoringHours,

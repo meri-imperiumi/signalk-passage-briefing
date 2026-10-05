@@ -18,6 +18,7 @@ import {
   hereEnergySummary,
   hereHourly,
   hereNow,
+  skySegments,
   splitSevere,
 } from "./models.mjs";
 import { SK_BASE_CSS } from "./sk-base-css.js";
@@ -87,6 +88,18 @@ class ConditionsHere extends HTMLElement {
         ${SK_BASE_CSS}
         :host { display: block; }
         .now { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+        /* Sky line (work doc #33): tonight's sun/moon times and the
+         * now cloud cover, beside the position/tier readout */
+        .sky {
+          font-family: var(--font-data, ui-monospace, monospace);
+          font-size: 0.8rem;
+          color: var(--text-muted);
+          margin: 6px 0 0;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .sky span { margin-right: 10px; }
         .tier {
           font-family: var(--font-data, ui-monospace, monospace);
           font-size: 1rem; font-weight: 700;
@@ -114,6 +127,24 @@ class ConditionsHere extends HTMLElement {
           letter-spacing: 0.08em;
           margin-right: 8px;
         }
+        .prov {
+          color: inherit;
+          opacity: 0.7;
+          text-decoration: none;
+          font-family: var(--font-data, ui-monospace, monospace);
+          margin-left: 6px;
+        }
+        .prov:hover, .prov:focus { opacity: 1; }
+        /* Waters-you-are-in zone links (work doc #31): the exact
+         * Marine Regions record behind each name */
+        .zone-link {
+          color: inherit;
+          text-decoration: underline;
+          text-decoration-color: currentColor;
+          text-decoration-style: dotted;
+          opacity: 0.85;
+        }
+        .zone-link:hover, .zone-link:focus { opacity: 1; }
       </style>
       <section class="sk-card theme-teal">
         <div class="card-head">
@@ -126,6 +157,7 @@ class ConditionsHere extends HTMLElement {
           <span class="tier" id="tier">no data</span>
           <comfort-info id="cinfo"></comfort-info>
         </div>
+        <div class="sky" id="sky"></div>
         <dl>
           <dt>Wind</dt><dd id="wind">—</dd>
           <dt>Sea</dt><dd id="sea">—</dd>
@@ -158,6 +190,7 @@ class ConditionsHere extends HTMLElement {
       </section>
     `;
     this._posEl = this.shadowRoot.getElementById("pos");
+    this._skyEl = this.shadowRoot.getElementById("sky");
     this._tierEl = this.shadowRoot.getElementById("tier");
     this._cinfo = this.shadowRoot.getElementById("cinfo");
     this._windEl = this.shadowRoot.getElementById("wind");
@@ -279,6 +312,20 @@ class ConditionsHere extends HTMLElement {
 
     this._spark.setColumns(rows);
 
+    // Sky line (work doc #33): tonight's sun/moon times plus the now
+    // cloud cover — the same line the tactical dashboard carries
+    if (this._skyEl) {
+      this._skyEl.innerHTML = "";
+      for (const segment of skySegments(payload ?? null, {
+        cloudCover: now.cloudCover ?? null,
+      })) {
+        const span = document.createElement("span");
+        span.textContent = segment.text;
+        span.title = segment.title;
+        this._skyEl.appendChild(span);
+      }
+    }
+
     // Warnings: filtered NAVAREA/NAVTEX blocks for these waters
     const blocks = payload?.metareaBulletin?.blocks ?? [];
     this._warningsCard.hidden = blocks.length === 0;
@@ -307,6 +354,19 @@ class ConditionsHere extends HTMLElement {
       const el = document.createElement("div");
       el.textContent =
         `${event.stamp ?? event.timestamp ?? ""} ${event.description ?? event.kind ?? ""}`.trim();
+      // Provenance (work doc #31): satellite passes carry the live
+      // tracker link; computed ephemeris carries none
+      const provUrl = event.provenance?.url;
+      if (provUrl) {
+        const prov = document.createElement("a");
+        prov.className = "prov";
+        prov.href = provUrl;
+        prov.target = "_blank";
+        prov.rel = "noopener";
+        prov.textContent = "↗";
+        prov.title = event.provenance?.label ?? "source";
+        el.append(" ", prov);
+      }
       this._eventsEl.appendChild(el);
     }
 
@@ -333,6 +393,18 @@ class ConditionsHere extends HTMLElement {
       ]
         .filter(Boolean)
         .join(" — ");
+      // Provenance (work doc #31): the GDACS event page
+      const provUrl = hazard.provenance?.url ?? hazard.link;
+      if (provUrl) {
+        const prov = document.createElement("a");
+        prov.className = "prov";
+        prov.href = provUrl;
+        prov.target = "_blank";
+        prov.rel = "noopener";
+        prov.textContent = "↗";
+        prov.title = hazard.provenance?.label ?? "GDACS";
+        el.append(" ", prov);
+      }
       this._hazardsEl.appendChild(el);
     }
 
@@ -343,11 +415,14 @@ class ConditionsHere extends HTMLElement {
     this._capCard.hidden = !Array.isArray(payload?.capAlerts);
     this._capEl.innerHTML = "";
     if (capAlerts.length === 0) {
+      // The channel is enabled and green: silence should be explicit
+      // — "checked, nothing active" — not an absent card the crew
+      // cannot tell from a dead feed. No early return: the zones
+      // card below must still render.
       const none = document.createElement("div");
       none.className = "none";
       none.textContent = "No official alerts in effect for these waters";
       this._capEl.appendChild(none);
-      return;
     }
     for (const alert of capAlerts) {
       const el = document.createElement("div");
@@ -363,6 +438,18 @@ class ConditionsHere extends HTMLElement {
         .filter(Boolean)
         .join(" — ");
       el.append(severity, body);
+      // Provenance (work doc #31): the sender's page or the feed
+      const provUrl = alert.provenance?.url ?? alert.web ?? alert.sourceUrl;
+      if (provUrl) {
+        const prov = document.createElement("a");
+        prov.className = "prov";
+        prov.href = provUrl;
+        prov.target = "_blank";
+        prov.rel = "noopener";
+        prov.textContent = "↗";
+        prov.title = alert.provenance?.label ?? "source";
+        el.append(" ", prov);
+      }
       this._capEl.appendChild(el);
       if (alert.instruction) {
         const instruction = document.createElement("div");
@@ -374,13 +461,33 @@ class ConditionsHere extends HTMLElement {
 
     // Waters the vessel sits in (work doc #17): here mode reports the
     // current zones instead of transitions; the Marine Regions
-    // attribution renders app-wide in the root's footer
+    // attribution renders app-wide in the root's footer. Each zone
+    // name links its exact gazetteer record (work doc #31)
     const zones = payload?.zonesHere ?? [];
     this._zonesCard.hidden = zones.length === 0;
     this._zonesEl.innerHTML = "";
     if (zones.length > 0) {
       const el = document.createElement("div");
-      el.textContent = zones.map((z) => z.name).join(", ");
+      zones.forEach((zone, index) => {
+        if (index > 0) {
+          el.append(", ");
+        }
+        const url = zone.mrgid
+          ? `https://www.marineregions.org/gazetteer.php?p=1&id=${zone.mrgid}`
+          : null;
+        if (url) {
+          const link = document.createElement("a");
+          link.className = "zone-link";
+          link.href = url;
+          link.target = "_blank";
+          link.rel = "noopener";
+          link.textContent = zone.name;
+          link.title = "Marine Regions record";
+          el.appendChild(link);
+        } else {
+          el.append(zone.name);
+        }
+      });
       this._zonesEl.appendChild(el);
     }
   }

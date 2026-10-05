@@ -14,6 +14,7 @@ function fakeZonesApi() {
     iso_ter: iso,
     territory: name ?? "Tonga",
     name: name ?? "Tongan waters",
+    mrgid: 49163,
   });
   return {
     downloads: [],
@@ -31,14 +32,29 @@ function fakeZonesApi() {
 describe("territorial waters transitions (work doc #17)", () => {
   test("sovereign layers only: EEZ and high seas are not territories", () => {
     const map = mzSource.sovereignTerritories([
-      { layer: "internal", iso_ter: "TON", territory: "Tonga" },
-      { layer: "archipelagic", iso_ter: "FJI", territory: "Fiji" },
-      { layer: "12nm", iso_ter: "TON", territory: "Tonga" },
+      { layer: "internal", iso_ter: "TON", territory: "Tonga", mrgid: 49461 },
+      {
+        layer: "archipelagic",
+        iso_ter: "FJI",
+        territory: "Fiji",
+        mrgid: 49462,
+      },
+      { layer: "12nm", iso_ter: "TON", territory: "Tonga", mrgid: 49163 },
       { layer: "contiguous", iso_ter: "TON", territory: "Tonga" },
       { layer: "eez", iso_ter: "TON", territory: "Tonga" },
       { layer: "high_seas", iso_ter: null, territory: null },
     ]);
     assert.deepEqual([...map.keys()].sort(), ["FJI", "TON"]);
+    // The record kept per territory is the outermost sovereign layer
+    // — the boundary the boat actually crosses
+    assert.equal(map.get("TON").name, "Tonga");
+    assert.equal(map.get("TON").mrgid, 49163);
+    assert.equal(map.get("FJI").mrgid, 49462);
+    // Zones without an MRGID degrade to null (search-URL fallback)
+    const bare = mzSource.sovereignTerritories([
+      { layer: "12nm", iso_ter: "TON", territory: "Tonga" },
+    ]);
+    assert.equal(bare.get("TON").mrgid, null);
   });
 
   test("southbound route enters Tongan waters at the boundary", async () => {
@@ -59,6 +75,14 @@ describe("territorial waters transitions (work doc #17)", () => {
     assert.equal(enter.territory.name, "Tonga");
     assert.equal(enter.distanceFromStartNm, 90);
     assert.equal(enter.connectivity, undefined);
+    // Provenance (work doc #31): the exact Marine Regions record of
+    // the boundary crossed
+    assert.equal(enter.provenance.kind, "data");
+    assert.equal(enter.provenance.label, "Marine Regions");
+    assert.equal(
+      enter.provenance.url,
+      "https://www.marineregions.org/gazetteer.php?p=1&id=49163",
+    );
   });
 
   test("northbound route leaves with the connectivity note", async () => {
@@ -125,6 +149,8 @@ describe("territorial waters transitions (work doc #17)", () => {
       ["12nm"],
     );
     assert.equal(zones[0].territory, "Tonga");
+    // The gazetteer record rides each zone (work doc #31)
+    assert.equal(zones[0].mrgid, 49163);
   });
 
   test("missing tiles at the first sample: no data, not 'all high seas'", async () => {

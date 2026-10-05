@@ -172,11 +172,23 @@ function buildApiPayload(waypoints, forecastsByWaypoint) {
       forecasts: (items ?? []).map(weatherDataToTimeStep),
     };
   });
+  const fetchedAt = new Date().toISOString();
   return {
     metadata: {
-      fetchedAt: new Date().toISOString(),
+      fetchedAt,
       source: "weather-api",
       models: [models ?? "weather-api"],
+      // Where this forecast came from (work doc #31): the provider
+      // publishes no human-readable page per point, so the record
+      // stays label-only — the on-board viewer link (weather-map
+      // webapp) is attached at compile when that sibling is installed
+      provenance: {
+        kind: "forecast",
+        label: models ?? "Weather API provider",
+        url: null,
+        viewerBase: null,
+        at: fetchedAt,
+      },
     },
     waypoints: payloadWaypoints,
   };

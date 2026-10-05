@@ -141,6 +141,18 @@ describe("fetchWeatherAlongTrack", () => {
       "marine:ncep_gfswave025",
       "marine:smoc_currents",
     ]);
+    // Weather provenance (work doc #31): the canonical per-position
+    // Open-Meteo page for the first waypoint, fetch-stamped
+    assert.equal(payload.metadata.provenance.kind, "forecast");
+    assert.match(payload.metadata.provenance.label, /Open-Meteo/);
+    assert.equal(
+      payload.metadata.provenance.url,
+      `https://open-meteo.com/en/docs?latitude=${WAYPOINTS[0].lat}&longitude=${WAYPOINTS[0].lon}`,
+    );
+    assert.equal(
+      new Date(payload.metadata.provenance.at).toISOString(),
+      payload.metadata.fetchedAt,
+    );
     assert.equal(payload.waypoints.length, 5);
     const [step] = payload.waypoints[0].forecasts;
     // First step is the current hour (fixture times are relative)

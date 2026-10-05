@@ -125,21 +125,43 @@ async function prefetchCorridor({
 }
 
 /**
+ * Marine Regions gazetteer record for a zone: the MRGID keys the
+ * exact boundary record (work doc #31 session feedback — a front-page
+ * link is not provenance). Zones without an MRGID fall back to the
+ * gazetteer search for the territory.
+ *
+ * @param {number|null} mrgid - Marine Regions gazetteer identifier
+ * @param {string} territory - Territory display name (fallback query)
+ * @returns {string} Gazetteer URL
+ */
+function marineRegionsUrl(mrgid, territory) {
+  return mrgid != null
+    ? `https://www.marineregions.org/gazetteer.php?p=1&id=${mrgid}`
+    : `https://www.marineregions.org/gazetteer.php?p=1&searchText=${encodeURIComponent(territory)}`;
+}
+
+/**
  * The sovereign territories a position sits in (work doc #17's
  * internal / archipelagic / 12 NM layers only), keyed by ISO code with
- * the display name as value.
+ * the display name and the outermost zone's MRGID — the zones arrive
+ * innermost first, so the last hit per territory is the boundary the
+ * boat actually crosses.
  *
  * @param {Array<{layer: string, iso_ter: string|null, territory:
- *   string|null}>} zones - `whereAmI` output, innermost first
- * @returns {Map<string, string>} ISO 3166-1 alpha-3 code → territory
- *   name, possibly empty (high seas, or land — a point on land is in
- *   no zone)
+ *   string|null, mrgid?: number|null}>} zones - `whereAmI` output,
+ *   innermost first
+ * @returns {Map<string, {name: string, mrgid: number|null}>} ISO
+ *   3166-1 alpha-3 code → territory record, possibly empty (high
+ *   seas, or land — a point on land is in no zone)
  */
 function sovereignTerritories(zones) {
   const map = new Map();
   for (const zone of zones ?? []) {
     if (SOVEREIGN_LAYERS.includes(zone?.layer) && zone?.iso_ter) {
-      map.set(zone.iso_ter, zone.territory ?? zone.iso_ter);
+      map.set(zone.iso_ter, {
+        name: zone.territory ?? zone.iso_ter,
+        mrgid: Number.isFinite(zone.mrgid) ? zone.mrgid : null,
+      });
     }
   }
   return map;
@@ -206,14 +228,14 @@ async function detectTransitions({ dataDir, waypoints, zonesApi }) {
   const smoothed = smoothStints(perSample, samples);
   const transitions = [];
   for (let i = 1; i < smoothed.length; i++) {
-    for (const [iso, name] of smoothed[i]) {
+    for (const [iso, record] of smoothed[i]) {
       if (!smoothed[i - 1].has(iso)) {
-        transitions.push(build("enter", iso, samples[i], name));
+        transitions.push(build("enter", iso, samples[i], record));
       }
     }
-    for (const [iso, name] of smoothed[i - 1]) {
+    for (const [iso, record] of smoothed[i - 1]) {
       if (!smoothed[i].has(iso)) {
-        transitions.push(build("leave", iso, samples[i], name));
+        transitions.push(build("leave", iso, samples[i], record));
       }
     }
   }
@@ -305,13 +327,23 @@ function smoothStints(perSample, samples) {
  * @param {string} [name] - Territory display name
  * @returns {object}
  */
-function build(kind, iso, sample, name) {
+function build(kind, iso, sample, record) {
+  const name = record?.name ?? iso;
   const event = {
     kind,
-    territory: { name: name ?? iso, iso_ter: iso },
+    territory: { name, iso_ter: iso },
     lat: Math.round(sample.lat * 1e4) / 1e4,
     lon: Math.round(sample.lon * 1e4) / 1e4,
     distanceFromStartNm: Math.round(sample.distanceFromStartNm * 10) / 10,
+    // Provenance (work doc #31): the exact Marine Regions record of
+    // the boundary crossed, not the dataset's front page
+    provenance: {
+      kind: "data",
+      label: "Marine Regions",
+      url: marineRegionsUrl(record?.mrgid ?? null, name),
+      viewerUrl: null,
+      at: null,
+    },
   };
   if (kind === "leave") {
     event.connectivity = "ocean";
@@ -346,6 +378,8 @@ async function positionZones({ dataDir, lat, lon, zonesApi }) {
         name: z.name ?? z.territory ?? z.iso_ter,
         iso_ter: z.iso_ter,
         territory: z.territory ?? z.iso_ter,
+        // Provenance (work doc #31): the exact gazetteer record
+        mrgid: Number.isFinite(z.mrgid) ? z.mrgid : null,
       }));
   } catch {
     return null;
@@ -359,6 +393,7 @@ module.exports = {
   MIN_STINT_NM,
   MIN_ABSENCE_NM,
   loadMaritimeZones,
+  marineRegionsUrl,
   prefetchCorridor,
   sovereignTerritories,
   detectTransitions,

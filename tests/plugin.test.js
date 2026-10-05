@@ -876,6 +876,9 @@ describe("plugin", () => {
       const trough = bulletin.blocks.find((b) => b.text.includes("TROUGH"));
       assert.ok(trough, "trough block intersects the Tonga track");
       assert.equal(trough.geometryType, "polygon");
+      // Provenance (work doc #31): the feed URL the text arrived
+      // from rides every surviving block
+      assert.equal(trough.sourceUrl, "https://met.test/navarea.txt");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1801,6 +1804,9 @@ test("hazard events: GDACS feed rides the online window into the payload and not
   );
 
   const app = createMockApp();
+  // The weather-map sibling webapp is installed: its viewer link
+  // becomes the weather provenance's on-board flavor (work doc #31)
+  app.webapps = [{ name: "signalk-weather-map" }];
   app.getSelfPath = (path) =>
     path === "navigation.position"
       ? { latitude: -18.658, longitude: -173.982 }
@@ -1848,6 +1854,21 @@ test("hazard events: GDACS feed rides the online window into the payload and not
     assert.equal(near.alertLevel, "orange");
     assert.ok(near.distanceNm < 500, `distance ${near.distanceNm}`);
     assert.equal(typeof near.bearingDeg, "number");
+    // Provenance (work doc #31): the GDACS event page rides the event
+    assert.match(near.provenance.url, /gdacs\.org/);
+    assert.equal(near.provenance.kind, "warning");
+    assert.equal(near.provenance.label, "GDACS");
+    // Weather provenance (work doc #31): the Open-Meteo origin rides
+    // the payload, and the installed weather-map sibling becomes the
+    // on-board viewer base
+    assert.match(
+      res.payload.payload.metadata.provenance.url,
+      /open-meteo\.com\/en\/docs/,
+    );
+    assert.equal(
+      res.payload.payload.metadata.provenance.viewerBase,
+      "/signalk-weather-map/",
+    );
 
     // The surviving event publishes as a chart note
     const provider = app.getResourceProviders().find((p) => p.type === "notes");
@@ -2098,6 +2119,112 @@ test("source status: SK availability recorded and served at /sources", async () 
     entries["bulletin-custom-0"].url,
     pluginFactory.DEFAULTS.bulletin_urls[0],
   );
+
+  plugin.stop();
+});
+
+test("CAP alerts: the filter gates the payload — a cached wrong-ocean, minor, expired alert never rides (work doc #24/#31 regression)", async () => {
+  const { mockOpenMeteo } = require("./openmeteo-mock.js");
+  const { readFileSync } = require("node:fs");
+  const { join: pathJoin } = require("node:path");
+  const capSource = require("../plugin/cap-source.js");
+  const app = createMockApp();
+  app.getSelfPath = (path) =>
+    path === "navigation.position"
+      ? { latitude: -18.658, longitude: -173.982 }
+      : null;
+  const plugin = pluginFactory(app);
+  plugin.start({});
+  plugin.registerWithRouter(app.router);
+
+  // The cache already holds the Puerto Rico tsunami information
+  // statement (Minor severity, zero-radius circle at the Caribbean
+  // epicentre, long expired) — a real incident: the provenance pass
+  // once re-mapped the unfiltered cache over the gated payload, and
+  // this alert reached a Tonga vessel's Official Alerts card
+  const pr = capSource.parseCapAlert(
+    readFileSync(
+      pathJoin(__dirname, "fixtures", "cap", "phebcap-sample.xml"),
+      "utf8",
+    ),
+    { sourceUrl: capSource.CAP_DEFAULT_URL },
+  );
+  await capSource.saveCapAlerts(app.getDataDirPath(), [pr]);
+
+  // The feed now answers with a live Severe tsunami warning for the
+  // vessel's own waters
+  const iso = (offsetHours) =>
+    `${new Date(Date.now() + offsetHours * 3600000).toISOString().replace("Z", "-00:00")}`;
+  const tonga = `<?xml version="1.0" encoding="UTF-8"?><alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">
+    <identifier>PHEB-TEST-TONGA</identifier>
+    <sender>ntwc@noaa.gov</sender>
+    <sent>${iso(-1)}</sent>
+    <msgType>Alert</msgType>
+    <source>PTWC</source>
+    <info>
+      <event>Tsunami Warning</event>
+      <severity>Severe</severity>
+      <expires>${iso(6)}</expires>
+      <senderName>NWS PACIFIC TSUNAMI WARNING CENTER HONOLULU HI</senderName>
+      <headline>Tsunami Warning for Tongan waters</headline>
+      <description>Test event for the filter regression.</description>
+      <instruction>Move to high ground.</instruction>
+      <web>http://www.tsunami.gov/events/PHEB/test/WECA42.txt</web>
+      <area><areaDesc>Tongan waters</areaDesc><circle>-18.658,-173.982 200.0</circle></area>
+    </info>
+  </alert>`;
+
+  const feed = app.getDeltaHandlers()[0];
+  const call = async (path) => {
+    const r = app.getRoutes().find((x) => x.path === path);
+    const res = {
+      code: null,
+      payload: null,
+      status(c) {
+        this.code = c;
+        return this;
+      },
+      json(p) {
+        this.payload = p;
+      },
+    };
+    await r.handler({ query: {} }, res);
+    return res;
+  };
+
+  feed({
+    updates: [
+      { values: [{ path: "network.internet.state", value: "online" }] },
+    ],
+  });
+  const openMeteoFetch = mockOpenMeteo();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("PHEBCAP")) {
+      return { ok: true, text: async () => tonga };
+    }
+    return openMeteoFetch(url);
+  };
+  try {
+    // No route briefed: the oneshot falls back to conditions here,
+    // whose attachCapAlerts filters against the position alone
+    await call("/api/briefing/refresh");
+    const res = await call("/api/briefing");
+    const alerts = res.payload.payload.capAlerts ?? [];
+    assert.equal(
+      alerts.length,
+      1,
+      `exactly the Tonga warning rides the payload, got: ${alerts.map((a) => a.identifier).join(", ")}`,
+    );
+    assert.equal(alerts[0].identifier, "PHEB-TEST-TONGA");
+    // Provenance rides the survivor, and the placeholder instruction
+    // is gone
+    assert.match(alerts[0].provenance.url, /tsunami\.gov/);
+    assert.equal(alerts[0].provenance.label, "Official alert page");
+    assert.equal(alerts[0].instruction, "Move to high ground.");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 
   plugin.stop();
 });

@@ -34,6 +34,9 @@ describe("CAP source (work doc #24)", () => {
     const [minLon, minLat, maxLon, maxLat] = alert.geometry.coordinates;
     assert.ok(Math.abs(minLat - 18.483) < 0.02);
     assert.ok(Math.abs(maxLon - -69.134) < 0.02);
+    // PTWC ships a literal "N/A" instruction — a placeholder, not an
+    // action: parse to null so the card renders no instruction line
+    assert.equal(alert.instruction, null);
   });
 
   test("CAP polygon: latitude-first order flipped to [lon, lat], ring closed", () => {

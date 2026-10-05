@@ -72,6 +72,49 @@ describe("celestial ephemeris (doc #3 Phase 2)", () => {
     }
   });
 
+  test("celestialNights carry sun/moon rise and set stamps (work doc #33)", () => {
+    const nights = ce.celestialNights({
+      from: new Date("2026-10-05T00:00:00Z"),
+      days: 2,
+      lat: -21.1,
+      lon: -175.2,
+    });
+    for (const night of nights) {
+      for (const field of ["sunrise", "sunset", "moonrise", "moonset"]) {
+        const value = night[field];
+        assert.ok(
+          value === null || !Number.isNaN(new Date(value).getTime()),
+          `${field} is an ISO stamp or null`,
+        );
+      }
+      // The bracketing sanity: sunset before the night's civil dusk,
+      // sunrise after its nautical dusk
+      if (night.sunset && night.civilDusk) {
+        assert.ok(
+          new Date(night.sunset).getTime() <
+            new Date(night.civilDusk).getTime(),
+        );
+      }
+      if (night.sunrise && night.nauticalDusk) {
+        assert.ok(
+          new Date(night.sunrise).getTime() >
+            new Date(night.nauticalDusk).getTime(),
+        );
+      }
+    }
+  });
+
+  test("polar day degrades the sun stamps to null (work doc #33)", () => {
+    const nights = ce.celestialNights({
+      from: new Date("2026-07-01T00:00:00Z"),
+      days: 1,
+      lat: 78,
+      lon: 15,
+    });
+    assert.equal(nights[0].sunrise, null);
+    assert.equal(nights[0].sunset, null);
+  });
+
   test("planetary conjunction: Mars–Jupiter 2024-08-14", () => {
     const events = ce.planetaryEvents({
       from: new Date("2024-08-13T00:00:00Z"),

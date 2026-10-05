@@ -528,11 +528,19 @@ module.exports = (app) => {
   /** Filtered blocks for one cache entry against a track: structured
    * UKHO JSON entries skip the text pipeline entirely. */
   function blocksForEntry(entry, track) {
+    // Provenance (work doc #31): the feed URL the text arrived from,
+    // stamped on every surviving block — the spool path has a file
+    // path, not a URL, and carries no provenance
+    const sourceUrl = /^https?:\/\//.test(entry.url ?? "") ? entry.url : null;
+    const withProvenance = (blocks) =>
+      sourceUrl ? blocks.map((block) => ({ ...block, sourceUrl })) : blocks;
     if (entry.format === "ukho-json") {
       try {
-        return ukhoBlocksFromWarnings(
-          parseUkhoWarnings(JSON.parse(entry.text)),
-          track,
+        return withProvenance(
+          ukhoBlocksFromWarnings(
+            parseUkhoWarnings(JSON.parse(entry.text)),
+            track,
+          ),
         );
       } catch {
         return []; // Corrupted entry: skip, other entries still serve
@@ -544,7 +552,7 @@ module.exports = (app) => {
       track,
       issuedAt: entry.fetchedAt,
     });
-    return bulletin?.blocks ?? [];
+    return withProvenance(bulletin?.blocks ?? []);
   }
 
   /** Bulletin-level metadata (header/issuedAt/source/raw text) for
@@ -825,6 +833,42 @@ module.exports = (app) => {
    *   samples (route mode) or the position waypoint (here mode)
    * @returns {Promise<void>}
    */
+  /**
+   * On-board viewer base for weather provenance (work doc #31): the
+   * weather-map sibling webapp renders the same fields the briefing
+   * derives from, reachable over the LAN underway. The server knows
+   * its registered webapps; a link to an absent sibling is dropped
+   * rather than served dead. Deep-link parameters (lat/lon/time/
+   * layer) are appended per item by the webapp.
+   *
+   * @returns {string|null} Viewer base path when installed
+   */
+  function weatherViewerBase() {
+    const webapps = app.webapps;
+    if (!Array.isArray(webapps)) {
+      return null;
+    }
+    return webapps.some((webapp) => webapp?.name === "signalk-weather-map")
+      ? "/signalk-weather-map/"
+      : null;
+  }
+
+  /**
+   * Stamps the on-board viewer link onto a payload's weather
+   * provenance record (work doc #31). Payloads whose cache predates
+   * the provenance field keep no record — the UI degrades to no
+   * glyph, never a dead link.
+   *
+   * @param {object} payload - Briefing payload, mutated in place
+   * @returns {void}
+   */
+  function attachWeatherViewer(payload) {
+    const base = weatherViewerBase();
+    if (base && payload?.metadata?.provenance) {
+      payload.metadata.provenance.viewerBase = base;
+    }
+  }
+
   async function attachHazardEvents(payload, vessel, waypoints) {
     if (!hazardEventsEnabled) {
       return;
@@ -849,7 +893,22 @@ module.exports = (app) => {
       ...hazardFilterConfig,
       now: new Date(),
     });
-    payload.hazardEvents = events;
+    // Provenance (work doc #31): the GDACS event page rides each
+    // surviving event — one tap from timeline row to origin
+    payload.hazardEvents = events.map((event) =>
+      event.link
+        ? {
+            ...event,
+            provenance: {
+              kind: "warning",
+              label: "GDACS",
+              url: event.link,
+              viewerUrl: null,
+              at: event.timestamp ?? null,
+            },
+          }
+        : event,
+    );
     if (notesStore) {
       const result = await publishHazardNotes({ store: notesStore, events });
       if (result.published.length > 0 || result.pruned.length > 0) {
@@ -949,12 +1008,33 @@ module.exports = (app) => {
     }
     const events =
       result?.events ?? (await capSource.loadCapAlerts(app.getDataDirPath()));
-    payload.capAlerts = capSource.filterCapAlerts({
-      events,
-      track: waypoints.map((w) => [w.lon, w.lat]),
-      minSeverity: capMinSeverity,
-      now: new Date(),
-    });
+    // Provenance (work doc #31): the sender's info page when
+    // published, else the feed the document arrived from. Stamped on
+    // the FILTERED survivors — stamping the raw cache instead would
+    // bypass the severity, expiry and geography gates (a Puerto Rico
+    // information statement reached a Tonga vessel that way once).
+    payload.capAlerts = capSource
+      .filterCapAlerts({
+        events,
+        track: waypoints.map((w) => [w.lon, w.lat]),
+        minSeverity: capMinSeverity,
+        now: new Date(),
+      })
+      .map((alert) => {
+        const url = alert.web ?? alert.sourceUrl ?? null;
+        return url
+          ? {
+              ...alert,
+              provenance: {
+                kind: "warning",
+                label: alert.web ? "Official alert page" : "CAP feed",
+                url,
+                viewerUrl: null,
+                at: alert.sent ?? null,
+              },
+            }
+          : alert;
+      });
     if (notesStore) {
       const result = await publishCapAlertNotes({
         store: notesStore,
@@ -1040,6 +1120,7 @@ module.exports = (app) => {
       }),
     );
     payload.metadata.mode = "here";
+    attachWeatherViewer(payload);
     const bulletin = await bulletinForTrack(waypoints);
     if (bulletin) {
       payload.metareaBulletin = bulletin;
@@ -1203,6 +1284,7 @@ module.exports = (app) => {
     const payload = await withSourceStatus(WEATHER_SOURCE, () =>
       trackWeatherFetcher({ waypoints, forecastDays }),
     );
+    attachWeatherViewer(payload);
     const bulletin = await bulletinForTrack(waypoints);
     if (bulletin) {
       payload.metareaBulletin = bulletin;

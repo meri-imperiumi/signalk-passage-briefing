@@ -379,6 +379,15 @@ export function weatherAt(forecasts, timestamp) {
       twd: mix(sa.twd, sb.twd, true),
       mslp: mix(sa.mslp, sb.mslp),
       gust: mix(sa.gust, sb.gust),
+      // Night-darkness context (work doc #32): the steps carry the
+      // Open-Meteo cloud_cover when the source publishes it — the
+      // provider payload's null stays null, never invented. A null on
+      // either side of the span interpolates to null: unknown is not
+      // a value to blend from.
+      cloudCover:
+        sa.cloudCover == null || sb.cloudCover == null
+          ? null
+          : mix(sa.cloudCover, sb.cloudCover),
     },
     marine: {
       hsCombined: mix(ma.hsCombined, mb.hsCombined),
@@ -580,6 +589,10 @@ export function hazardAlerts(notes, positions, radiusNm = HAZARD_RADIUS_NM) {
           timestamp: pos.timestamp,
           noteId: note.id ?? null,
           description: note.description ?? null,
+          // The note's own url is the GDACS event page (work doc
+          // #31): rides the alert so the timeline row links the
+          // origin instead of just naming the hazard
+          url: typeof note.url === "string" ? note.url : null,
           distanceNm: distance != null ? Math.round(distance * 10) / 10 : 0,
         });
         break; // One alert per note
@@ -1063,6 +1076,10 @@ export function simulateRun({
       sailState,
       motoring,
       night,
+      // Cloud cover at the boat's position (work doc #32): rides the
+      // row so the timeline night glyphs can say how dark the night
+      // actually is
+      cloudCover: weather?.surface?.cloudCover ?? null,
     });
 
     // Anomalies
@@ -1470,6 +1487,8 @@ export function simulatePassage({
                 tpSeconds: row.tpSeconds ?? null,
                 comfortLevel: row.comfortLevel ?? null,
                 slatting: Boolean(row.slatting),
+                // Night-darkness context (work doc #32)
+                cloudCover: row.cloudCover ?? null,
               },
             }
           : event;
@@ -1549,6 +1568,8 @@ export function filterExceptions(simulationResult) {
         lon: row.lon,
         comfortLevel: row.comfortLevel ?? null,
         slatting: Boolean(row.slatting),
+        // Night-darkness context (work doc #32)
+        cloudCover: row.cloudCover ?? null,
       })),
       // Anomalies merge into episodes (start hour, time range, peak
       // values) — a five-hour warning band reads as one timeline

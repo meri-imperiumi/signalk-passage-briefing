@@ -31,10 +31,12 @@ test("webapp view models", async (t) => {
 
   const {
     briefingAgeHours,
+    fmtHm,
     fmtShip,
     parseTimezoneOffset,
     setShipTime,
     shipTimeLabel,
+    skySegments,
   } = await import("../public/components/models.mjs");
 
   await t.test("fmtUtc renders MM-DD HH:MMZ in UTC", () => {
@@ -267,6 +269,8 @@ test("webapp view models", async (t) => {
     assert.equal(now.mslpHpa, 1013);
     assert.equal(now.mslpTrend, 0);
     assert.equal(now.comfortLevel, rows[0].comfortLevel);
+    // Now cloud cover (work doc #33): from the first forecast step
+    assert.equal(now.cloudCover, null);
   });
 
   await t.test("hereNow and hereHourly handle empty payloads", () => {
@@ -366,6 +370,267 @@ test("webapp view models", async (t) => {
     assert.equal(timeline[1].detail, "32 nm · 12.2 kn TWS");
     assert.equal(timeline[2].label, "No sails - drifting");
     assert.deepEqual(mergeTimeline(null, null), []);
+  });
+
+  await t.test("fmtHm renders clock time in ship's time (doc #33)", () => {
+    setShipTime({ offsetMinutes: 780, region: "Pacific/Tongatapu" });
+    assert.equal(fmtHm("2026-09-29T05:35:00.000Z"), "18:35");
+    setShipTime(null);
+    assert.equal(fmtHm("2026-06-21T06:05:00.000Z"), "06:05");
+    assert.equal(fmtHm(null), "");
+    assert.equal(fmtHm("not a date"), "");
+  });
+
+  await t.test("skySegments build the sky line (doc #33)", () => {
+    setShipTime({ offsetMinutes: 780, region: "Pacific/Tongatapu" });
+    const payload = {
+      metadata: { fetchedAt: "2026-10-05T06:00:00.000Z" },
+      celestialNights: [
+        {
+          timestamp: "2026-10-05T08:40:00.000Z",
+          nauticalDusk: "2026-10-05T08:40:00.000Z",
+          sunset: "2026-10-05T07:15:00.000Z",
+          sunrise: "2026-10-05T18:20:00.000Z",
+          moonrise: "2026-10-05T10:58:00.000Z",
+          moonset: "2026-10-04T19:42:00.000Z",
+        },
+      ],
+    };
+    const segments = skySegments(payload, { cloudCover: 40 });
+    const texts = segments.map((s) => s.text);
+    // Ship time +13: sunset 20:15, dusk 21:40, moonrise 23:58
+    assert.ok(texts.includes("☀ 20:15↓"), texts.join(" "));
+    assert.ok(texts.includes("☾ 21:40"), texts.join(" "));
+    assert.ok(texts.includes("☽↑ 23:58"), texts.join(" "));
+    // The moonset belongs to the previous evening — outside the
+    // night window, so it stays quiet
+    assert.ok(!texts.some((t) => t.includes("19:42")), texts.join(" "));
+    assert.ok(texts.includes("☁ 40%"), texts.join(" "));
+    assert.equal(segments[0].title, "sunset 10-05 20:15 +13");
+    // No cloud field (provider mode): no cloud segment, never invented
+    const clearSky = skySegments(payload, { cloudCover: null });
+    assert.ok(!clearSky.some((s) => s.text.startsWith("☁")));
+    // A payload predating the sky data degrades to empty
+    assert.deepEqual(skySegments({}, {}), []);
+    assert.deepEqual(skySegments(null, {}), []);
+    setShipTime(null);
+  });
+
+  await t.test(
+    "mergeTimeline stamps cloud cover and derived provenance (docs #31/#32)",
+    () => {
+      const fetchedAt = "2026-06-21T06:00:00.000Z";
+      const timeline = mergeTimeline(
+        {
+          passageSummary: {
+            sailChanges: [
+              {
+                hoursFromNow: 2,
+                timestamp: "2026-06-21T08:00:00.000Z",
+                sailState: "MAIN_1_REEF",
+              },
+            ],
+            track: [
+              {
+                hoursFromNow: 2,
+                lat: -18.5,
+                lon: 178.0,
+                comfortLevel: "easy",
+                slatting: false,
+                cloudCover: 65,
+              },
+            ],
+          },
+        },
+        {
+          metadata: {
+            fetchedAt,
+            provenance: {
+              kind: "forecast",
+              label: "Open-Meteo · forecast:best_match",
+              url: "https://open-meteo.com/en/docs?latitude=-18&longitude=178",
+              viewerBase: "/signalk-weather-map/",
+              at: fetchedAt,
+            },
+          },
+        },
+      );
+      assert.equal(timeline.length, 1);
+      // Cloud rides the item from the track's nearest hour
+      assert.equal(timeline[0].cloudCover, 65);
+      // The simulated item chains to the weather provenance, with a
+      // deep link to the item's own hour and position
+      assert.equal(timeline[0].provenance.kind, "derived");
+      assert.match(timeline[0].provenance.label, /Simulated on board/);
+      assert.equal(
+        timeline[0].provenance.viewerUrl,
+        "/signalk-weather-map/?lat=-18.5000&lon=178.0000&time=2026-06-21T08:00:00.000Z&layer=wind",
+      );
+      // The external origin follows the item's position too — the
+      // forecast for the patch of ocean the boat plans to be at
+      assert.equal(
+        timeline[0].provenance.url,
+        "https://open-meteo.com/en/docs?latitude=-18.5000&longitude=178.0000",
+      );
+
+      // Without an installed viewer the chain keeps the external
+      // origin only; without any provenance record items stay quiet
+      const bare = mergeTimeline(
+        {
+          passageSummary: {
+            sailChanges: [
+              {
+                hoursFromNow: 2,
+                timestamp: "2026-06-21T08:00:00.000Z",
+                sailState: "MAIN_1_REEF",
+              },
+            ],
+          },
+        },
+        null,
+      );
+      assert.equal(bare[0].provenance, null);
+      assert.equal(bare[0].cloudCover, null);
+    },
+  );
+
+  await t.test(
+    "mergeTimeline passes source provenance through (doc #31)",
+    () => {
+      const fetchedAt = "2026-06-21T06:00:00.000Z";
+      const timeline = mergeTimeline(null, {
+        metadata: { fetchedAt },
+        hazardEvents: [
+          {
+            timestamp: "2026-06-21T07:00:00.000Z",
+            title: "Orange earthquake",
+            alertLevel: "orange",
+            distanceNm: 120,
+            bearingDeg: 45,
+            type: "EQ",
+            provenance: {
+              kind: "warning",
+              label: "GDACS",
+              url: "https://www.gdacs.org/report.aspx?eventid=1",
+              viewerUrl: null,
+              at: "2026-06-21T07:00:00.000Z",
+            },
+          },
+        ],
+        spaceEvents: [
+          {
+            timestamp: "2026-06-21T09:00:00.000Z",
+            kind: "satellite",
+            tactical: true,
+            description: "ISS pass",
+            provenance: {
+              kind: "feed",
+              label: "CelesTrak TLE · live tracker",
+              url: "https://www.n2yo.com/satellite/?s=25544",
+              viewerUrl: null,
+              at: null,
+            },
+          },
+        ],
+        zoneTransitions: [
+          {
+            hoursFromNow: 3,
+            kind: "enter",
+            territory: { name: "Tonga", iso_ter: "TON" },
+            provenance: {
+              kind: "data",
+              label: "Marine Regions",
+              url: "https://www.marineregions.org/",
+              viewerUrl: null,
+              at: null,
+            },
+          },
+        ],
+      });
+      const hazard = timeline.find((i) => i.kind === "hazard");
+      const space = timeline.find((i) => i.kind === "space");
+      const zone = timeline.find((i) => i.kind === "zone");
+      assert.equal(hazard.provenance.label, "GDACS");
+      assert.equal(
+        space.provenance.url,
+        "https://www.n2yo.com/satellite/?s=25544",
+      );
+      assert.equal(zone.provenance.kind, "data");
+    },
+  );
+
+  await t.test(
+    "mergeTimeline links hazard notes to their GDACS page (doc #31)",
+    () => {
+      const timeline = mergeTimeline({
+        passageSummary: {
+          hazards: [
+            {
+              hoursFromNow: 6,
+              timestamp: "2026-06-21T12:00:00.000Z",
+              noteId: "hazard-eqtest1",
+              description: "M6.2 earthquake",
+              distanceNm: 34,
+              url: "https://www.gdacs.org/report.aspx?eventtype=EQ&eventid=1",
+            },
+            {
+              hoursFromNow: 8,
+              timestamp: "2026-06-21T14:00:00.000Z",
+              noteId: "hazard-local",
+              description: "Firing range",
+              distanceNm: 3,
+            },
+          ],
+        },
+      });
+      assert.equal(timeline.length, 2);
+      const linked = timeline[0];
+      assert.equal(linked.provenance.kind, "warning");
+      assert.equal(linked.provenance.label, "GDACS");
+      assert.equal(
+        linked.provenance.url,
+        "https://www.gdacs.org/report.aspx?eventtype=EQ&eventid=1",
+      );
+      // An on-board note without a source stays quiet
+      assert.equal(timeline[1].provenance, null);
+    },
+  );
+
+  await t.test("etaTable night rows carry cloud cover (doc #32)", () => {
+    const table = etaTable(
+      {
+        passageSummary: {
+          etaP50: "2026-06-22T13:00:00Z",
+          etaNight: { p50: true },
+          track: [
+            {
+              hoursFromNow: 31,
+              lat: -18.5,
+              lon: 178.0,
+              comfortLevel: "easy",
+              slatting: false,
+              cloudCover: 82,
+            },
+          ],
+        },
+      },
+      { metadata: { fetchedAt: "2026-06-21T06:00:00.000Z" } },
+    );
+    // ETA at +31 h (fetch-relative): the nearest track row's cloud
+    assert.equal(table.rows[1].cloud, 82);
+
+    // Beyond the track horizon: null, never invented
+    const farTable = etaTable(
+      {
+        passageSummary: {
+          etaP50: "2026-06-30T13:00:00Z",
+          etaNight: { p50: true },
+          track: [],
+        },
+      },
+      { metadata: { fetchedAt: "2026-06-21T06:00:00.000Z" } },
+    );
+    assert.equal(farTable.rows[1].cloud, null);
   });
 
   await t.test(
