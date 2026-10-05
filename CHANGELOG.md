@@ -5,6 +5,9 @@
 ### Added
 - Conditions tabs on the unified timeline (work doc #18): each entry carries a small colored tab on its left edge — the comfort tier color the tactical sparkline paints at that hour, so the passage's weather development reads at a glance. The tier comes from the simulated track's nearest hourly step; sail changes keep their own enriched conditions block as the authoritative tier, slatting renders as the sparkline's hatch stripes, and entries outside track coverage degrade to the unknown gray instead of inventing a tier.
 
+### Changed
+- The briefing refresh button reads "Update now" instead of "Fetch now" (matching loading strips "Updating briefing…" / "Updating conditions…"): from the crew's side the action regenerates the briefing with fresh weather — the fetching is the plugin's business, not the button's.
+
 ### Fixed
 - The critical-hazard banner rendered always — an empty red strip with an ACK button above the webapp header even with no active alerts: the banner stylesheet's `display: flex` beats the browser's built-in `[hidden] { display: none }` regardless of specificity, so the `hidden` attribute did nothing (the `.tab-bar` already carried the `[hidden]` antidote; the banner and the embed-mode header now do too). With the bar permanently visible but empty, ACK had nothing to acknowledge. Also fixed red-on-red text: the banner painted message and background with the same `--color-red`, so a real emergency's message would have been invisible — text now uses the base canvas color per the codebase's text-on-color pattern.
 

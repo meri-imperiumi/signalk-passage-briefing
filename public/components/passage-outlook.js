@@ -582,8 +582,8 @@ class PassageOutlook extends HTMLElement {
     const query = routeId ? `?route=${encodeURIComponent(routeId)}` : "";
     this.renderLoading(
       routeId
-        ? "Fetching briefing — can take a minute over a slow link…"
-        : "Fetching conditions…",
+        ? "Updating briefing — can take a minute over a slow link…"
+        : "Updating conditions…",
     );
     try {
       await fetchJson(`${PLUGIN_API}/briefing/refresh${query}`, 120000, {
@@ -632,7 +632,7 @@ class PassageOutlook extends HTMLElement {
         ? "No cached conditions yet"
         : "No cached briefing for this route";
     const button = document.createElement("button");
-    button.textContent = "Fetch now";
+    button.textContent = "Update now";
     button.disabled = this._status?.online !== true;
     // Here mode refreshes the conditions payload; the route-select
     // flow would target the selected route instead
@@ -663,7 +663,7 @@ class PassageOutlook extends HTMLElement {
     const text = document.createElement("span");
     text.textContent = `Briefing compiled ${info.stamp} — ${info.age} old`;
     const button = document.createElement("button");
-    button.textContent = "Fetch now";
+    button.textContent = "Update now";
     button.disabled = this._status?.online !== true;
     button.addEventListener("click", () => this.refreshBriefing());
     strip.append(text, button);
@@ -792,7 +792,7 @@ class PassageOutlook extends HTMLElement {
    * and other payload fields only arrive on a recompile).
    */
   async refreshHereBriefing() {
-    this.renderLoading("Fetching conditions…");
+    this.renderLoading("Updating conditions…");
     try {
       await fetchJson(`${PLUGIN_API}/briefing/refresh`, 120000, {
         method: "POST",

@@ -118,7 +118,7 @@ class ConditionsHere extends HTMLElement {
       <section class="sk-card theme-teal">
         <div class="card-head">
           <h2>Conditions Here</h2>
-          <button id="refresh" class="refresh">Fetch now</button>
+          <button id="refresh" class="refresh">Update now</button>
         </div>
         <p class="note">No active route — conditions at the vessel</p>
         <div class="now">
