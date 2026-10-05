@@ -443,6 +443,74 @@ test("webapp view models", async (t) => {
     assert.equal(slatting[0].detail, "10.0 kn TWS · Hs 1.7 m · slatting");
   });
 
+  await t.test("mergeTimeline carries the conditions tier for the tab", () => {
+    // Every entry paints the comfort tier at its hour (work doc #18)
+    // — the simulated track's nearest hourly step, so the timeline's
+    // tab colors match the tactical sparkline's columns
+    const timeline = mergeTimeline({
+      passageSummary: {
+        track: [
+          {
+            hoursFromNow: 0,
+            lat: -18.6,
+            lon: 174.0,
+            comfortLevel: "champagne",
+            slatting: false,
+          },
+          {
+            hoursFromNow: 10,
+            lat: -18.9,
+            lon: 174.5,
+            comfortLevel: "coffee",
+            slatting: false,
+          },
+          {
+            hoursFromNow: 20,
+            lat: -19.3,
+            lon: 175.0,
+            comfortLevel: "rough",
+            slatting: true,
+          },
+        ],
+        // An event type with no conditions of its own: the tier
+        // comes from the track
+        macroSeaAnomalies: [
+          {
+            hoursFromNow: 11,
+            timestamp: "2026-06-21T17:00:00.000Z",
+            steepnessRatio: 3,
+            hsMeters: 2.5,
+          },
+        ],
+        sailChanges: [
+          {
+            hoursFromNow: 19,
+            timestamp: "2026-06-22T01:00:00.000Z",
+            sailState: "MAIN_2_REEF",
+            conditions: { twsKnots: 22, comfortLevel: "sick" },
+          },
+        ],
+      },
+    });
+    const sea = timeline.find((item) => item.kind === "sea");
+    assert.equal(sea.comfortLevel, "coffee");
+    assert.equal(sea.slatting, false);
+    // The sail change's own enriched conditions block wins over the
+    // nearest track hour — it is the reefing logic's tier
+    const sail = timeline.find((item) => item.kind === "sail");
+    assert.equal(sail.comfortLevel, "sick");
+    // No track: the tier degrades to unknown, not invented
+    const bare = mergeTimeline({
+      passageSummary: {
+        macroSeaAnomalies: [
+          { hoursFromNow: 3, steepnessRatio: 3, hsMeters: 2.5 },
+        ],
+      },
+    });
+    assert.equal(bare[0].comfortLevel, null);
+    assert.equal(bare[0].slatting, false);
+  });
+
   await t.test("mergeTimeline maps sea, convective and hazard sources", () => {
     const timeline = mergeTimeline({
       passageSummary: {

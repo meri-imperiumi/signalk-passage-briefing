@@ -824,6 +824,45 @@ function trackNightAt(hoursFromNow, track, baseMs) {
 }
 
 /**
+ * Conditions at a timeline item's hour: the simulated track's
+ * nearest hourly step (same nearest-step rule the night test uses —
+ * the rows are hourly, interpolation between tiers would invent one).
+ * Feeds the timeline's conditions tab (work doc #18): every entry
+ * paints the comfort color the tactical sparkline uses, so the
+ * passage's weather development reads at a glance.
+ *
+ * @param {number} hoursFromNow - Item hour in the passage schedule
+ * @param {Array<{hoursFromNow: number, comfortLevel: string|null,
+ *   slatting: boolean}>} track - Simulated hourly track
+ * @returns {{comfortLevel: string|null, slatting: boolean}|null} Null
+ *   when the track carries no conditions
+ */
+function trackConditionsAt(hoursFromNow, track) {
+  if (!Array.isArray(track) || track.length === 0) {
+    return null;
+  }
+  let reference = null;
+  let best = Infinity;
+  for (const point of track) {
+    if (point.hoursFromNow == null) {
+      continue;
+    }
+    const d = Math.abs(point.hoursFromNow - hoursFromNow);
+    if (d < best) {
+      best = d;
+      reference = point;
+    }
+  }
+  if (!reference || reference.comfortLevel == null) {
+    return null;
+  }
+  return {
+    comfortLevel: reference.comfortLevel,
+    slatting: Boolean(reference.slatting),
+  };
+}
+
+/**
  * The effective departure for the passage schedule (work doc #15):
  * auto mode anchors to daylight via {@link assumedDepartureTime}; the
  * manual modes are the crew's word — Now, First light, a fixed offset
@@ -1017,6 +1056,8 @@ export function mergeTimeline(exceptions, payload = null) {
       label: "?",
       detail: "",
       night: false,
+      comfortLevel: null,
+      slatting: false,
       ...item,
       stamp: fmtShip(item.timestamp),
       moon: moonGlyphFor(item.timestamp, payload),
@@ -1098,6 +1139,10 @@ export function mergeTimeline(exceptions, payload = null) {
         .filter(Boolean)
         .join(" · "),
       night: Boolean(e.night),
+      // The conditions block is the reefing logic's tier at the
+      // change point — authoritative over the track's nearest hour
+      comfortLevel: conditions?.comfortLevel ?? null,
+      slatting: Boolean(conditions?.slatting),
     });
   }
 
@@ -1243,10 +1288,19 @@ export function mergeTimeline(exceptions, payload = null) {
   // an anchor is active (the track is too), fetch-relative otherwise
   const baseMs = anchorMs ?? fetchMs ?? Date.now();
   for (const item of items) {
-    if (item.night || item.hoursFromNow == null) {
-      continue;
+    if (!item.night && item.hoursFromNow != null) {
+      item.night = trackNightAt(item.hoursFromNow, track, baseMs) ?? false;
     }
-    item.night = trackNightAt(item.hoursFromNow, track, baseMs) ?? false;
+    // The conditions tab (work doc #18): every item paints the tier
+    // at its hour; sail changes keep their own enriched conditions
+    // block when the track has none or the item predates it
+    if (item.hoursFromNow != null && item.comfortLevel == null) {
+      const conditions = trackConditionsAt(item.hoursFromNow, track);
+      if (conditions) {
+        item.comfortLevel = conditions.comfortLevel;
+        item.slatting = conditions.slatting;
+      }
+    }
   }
 
   // Energy events (work doc #10): the predictor's own surplus and

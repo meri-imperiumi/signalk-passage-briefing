@@ -2,8 +2,9 @@
  * `<passage-timeline>` — the unified passage timeline (work doc
  * #18): one merged, chronological list of everything the briefing
  * expects to happen, replacing the per-type blocks. Rows carry a
- * time gutter (relative hours + UTC stamp), a kind glyph and a
- * severity colour, then label and detail.
+ * conditions tab (comfort tier color, the tactical sparkline's
+ * palette), a time gutter (relative hours + UTC stamp), a kind glyph
+ * and a severity colour, then label and detail.
  *
  * Data arrives via `setTimeline()` from the screen elements, which
  * build it with `mergeTimeline()` from `models.mjs` — the tactical
@@ -13,6 +14,7 @@
  * @file components/passage-timeline.js
  */
 
+import { comfortColor } from "./models.mjs";
 import { SK_BASE_CSS } from "./sk-base-css.js";
 
 /**
@@ -48,13 +50,29 @@ class PassageTimeline extends HTMLElement {
         :host { display: block; }
         .entry {
           display: grid;
-          grid-template-columns: auto auto 1fr;
+          grid-template-columns: 4px auto auto 1fr;
           gap: 4px 10px;
           align-items: baseline;
           padding: 6px 0;
           border-bottom: 1px solid rgba(102, 198, 219, 0.15);
         }
         .entry:last-child { border-bottom: none; }
+        /* Conditions tab (work doc #18): the comfort tier color the
+         * tactical sparkline paints, so the passage's weather
+         * development reads at a glance. Slatting stripes like the
+         * sparkline's hatch — heavy-weather rough keeps its solid
+         * colour. */
+        .tab {
+          align-self: stretch;
+          background: var(--tab-color, var(--comfort-unknown));
+        }
+        .tab.slatting {
+          background: repeating-linear-gradient(
+            45deg,
+            var(--tab-color, var(--comfort-unknown)) 0 3px,
+            transparent 3px 6px
+          );
+        }
         .when {
           font-family: var(--font-data, ui-monospace, monospace);
           font-variant-numeric: tabular-nums;
@@ -77,10 +95,11 @@ class PassageTimeline extends HTMLElement {
          * event data flows beneath it. Matches the 700px layout
          * breakpoint used across the app. */
         @media (max-width: 699px) {
-          .entry { grid-template-columns: auto 1fr; }
-          .when { grid-area: 1 / 1 / 2 / 3; }
-          .glyph { grid-area: 2 / 1 / 3 / 2; }
-          .body { grid-area: 2 / 2 / 3 / 3; }
+          .entry { grid-template-columns: 4px auto 1fr; }
+          .tab { grid-area: 1 / 1 / 4 / 2; }
+          .when { grid-area: 1 / 2 / 2 / 4; }
+          .glyph { grid-area: 2 / 2 / 3 / 3; }
+          .body { grid-area: 2 / 3 / 4 / 4; }
         }
       </style>
       <div id="list"></div>
@@ -96,7 +115,8 @@ class PassageTimeline extends HTMLElement {
    *
    * @param {Array<{hoursFromNow: number|null, stamp: string, kind:
    *   string, severity: string, label: string, detail: string,
-   *   night: boolean}>|null} timeline - From `mergeTimeline()`
+   *   night: boolean, comfortLevel: string|null, slatting: boolean}>|null}
+   *   timeline - From `mergeTimeline()`
    */
   setTimeline(timeline) {
     this._timeline = timeline;
@@ -115,6 +135,14 @@ class PassageTimeline extends HTMLElement {
     for (const item of items) {
       const row = document.createElement("div");
       row.className = `entry sev-${item.severity ?? "info"}`;
+
+      const tab = document.createElement("span");
+      tab.className = `tab${item.slatting ? " slatting" : ""}`;
+      tab.style.setProperty(
+        "--tab-color",
+        comfortColor(item.comfortLevel ?? null),
+      );
+      tab.title = item.comfortLevel ? `conditions: ${item.comfortLevel}` : "";
 
       const when = document.createElement("span");
       when.className = "when";
@@ -140,7 +168,7 @@ class PassageTimeline extends HTMLElement {
         body.appendChild(detail);
       }
 
-      row.append(when, glyph, body);
+      row.append(tab, when, glyph, body);
       this._listEl.appendChild(row);
     }
   }

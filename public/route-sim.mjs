@@ -1540,11 +1540,15 @@ export function filterExceptions(simulationResult) {
       // The simulated track, compact: the timeline's night indicators
       // interpolate the crew's position at each event's hour so every
       // item — not only sail changes — can say whether it happens at
-      // night (work doc #17 session feedback)
+      // night (work doc #17 session feedback); the comfort tier rides
+      // along so every item's conditions tab (work doc #18) picks the
+      // same colors the tactical sparkline paints
       track: (simulationResult.hourlyComfort ?? []).map((row) => ({
         hoursFromNow: row.hoursFromNow,
         lat: row.lat,
         lon: row.lon,
+        comfortLevel: row.comfortLevel ?? null,
+        slatting: Boolean(row.slatting),
       })),
       // Anomalies merge into episodes (start hour, time range, peak
       // values) — a five-hour warning band reads as one timeline
