@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- Branding on the webapp page (per the Signal K visuals spec): the plugin's app icon (`icon-256.png`) serves as favicon and the base canvas color ships as the `theme-color` meta, so browser chrome matches the console background in both day and night modes.
+
 ## [0.8.0] - 2026-10-06
 
 ### Added
