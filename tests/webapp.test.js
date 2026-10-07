@@ -11,6 +11,7 @@ const assert = require("node:assert/strict");
 test("webapp view models", async (t) => {
   const {
     COMFORT_TIERS,
+    compiledLabel,
     comfortColor,
     effectiveDeparture,
     etaTable,
@@ -93,6 +94,26 @@ test("webapp view models", async (t) => {
       ),
       0,
     );
+  });
+
+  await t.test("compiledLabel names the briefing's compile instant", () => {
+    // The header pill's text: prefixed so "compiled when" reads as a
+    // fact, not a clock
+    assert.equal(
+      compiledLabel({ metadata: { fetchedAt: "2026-06-21T06:05:00.000Z" } }),
+      "Compiled 06-21 06:05Z",
+    );
+    // Ship's time applies like every stamp (offset rides along)
+    setShipTime({ offsetMinutes: 780, region: "Pacific/Tongatapu" });
+    assert.equal(
+      compiledLabel({ metadata: { fetchedAt: "2026-06-21T06:05:00.000Z" } }),
+      "Compiled 06-21 19:05 +13",
+    );
+    setShipTime(null);
+    // No fetch time (or no payload): nothing to show — the pill
+    // hides rather than inventing a stamp
+    assert.equal(compiledLabel({ metadata: {} }), null);
+    assert.equal(compiledLabel(null), null);
   });
 
   await t.test("fmtHours buckets days, hours and minutes", () => {

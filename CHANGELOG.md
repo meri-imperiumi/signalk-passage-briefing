@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- The header always names when the served briefing was made: a quiet `Compiled MM-DD HH:MM` pill next to the connectivity and ship's-time pills, stamped from the payload's `fetchedAt` in ship's time on every load (route and here modes alike, any age — the stale-age banner stays the alarm past 24 h, this is the fact next to it). A briefing with no fetch time hides the pill rather than inventing a stamp; the label re-renders when the vessel's timezone arrives.
+
 ## [0.8.1] - 2026-10-08
 
 ### Added

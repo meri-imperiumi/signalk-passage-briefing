@@ -79,6 +79,20 @@ export function briefingAgeHours(payload, now = new Date()) {
 }
 
 /**
+ * Header pill text naming when the served briefing was made: the
+ * payload's fetch instant in ship's time, prefixed for context. Null
+ * when the payload carries no (valid) fetch time — the pill hides
+ * rather than inventing a stamp.
+ *
+ * @param {object|null} payload
+ * @returns {string|null} `Compiled MM-DD HH:MM` stamp, or null
+ */
+export function compiledLabel(payload) {
+  const stamp = fmtShip(payload?.metadata?.fetchedAt);
+  return stamp ? `Compiled ${stamp}` : null;
+}
+
+/**
  * The vessel's published timezone (Signal K `environment.time.*`, as
  * served by signalk-ships-time): the session-wide state behind
  * {@link fmtShip}. `offsetMinutes` comes from

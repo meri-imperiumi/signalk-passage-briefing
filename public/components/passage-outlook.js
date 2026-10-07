@@ -12,6 +12,7 @@
 
 import {
   briefingAgeHours,
+  compiledLabel,
   effectiveDeparture,
   fmtHours,
   fmtShip,
@@ -159,6 +160,7 @@ class PassageOutlook extends HTMLElement {
       <header>
         <h1>Passage Briefing</h1>
         <select id="route" aria-label="Route" style="max-width: 16rem"></select>
+        <span class="pill" id="compiled" hidden></span>
         <span class="pill" id="online">OFFLINE</span>
         <span class="pill" id="shiptime" hidden></span>
       </header>
@@ -179,6 +181,7 @@ class PassageOutlook extends HTMLElement {
       ?.addEventListener("click", () => this.acknowledgeHazards());
     this._onlinePill = this.shadowRoot.getElementById("online");
     this._shiptimePill = this.shadowRoot.getElementById("shiptime");
+    this._compiledPill = this.shadowRoot.getElementById("compiled");
     this._tabBar = this.shadowRoot.getElementById("tab-bar");
     this._tabTactical = this.shadowRoot.getElementById("tab-tactical");
     this._tabStrategic = this.shadowRoot.getElementById("tab-strategic");
@@ -509,6 +512,7 @@ class PassageOutlook extends HTMLElement {
         }
         const mode = this._briefing.mode;
         this._briefing = null;
+        this.renderCompiled();
         this.renderRoute();
         this.renderStale(true, mode);
         return;
@@ -524,6 +528,7 @@ class PassageOutlook extends HTMLElement {
         this._exceptions = null;
       }
       this.renderStale(false);
+      this.renderCompiled();
       const ageHours = briefingAgeHours(this._briefing.payload);
       this.renderOutdated(
         ageHours != null && ageHours > STALE_AFTER_HOURS
@@ -567,6 +572,8 @@ class PassageOutlook extends HTMLElement {
       this._shiptimePill.textContent = shipTimeLabel();
       this._shiptimePill.hidden = false;
     }
+    // The compile stamp rides the zone too: same instant, new offset
+    this.renderCompiled();
     this.renderData();
     // Here mode stamps live outside renderData; restamp in place
     if (this._briefing?.mode === "here" && this._briefing?.payload) {
@@ -574,6 +581,22 @@ class PassageOutlook extends HTMLElement {
         ?.querySelector("conditions-here")
         ?.setHere(this._briefing.payload, this._config ?? {});
     }
+  }
+
+  /**
+   * The compile stamp pill: the header always names when the served
+   * briefing was made — the payload's fetchedAt — whatever its age.
+   * The outdated banner stays the alarm past the stale bar; this is
+   * the quiet fact next to it, so a fresh-looking briefing can never
+   * hide its vintage. Hidden with no payload (nothing compiled yet).
+   */
+  renderCompiled() {
+    if (!this._compiledPill) {
+      return;
+    }
+    const label = compiledLabel(this._briefing?.payload);
+    this._compiledPill.textContent = label ?? "";
+    this._compiledPill.hidden = label == null;
   }
 
   /** Refreshes the selected route's briefing while online. */
