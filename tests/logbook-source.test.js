@@ -350,8 +350,8 @@ describe("readLogbookEntries", () => {
     assert.ok(queries[0].from && queries[0].to);
   });
 
-  test("no resources API or no provider reads as an empty store", async () => {
-    assert.deepEqual(await readLogbookEntries({}), []);
+  test("no resources API or no provider fails loudly with the reason", async () => {
+    await assert.rejects(readLogbookEntries({}), /Resources API not available/);
     const failing = {
       resourcesApi: {
         async listResources() {
@@ -359,7 +359,10 @@ describe("readLogbookEntries", () => {
         },
       },
     };
-    assert.deepEqual(await readLogbookEntries(failing), []);
+    await assert.rejects(
+      readLogbookEntries(failing),
+      /logentries resource provider/,
+    );
   });
 });
 
@@ -453,7 +456,7 @@ describe("readLogbookSailEvents", () => {
     assert.equal(windowed[0].eventType, "REEF_INCREASE");
   });
 
-  test("missing provider is not fatal", async () => {
+  test("missing provider fails loudly with the reason", async () => {
     const failing = {
       resourcesApi: {
         async listResources() {
@@ -461,7 +464,13 @@ describe("readLogbookSailEvents", () => {
         },
       },
     };
-    assert.deepEqual(await readLogbookSailEvents({ app: failing }), []);
-    assert.deepEqual(await readLogbookSailEvents({ app: {} }), []);
+    await assert.rejects(
+      readLogbookSailEvents({ app: failing }),
+      /logentries resource provider/,
+    );
+    await assert.rejects(
+      readLogbookSailEvents({ app: {} }),
+      /Resources API not available/,
+    );
   });
 });

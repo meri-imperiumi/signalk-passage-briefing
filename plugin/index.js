@@ -25,7 +25,6 @@ const { mkdir, readFile, unlink, writeFile } = require("node:fs/promises");
 const { PassageStateMachine } = require("./state-machine.js");
 const { PassageDatabase } = require("./sqlite-db.js");
 const {
-  logbookAvailable,
   readLogbookEntries,
   readLogbookSailEvents,
 } = require("./logbook-source.js");
@@ -1997,14 +1996,6 @@ module.exports = (app) => {
         now,
       });
     }
-    sourceStatus.record({
-      id: "sk-logbook",
-      label: "Logbook (signalk-logbook)",
-      kind: "signalk",
-      url: "resources/logentries",
-      ...((await logbookAvailable(app)) ? {} : { absent: true }),
-      now,
-    });
   }
 
   /**

@@ -2110,7 +2110,6 @@ test("source status: SK availability recorded and served at /sources", async () 
   assert.equal(entries["sk-polar"].lastStatus, "ok");
   assert.equal(entries["sk-ships-time"].lastStatus, "absent");
   assert.equal(entries["sk-routes-resources"].lastStatus, "fail");
-  assert.equal(entries["sk-logbook"].lastStatus, "absent");
 
   // Configured sources have entries even before their first cycle
   assert.equal(entries["weather-track"].lastStatus, null);

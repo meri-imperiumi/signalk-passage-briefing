@@ -465,17 +465,20 @@ function normalizeLogEntry(entry) {
  * explicit window, so "all history" is an explicit epoch-to-eternity
  * range.
  *
- * A missing resources API (old server) or a failed listing (the
- * logbook plugin not installed — no provider for the type) reads as
- * an empty store, never a failure: this consumer degrades, the same
- * way a missing store directory used to.
+ * Loud on an unusable source: a missing resources API (old server)
+ * or a failed listing (the logbook plugin not installed — no provider
+ * for the type) throws with the reason, so the human-initiated runs
+ * that read the logbook (backfill, event diagnostics) can say why
+ * they found nothing instead of silently reporting zero events.
  *
  * @param {object} app - Signal K plugin `app`
  * @returns {Promise<Array<object>>} Normalized entries, oldest first
+ * @throws {Error} When the resources API or the `logentries` provider
+ *   is unavailable
  */
 async function readLogbookEntries(app) {
   if (typeof app?.resourcesApi?.listResources !== "function") {
-    return []; // No resources API on this server
+    throw new Error("Resources API not available on this server");
   }
   let resourceMap;
   try {
@@ -483,8 +486,10 @@ async function readLogbookEntries(app) {
       from: ALL_HISTORY_FROM,
       to: ALL_HISTORY_TO,
     });
-  } catch (_error) {
-    return []; // No provider for the type (logbook not installed)
+  } catch (error) {
+    throw new Error(
+      `No logentries resource provider on this server — install signalk-logbook to backfill from the log (${error.message})`,
+    );
   }
   if (!resourceMap || typeof resourceMap !== "object") {
     return [];
@@ -543,26 +548,6 @@ async function readLogbookEntriesRest({ baseUrl, token } = {}) {
 }
 
 /**
- * Whether the `logentries` resource is being served on this server
- * (the signalk-logbook provider is registered). Probed with a
- * one-entry listing — cheap even on years of logs.
- *
- * @param {object} app - Signal K plugin `app`
- * @returns {Promise<boolean>}
- */
-async function logbookAvailable(app) {
-  if (typeof app?.resourcesApi?.listResources !== "function") {
-    return false;
-  }
-  try {
-    await app.resourcesApi.listResources(RESOURCE_TYPE, { limit: 1 });
-    return true;
-  } catch (_error) {
-    return false;
-  }
-}
-
-/**
  * Reads the logbook through the resources API and extracts
  * sail-change events, optionally bounded to a window (state tracking
  * always starts from the oldest entry so mid-history ranges still
@@ -609,7 +594,6 @@ module.exports = {
   normalizeLogEntry,
   readLogbookEntries,
   readLogbookEntriesRest,
-  logbookAvailable,
   readLogbookSailEvents,
   foldTwaDegrees,
 };

@@ -5,6 +5,9 @@
 ### Added
 - Branding on the webapp page (per the Signal K visuals spec): the plugin's app icon (`icon-256.png`) serves as favicon and the base canvas color ships as the `theme-color` meta, so browser chrome matches the console background in both day and night modes.
 
+### Fixed
+- The per-minute source-status tick no longer touches the logbook — fixes "Server unreachable: Fetch is aborted" with an empty route picker on production since 0.8.0. The checklist's logbook probe went through the resources API, whose `logentries` provider answers even a `limit: 1` listing by reading and schema-validating every day file — on a multi-year log that meant overlapping full-store scans every 60 s starving the server so `/api/status` and `/api/routes` blew the webapp's 8 s abort timeout. The logbook is a once-used learning resource (backfill), not an ongoing ingest source, so it leaves the data source statuses entirely; with no provider installed, backfill now fails loudly with the reason instead of silently reporting zero events.
+
 ## [0.8.0] - 2026-10-06
 
 ### Added
