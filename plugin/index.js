@@ -1355,6 +1355,9 @@ module.exports = (app) => {
       lat: waypoints[0].lat,
       lon: waypoints[0].lon,
       cloudCoverAt: ephemeris.cloudCoverLookup(payload),
+      // Meteors ride the worker's track-positioned evaluation
+      // (work doc #37) — fixed-position entries would double-report
+      includeMeteors: false,
       dataDir: app.getDataDirPath(),
       spaceTrack: spaceTrackConfig,
       reentryEnabled: reentryWatchEnabled,

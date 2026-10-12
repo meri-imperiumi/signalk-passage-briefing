@@ -22,12 +22,13 @@ self.onmessage = (event) => {
     return;
   }
   try {
-    const result = simulatePassage(message.params ?? {});
+    const params = message.params ?? {};
+    const result = simulatePassage(params);
     self.postMessage({
       type: "result",
       id: message.id,
       result,
-      exceptions: filterExceptions(result),
+      exceptions: filterExceptions(result, params),
     });
   } catch (error) {
     self.postMessage({ type: "error", id: message.id, error: error.message });

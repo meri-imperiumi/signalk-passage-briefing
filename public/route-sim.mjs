@@ -21,6 +21,7 @@
  * @module route-sim
  */
 
+import { meteorNightEvents } from "./components/meteors.mjs";
 import { detectLineCrossings } from "./lines-of-interest.js";
 import {
   bearingRad,
@@ -1519,13 +1520,90 @@ export function simulatePassage({
 }
 
 /**
+ * Meteor-shower nights along the simulated track (work doc #37).
+ *
+ * The radiant-altitude gate is position-sensitive, so the evaluation
+ * runs here, where the track lives — the same pipeline that produces
+ * the sail changes. Per-night sky context (nautical-dusk anchors and
+ * moonlight) comes from the payload's `celestialNights`, computed at
+ * the departure position: anchors shift only minutes across a route,
+ * and the position-sensitive part travels with the track. Positions
+ * and cloud cover interpolate between the hourly rows; a night
+ * without context (beyond the payload's forecast window) is skipped,
+ * never invented.
+ *
+ * @param {object} simulationResult - From {@link simulatePassage}
+ * @param {object} [simParams] - Worker params; `payload` carries
+ *   `celestialNights`
+ * @returns {Array<object>} spaceEvent-shaped meteor events
+ */
+function trackMeteorEvents(simulationResult, simParams) {
+  const rows = simulationResult?.hourlyComfort ?? [];
+  const nights = simParams?.payload?.celestialNights ?? [];
+  if (rows.length < 2 || !Array.isArray(nights) || nights.length === 0) {
+    return [];
+  }
+  const from = Date.parse(rows[0].timestamp);
+  const last = Date.parse(rows.at(-1).timestamp);
+  if (!Number.isFinite(from) || !Number.isFinite(last)) {
+    return [];
+  }
+  const hours = Math.max(1, Math.ceil((last - from) / 3600000));
+  const bracket = (iso, pick) => {
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t) || t < from || t > last) {
+      return null;
+    }
+    let lo = 0;
+    let hi = rows.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (Date.parse(rows[mid].timestamp) <= t) {
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    const a = rows[lo];
+    const b = rows[hi];
+    const span = Date.parse(b.timestamp) - Date.parse(a.timestamp);
+    const f = span > 0 ? (t - Date.parse(a.timestamp)) / span : 0;
+    const value = pick(a, b, f);
+    return value == null ? null : value;
+  };
+  return meteorNightEvents({
+    from: new Date(from),
+    hours,
+    nights,
+    lat: rows[0].lat,
+    lon: rows[0].lon,
+    positionAt: (iso) =>
+      bracket(iso, (a, b, f) => ({
+        lat: a.lat + f * (b.lat - a.lat),
+        lon: a.lon + f * (b.lon - a.lon),
+      })),
+    cloudCoverAt: (iso) =>
+      bracket(iso, (a, b, f) => {
+        if (a.cloudCover == null || b.cloudCover == null) {
+          return null;
+        }
+        return a.cloudCover + f * (b.cloudCover - a.cloudCover);
+      }),
+  });
+}
+
+/**
  * Exception-based display filtering (SPEC §6.2): passes raw
  * simulation output through to the exception views the UI renders.
  *
  * @param {object} simulationResult - From {@link simulatePassage}
+ * @param {object} [simParams] - The worker's simulation params; the
+ *   payload carries the per-night sky context (`celestialNights`)
+ *   the track-positioned meteor evaluation reads (work doc #37)
  * @returns {object}
  */
-export function filterExceptions(simulationResult) {
+export function filterExceptions(simulationResult, simParams = {}) {
+  const meteorEvents = trackMeteorEvents(simulationResult, simParams);
   return {
     next24h: {
       comfortBlocks: (simulationResult.hourlyComfort ?? []).slice(0, 24),
@@ -1554,6 +1632,11 @@ export function filterExceptions(simulationResult) {
       zoneTransitions: simulationResult.zoneTransitions ?? [],
       // Offshore zone meridian crossing advisories (work doc #19)
       timeZoneChanges: simulationResult.timeZoneChanges ?? [],
+      // Meteor-shower nights evaluated along the simulated track
+      // (work doc #37): the radiant gate is position-sensitive, so it
+      // runs where the track lives — the payload's own `meteor`
+      // entries would double-report against a fixed position
+      meteorEvents,
       // The assumed departure the schedule anchors to (work doc #15)
       departure: simulationResult.departure ?? null,
       // The simulated track, compact: the timeline's night indicators

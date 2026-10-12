@@ -158,10 +158,12 @@ describe("celestial ephemeris (doc #3 Phase 2)", () => {
       lat: 20,
       lon: 60,
     });
-    assert.equal(dark.length, 1);
-    assert.equal(dark[0].timestamp, "2026-08-12T20:00:00.000Z");
-    assert.match(dark[0].description, /Perseids/);
+    // Night-anchored (work doc #37): the peak night's nautical-dusk
+    // anchor plus the just-past night, both moon-dark enough
+    assert.equal(dark.length, 2);
+    assert.match(dark[0].description, /Perseids peak tonight/);
     assert.match(dark[0].description, /Moon 0% lit/);
+    assert.match(dark[1].description, /just past the Perseids peak 2026-08-12/);
 
     const moonlit = ce.meteorEvents({
       from: new Date("2024-08-12T00:00:00Z"),
@@ -170,6 +172,30 @@ describe("celestial ephemeris (doc #3 Phase 2)", () => {
       lon: 60,
     });
     assert.deepEqual(moonlit, []);
+  });
+
+  test("daytime peak hours fire on their dark nights from NZ (work doc #37)", () => {
+    // Eta Aquariids 2027: 02:00Z = 14:00 NZST — the old gate's
+    // nautical-night-at-the-peak check suppressed it entirely; the
+    // night-anchored gate fires for the dark nights around it, and
+    // no night overclaims a peak its darkness never held
+    const events = ce.meteorEvents({
+      from: new Date("2027-05-05T00:00:00Z"),
+      hours: 96,
+      lat: -35,
+      lon: 174,
+    });
+    assert.ok(events.length >= 2, `eta aquariids nights ${events.length}`);
+    assert.match(
+      events[0].description,
+      /climbing toward the Eta Aquariids peak 2027-05-06/,
+    );
+    assert.ok(
+      events.every((e) => !/peak tonight/.test(e.description)),
+      "the 14:00 local peak belongs to no night's darkness",
+    );
+    // The radiant clears 55° from 35°S — near-zenith southern show
+    assert.ok(events[0].timestamp.startsWith("2027-05-0"));
   });
 
   test("meteor peak skipped when the radiant never clears the horizon", () => {
@@ -207,7 +233,9 @@ describe("celestial ephemeris (doc #3 Phase 2)", () => {
       hours: 48,
       cloudCoverAt: () => 10,
     });
-    assert.equal(clear.filter((e) => e.kind === "meteor").length, 1);
+    // The peak night and its just-past neighbor both qualify under
+    // a clear sky (work doc #37)
+    assert.equal(clear.filter((e) => e.kind === "meteor").length, 2);
   });
 
   test("cloudCoverLookup interpolates hourly cloud cover", () => {

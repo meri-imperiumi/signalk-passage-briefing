@@ -1364,6 +1364,21 @@ export function mergeTimeline(exceptions, payload = null) {
     });
   }
 
+  // Meteor-shower nights evaluated along the track (work doc #37):
+  // the worker gates each shower per night at the forecasted
+  // position, so route timelines carry these instead of the
+  // payload's fixed-position entries
+  for (const e of summary.meteorEvents ?? []) {
+    push({
+      hoursFromNow: relHours(e.timestamp, fetchMs),
+      timestamp: e.timestamp ?? null,
+      kind: "space",
+      severity: e.tactical ? "warn" : "info",
+      label: e.description ?? e.kind ?? "Sky event",
+      provenance: e.provenance ?? null,
+    });
+  }
+
   // Space events (work doc #3): aurora-class alerts are tactical,
   // comet notes are strategic sky items. Provenance (work doc #31)
   // rides the event — satellite passes carry the tracker link,

@@ -405,6 +405,7 @@ async function fetchSpaceEvents({
   cloudCoverAt,
   moonGateFn,
   ephemeris: withEphemeris = true,
+  includeMeteors = true,
   dataDir,
   spaceTrack,
   reentryEnabled = true,
@@ -423,6 +424,7 @@ async function fetchSpaceEvents({
         from: now,
         hours: 24,
         cloudCoverAt,
+        includeMeteors,
       });
     } catch (_error) {
       localEvents = [];

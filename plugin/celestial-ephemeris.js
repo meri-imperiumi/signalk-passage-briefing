@@ -52,6 +52,17 @@ const {
   sunEvents,
 } = require("@openwaters/almanac");
 
+// The meteor-shower calendar and its night-anchored evaluation are
+// shared with the webapp's simulation worker (work doc #37: the
+// track-positioned evaluation runs where the track lives), so the
+// module lives under public/ and loads through require(esm).
+const meteors = require("../public/components/meteors.mjs");
+
+// Shower calendar and its thresholds live with the shared evaluation
+// (work doc #37) — re-exported below for this module's API stability
+const { METEOR_SHOWERS, MIN_RADIANT_ALTITUDE_DEG, MAX_MOON_ILLUMINATION } =
+  meteors;
+
 /**
  * Sun altitude (degrees) below which it is nautical night: the
  * visibility gate's time window (bright event horizon, dark sky).
@@ -75,18 +86,6 @@ const OPPOSITION_ELONGATION_DEG = 178;
  * marine boundary-layer haze eats anything lower.
  */
 const MIN_ALTITUDE_DEG = 15;
-
-/**
- * Moon illumination fraction at or below which the sky counts as dark
- * enough for faint events (meteor showers, faint auroras).
- */
-const MAX_MOON_ILLUMINATION = 0.3;
-
-/**
- * Maximum altitude a meteor radiant can reach from the vessel's
- * latitude (90° − |lat − dec|) for the shower to be worth reporting.
- */
-const MIN_RADIANT_ALTITUDE_DEG = 20;
 
 /**
  * Forecast cloud cover (percent) at or below which the sky is
@@ -121,32 +120,6 @@ const ECLIPSE_DESCRIPTIONS = {
     annular: "Annular",
   },
 };
-
-/**
- * Major annual meteor showers with well-behaved peaks. `peakHourUtc`
- * is the typical shower maximum expressed in UTC hours on the peak
- * date (approximate — the gate is a night-level screen, not an
- * ephemeris of the maximum itself); `dec` is the radiant declination;
- * `zhr` the nominal zenith hourly rate.
- */
-const METEOR_SHOWERS = [
-  { name: "Quadrantids", month: 1, day: 3, peakHourUtc: 21, dec: 49, zhr: 110 },
-  { name: "Lyrids", month: 4, day: 22, peakHourUtc: 14, dec: 34, zhr: 18 },
-  { name: "Eta Aquariids", month: 5, day: 6, peakHourUtc: 2, dec: -1, zhr: 50 },
-  {
-    name: "Delta Aquariids",
-    month: 7,
-    day: 30,
-    peakHourUtc: 20,
-    dec: -22,
-    zhr: 25,
-  },
-  { name: "Perseids", month: 8, day: 12, peakHourUtc: 20, dec: 58, zhr: 100 },
-  { name: "Orionids", month: 10, day: 21, peakHourUtc: 21, dec: 15, zhr: 20 },
-  { name: "Leonids", month: 11, day: 17, peakHourUtc: 6, dec: 22, zhr: 15 },
-  { name: "Geminids", month: 12, day: 14, peakHourUtc: 13, dec: 32, zhr: 120 },
-  { name: "Ursids", month: 12, day: 22, peakHourUtc: 10, dec: 76, zhr: 10 },
-];
 
 /**
  * Naked-eye planets the module watches for conjunctions; oppositions
@@ -599,66 +572,64 @@ function planetaryEvents({ from, hours, lat, lon, cloudCoverAt }) {
 }
 
 /**
- * Meteor-shower peak events inside the window. The gate: peak within
- * the window, Moon set or a crescent (illumination under 30 %), the
- * radiant able to clear 20° from the vessel's latitude, nautical
- * night at the peak, and forecast sky clear enough.
+ * Meteor-shower peak events inside the window (work doc #37):
+ * night-anchored, not peak-instant-anchored. Each shower's nominal
+ * peak is evaluated against the nights bracketing it — the peak night
+ * plus its neighbors, since real maxima drift ±1 night — at each
+ * night's nautical-dusk anchor. The gates run at the anchor:
+ * radiant altitude from that night's position, moonlight, and
+ * forecast cloud. A shower whose catalog peak hour lands in local
+ * daytime now fires for the dark nights around it instead of going
+ * silently unreported (the Eta Aquariids from New Zealand).
+ *
+ * The per-night position comes from `positionAt` (the simulated
+ * track in the route pipeline — the evaluation the worker runs
+ * itself; here the fallback is the vessel position for every night).
+ * The night context (anchors, moonlight) is computed at the vessel
+ * position: anchors shift by minutes across a route, and the
+ * position-sensitive gate is the radiant altitude the caller's
+ * `positionAt` carries.
  *
  * @param {object} params
  * @param {Date} params.from - Window start
  * @param {number} params.hours - Window length
  * @param {number} params.lat - Degrees
  * @param {number} params.lon - Degrees east
+ * @param {((timestamp: string) => {lat: number, lon: number}|null)|null}
+ *   [params.positionAt] - Forecasted position at an instant; null
+ *   evaluates every night at the vessel position
  * @param {((timestamp: string) => number|null)|undefined} [params.cloudCoverAt]
  * @returns {Array<{kind: string, timestamp: string, tactical: boolean,
  *   description: string}>}
  */
-function meteorEvents({ from, hours, lat, lon, cloudCoverAt }) {
-  const events = [];
-  const end = from.getTime() + hours * 3600000;
-  for (const shower of METEOR_SHOWERS) {
-    for (const year of [from.getUTCFullYear(), from.getUTCFullYear() + 1]) {
-      const peak = new Date(
-        Date.UTC(year, shower.month - 1, shower.day, shower.peakHourUtc),
-      );
-      if (peak.getTime() < from.getTime() || peak.getTime() >= end) {
-        continue;
-      }
-      let illumination;
-      try {
-        illumination = moonIllumination(peak);
-      } catch (_error) {
-        continue;
-      }
-      if (illumination >= MAX_MOON_ILLUMINATION) {
-        continue;
-      }
-      const radiantMaxAlt = 90 - Math.abs(lat - shower.dec);
-      if (radiantMaxAlt < MIN_RADIANT_ALTITUDE_DEG) {
-        continue;
-      }
-      let nautical;
-      try {
-        nautical = isNauticalNight(peak, lat, lon);
-      } catch (_error) {
-        continue;
-      }
-      if (!nautical) {
-        continue;
-      }
-      if (!passesCloudGate(peak.toISOString(), cloudCoverAt)) {
-        continue;
-      }
-      events.push({
-        kind: "meteor",
-        timestamp: peak.toISOString(),
-        tactical: true,
-        description: `${shower.name} peak: up to ~${shower.zhr} meteors/h (Moon ${Math.round(illumination * 100)}% lit)`,
-      });
-      break;
-    }
-  }
-  return events;
+function meteorEvents({
+  from,
+  hours,
+  lat,
+  lon,
+  positionAt = null,
+  cloudCoverAt,
+}) {
+  // Night context: the same per-night anchors and moonlight
+  // celestialNights computes, spanning the window plus the bracket
+  // nights a window-edge peak needs
+  const days = Math.ceil(hours / 24) + 2;
+  const nights = celestialNights({ from, days, lat, lon });
+  const events = meteors.meteorNightEvents({
+    from,
+    hours,
+    nights,
+    lat,
+    lon,
+    positionAt,
+    cloudCoverAt,
+  });
+  return events.map((event) => ({
+    kind: event.kind,
+    timestamp: event.timestamp,
+    tactical: event.tactical,
+    description: event.description,
+  }));
 }
 
 /**
@@ -797,10 +768,14 @@ function buildEphemerisEvents({
   from = new Date(),
   hours = 24,
   cloudCoverAt,
+  positionAt = null,
+  includeMeteors = true,
 }) {
   return [
     ...planetaryEvents({ from, hours, lat, lon, cloudCoverAt }),
-    ...meteorEvents({ from, hours, lat, lon, cloudCoverAt }),
+    ...(includeMeteors
+      ? meteorEvents({ from, hours, lat, lon, positionAt, cloudCoverAt })
+      : []),
     ...moonPhaseEvents({ from, hours }),
     ...eclipseEvents({ from, hours, lat, lon, cloudCoverAt }),
   ];

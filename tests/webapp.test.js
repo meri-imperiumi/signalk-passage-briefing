@@ -953,6 +953,34 @@ test("webapp view models", async (t) => {
     },
   );
 
+  await t.test(
+    "mergeTimeline carries the worker's track-positioned meteor nights (doc #37)",
+    () => {
+      const timeline = mergeTimeline(
+        {
+          passageSummary: {
+            meteorEvents: [
+              {
+                kind: "meteor",
+                timestamp: "2026-12-14T09:00:00.000Z",
+                tactical: true,
+                name: "Geminids",
+                description:
+                  "Geminids peak tonight: up to ~120 meteors/h (Moon 25% lit)",
+              },
+            ],
+          },
+        },
+        { metadata: { fetchedAt: "2026-12-14T06:00:00.000Z" } },
+      );
+      const item = timeline.find((i) => i.kind === "space");
+      assert.ok(item, "meteor night rides the timeline");
+      assert.match(item.label, /Geminids peak tonight/);
+      assert.equal(item.severity, "warn");
+      assert.equal(item.provenance, null, "computed on board — no provenance");
+    },
+  );
+
   await t.test("mergeTimeline merges payload space and zone events", () => {
     const timeline = mergeTimeline(
       {

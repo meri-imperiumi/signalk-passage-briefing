@@ -1336,3 +1336,79 @@ describe("canvas-down drive (work docs #5/#26)", () => {
     assert.deepEqual(maneuvers, []);
   });
 });
+
+describe("meteor nights along the track (work doc #37)", () => {
+  const NIGHTS = [
+    {
+      timestamp: "2026-12-13T09:00:00Z",
+      nauticalDusk: "2026-12-13T09:00:00Z",
+      nauticalDawn: "2026-12-13T21:00:00Z",
+      moonIllumination: 0.2,
+    },
+    {
+      timestamp: "2026-12-14T09:00:00Z",
+      nauticalDusk: "2026-12-14T09:00:00Z",
+      nauticalDawn: "2026-12-14T21:00:00Z",
+      moonIllumination: 0.25,
+    },
+    {
+      timestamp: "2026-12-15T09:00:00Z",
+      nauticalDusk: "2026-12-15T09:00:00Z",
+      nauticalDawn: "2026-12-15T21:00:00Z",
+      moonIllumination: 0.3,
+    },
+  ];
+
+  /** Hourly track rows: the boat crosses from 45°S (radiant below
+   * the haze line for the Geminids' +32° radiant) into 30°S during
+   * Dec 13, so the night anchors land on either side of the
+   * position-sensitive gate. */
+  function trackRows() {
+    const rows = [];
+    for (let h = 0; h <= 72; h++) {
+      const t = new Date(
+        Date.UTC(2026, 11, 13, h % 24, 0, 0) + Math.floor(h / 24) * 86400000,
+      );
+      rows.push({
+        hoursFromNow: h,
+        timestamp: t.toISOString(),
+        lat: t.getTime() < Date.UTC(2026, 11, 13, 12) ? -45 : -30,
+        lon: 175,
+        cloudCover: 10,
+      });
+    }
+    return rows;
+  }
+
+  test("the radiant gate follows the forecasted position, not the departure", async () => {
+    const { filterExceptions } = await simPromise;
+    const exceptions = filterExceptions(
+      { hourlyComfort: trackRows() },
+      { payload: { celestialNights: NIGHTS } },
+    );
+    const meteors = exceptions.passageSummary.meteorEvents;
+    // The peak night (Dec 14) evaluates at 30°S — radiant 53° up,
+    // moon 25% — and fires; the Dec 13 night at 45°S stays silent
+    // (radiant 13°), the Dec 15 night is moon-blocked
+    assert.equal(meteors.length, 1);
+    assert.match(meteors[0].description, /Geminids peak tonight/);
+    assert.match(meteors[0].description, /Moon 25% lit/);
+    assert.equal(meteors[0].timestamp, "2026-12-14T09:00:00.000Z");
+  });
+
+  test("the same nights at a stalled position stay silent", async () => {
+    const { filterExceptions } = await simPromise;
+    const stalled = trackRows().map((row) => ({ ...row, lat: -45 }));
+    const exceptions = filterExceptions(
+      { hourlyComfort: stalled },
+      { payload: { celestialNights: NIGHTS } },
+    );
+    assert.deepEqual(exceptions.passageSummary.meteorEvents, []);
+  });
+
+  test("no celestialNights context degrades to no events", async () => {
+    const { filterExceptions } = await simPromise;
+    const exceptions = filterExceptions({ hourlyComfort: trackRows() }, {});
+    assert.deepEqual(exceptions.passageSummary.meteorEvents, []);
+  });
+});

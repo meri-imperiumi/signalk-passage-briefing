@@ -564,7 +564,14 @@ function filterExceptions(simulationResult) {
       totalMotorHours: simulationResult.motoringHours,
       totalFuelGal: simulationResult.fuelConsumptionGal,
       macroSeaAnomalies: simulationResult.seaStateAnomalies.filter(a => a.steepnessRatio < 3.28),
-      convectiveWarnings: simulationResult.upperAirAnomalies.filter(u => u.cape > 1000 || u.kIndex > 28)
+      convectiveWarnings: simulationResult.upperAirAnomalies.filter(u => u.cape > 1000 || u.kIndex > 28),
+      // Meteor-shower nights evaluated along the track (work doc #37):
+      // per (shower, night) spaceEvents gated at the night's nautical-dusk
+      // anchor, the radiant checked at the track's forecasted position;
+      // route payloads carry no fixed-position `meteor` spaceEvents —
+      // these are the timeline's meteors. Here-mode payloads keep them
+      // in `spaceEvents` (single position, no track)
+      meteorEvents: simulationResult.meteorEvents
     }
   };
 }
