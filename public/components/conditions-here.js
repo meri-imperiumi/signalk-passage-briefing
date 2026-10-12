@@ -14,6 +14,7 @@
 
 import {
   fmtKn,
+  fmtShip,
   fmtUtc,
   hereEnergySummary,
   hereHourly,
@@ -353,7 +354,7 @@ class ConditionsHere extends HTMLElement {
     for (const event of events) {
       const el = document.createElement("div");
       el.textContent =
-        `${event.stamp ?? event.timestamp ?? ""} ${event.description ?? event.kind ?? ""}`.trim();
+        `${fmtShip(event.timestamp)} ${event.description ?? event.kind ?? ""}`.trim();
       // Provenance (work doc #31): satellite passes carry the live
       // tracker link; computed ephemeris carries none
       const provUrl = event.provenance?.url;
