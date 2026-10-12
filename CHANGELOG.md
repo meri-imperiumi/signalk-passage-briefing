@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-12
+
 ### Added
 - The header always names when the served briefing was made: a quiet `Compiled MM-DD HH:MM` pill next to the connectivity and ship's-time pills, stamped from the payload's `fetchedAt` in ship's time on every load (route and here modes alike, any age — the stale-age banner stays the alarm past 24 h, this is the fact next to it). A briefing with no fetch time hides the pill rather than inventing a stamp; the label re-renders when the vessel's timezone arrives.
 - The header names when the next briefing is scheduled: a quiet `Next MM-DD HH:MM` pill beside the Compiled stamp, showing the state machine's next cron window in ship's time (from `/api/status`, fetched with each briefing load). It hides when the plugin serves none — offline, or no cron scheduled — the same hide-rather-than-invent rule the compile stamp follows, and a hover title notes that a manual update can land earlier.
