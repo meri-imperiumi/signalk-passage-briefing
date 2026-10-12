@@ -146,6 +146,8 @@ const SOURCE_REFRESH_MS = {
   chart: 12 * 60 * 60 * 1000,
   hazard: 12 * 60 * 60 * 1000,
   ephemeris: 24 * 60 * 60 * 1000,
+  reentry: 12 * 60 * 60 * 1000,
+  launch: 6 * 60 * 60 * 1000,
 };
 
 /**
@@ -197,6 +199,14 @@ const DEFAULTS = {
    * the briefing's night context correct for the vessel's raised
    * horizon when set. */
   celestial_eye_height_m: 0,
+  /** Reentry watch (work doc #36): Space-Track account for the TIP
+   * decay predictions; the feature degrades to off without it. */
+  reentry_watch_enabled: true,
+  space_track_identity: "",
+  space_track_password: "",
+  /** Visible-launch notes (work doc #36): Launch Library 2, no
+   * account needed. */
+  launch_watch_enabled: true,
   /** Verified NWS High Seas Forecast feeds (METAREA XII/XV). The
    * METAREA XIV issuer (MetService) gets added as a URL once a
    * working endpoint is confirmed on board. */
@@ -250,6 +260,13 @@ module.exports = (app) => {
   /** Vessel eye height above the water (work doc #35): the dip of
    * the apparent horizon that the rise/set stamps correct for. */
   let celestialEyeHeightM = DEFAULTS.celestial_eye_height_m;
+  /** Reentry + launch watch config (work doc #36). */
+  let reentryWatchEnabled = DEFAULTS.reentry_watch_enabled;
+  let spaceTrackConfig = {
+    identity: DEFAULTS.space_track_identity,
+    password: DEFAULTS.space_track_password,
+  };
+  let launchWatchEnabled = DEFAULTS.launch_watch_enabled;
   let hazardFilterConfig = {
     minAlertLevel: DEFAULTS.hazard_min_alert_level,
     offRouteRadiusNm: DEFAULTS.hazard_radius_offroute_nm,
@@ -305,6 +322,18 @@ module.exports = (app) => {
     label: "Celestial ephemeris",
     kind: "ephemeris",
     expectedRefreshMs: SOURCE_REFRESH_MS.ephemeris,
+  };
+  const REENTRY_SOURCE = {
+    id: "reentry-watch",
+    label: "Reentry watch (Space-Track TIP)",
+    kind: "reentry",
+    expectedRefreshMs: SOURCE_REFRESH_MS.reentry,
+  };
+  const LAUNCH_SOURCE = {
+    id: "launch-watch",
+    label: "Visible launches (Launch Library 2)",
+    kind: "launch",
+    expectedRefreshMs: SOURCE_REFRESH_MS.launch,
   };
   const HAZARD_SOURCE = {
     id: "hazard-gdacs",
@@ -1140,6 +1169,27 @@ module.exports = (app) => {
       lat: position.lat,
       lon: position.lon,
       cloudCoverAt: ephemeris.cloudCoverLookup(payload),
+      dataDir: app.getDataDirPath(),
+      spaceTrack: spaceTrackConfig,
+      reentryEnabled: reentryWatchEnabled,
+      launchEnabled: launchWatchEnabled,
+      recordSource: (source, error, { absent = false } = {}) => {
+        // The reentry source answers silently when unconfigured; the
+        // registry marks it absent (information, not a failure)
+        if (source === "reentry") {
+          if (absent) {
+            sourceStatus?.record({ ...REENTRY_SOURCE, absent: true });
+          } else {
+            sourceStatus?.record(
+              error ? { ...REENTRY_SOURCE, error } : REENTRY_SOURCE,
+            );
+          }
+        } else if (source === "launch") {
+          sourceStatus?.record(
+            error ? { ...LAUNCH_SOURCE, error } : LAUNCH_SOURCE,
+          );
+        }
+      },
     });
     payload.celestialNights = await withSourceStatus(EPHEMERIS_SOURCE, () =>
       ephemeris.celestialNights({
@@ -1305,6 +1355,25 @@ module.exports = (app) => {
       lat: waypoints[0].lat,
       lon: waypoints[0].lon,
       cloudCoverAt: ephemeris.cloudCoverLookup(payload),
+      dataDir: app.getDataDirPath(),
+      spaceTrack: spaceTrackConfig,
+      reentryEnabled: reentryWatchEnabled,
+      launchEnabled: launchWatchEnabled,
+      recordSource: (source, error, { absent = false } = {}) => {
+        if (source === "reentry") {
+          if (absent) {
+            sourceStatus?.record({ ...REENTRY_SOURCE, absent: true });
+          } else {
+            sourceStatus?.record(
+              error ? { ...REENTRY_SOURCE, error } : REENTRY_SOURCE,
+            );
+          }
+        } else if (source === "launch") {
+          sourceStatus?.record(
+            error ? { ...LAUNCH_SOURCE, error } : LAUNCH_SOURCE,
+          );
+        }
+      },
     });
     payload.celestialNights = await withSourceStatus(EPHEMERIS_SOURCE, () =>
       ephemeris.celestialNights({
@@ -2169,6 +2238,38 @@ module.exports = (app) => {
             "correct for the dip of the vessel's raised horizon.",
           default: DEFAULTS.celestial_eye_height_m,
         },
+        reentry_watch_enabled: {
+          type: "boolean",
+          title: "Reentry watch (decaying satellites)",
+          description:
+            "Predicted satellite reentries from Space-Track, alerted " +
+            "when the ground track comes close enough to see and the " +
+            "light is right (fireball at night, sunlit smoke streak by " +
+            "day). Needs a free space-track.org account below.",
+          default: DEFAULTS.reentry_watch_enabled,
+        },
+        space_track_identity: {
+          type: "string",
+          title: "Space-Track username",
+          description:
+            "Free account at space-track.org — the only machine-" +
+            "readable source of reentry predictions.",
+          default: "",
+        },
+        space_track_password: {
+          type: "string",
+          format: "password",
+          title: "Space-Track password",
+          default: "",
+        },
+        launch_watch_enabled: {
+          type: "boolean",
+          title: "Visible rocket launches",
+          description:
+            "Twilight launches from pads within range (Launch Library " +
+            "2), when the plume would catch the sun from the vessel.",
+          default: DEFAULTS.launch_watch_enabled,
+        },
         cap_enabled: {
           type: "boolean",
           title: "CAP Official Alerts (structured warnings)",
@@ -2286,6 +2387,21 @@ module.exports = (app) => {
         config.celestial_eye_height_m <= 10000
           ? config.celestial_eye_height_m
           : 0;
+      // Reentry + launch watch (work doc #36): Space-Track TIP
+      // predictions under the vessel's own account, and the Launch
+      // Library 2 schedule; both degrade to no events without data
+      reentryWatchEnabled = config.reentry_watch_enabled !== false;
+      spaceTrackConfig = {
+        identity:
+          typeof config.space_track_identity === "string"
+            ? config.space_track_identity.trim()
+            : "",
+        password:
+          typeof config.space_track_password === "string"
+            ? config.space_track_password
+            : "",
+      };
+      launchWatchEnabled = config.launch_watch_enabled !== false;
       // Weather source (work doc #16): the server's Weather API when
       // present (signalk-weather-router-plus registers a provider over
       // its decoded ECMWF run), Open-Meteo per config or fallback

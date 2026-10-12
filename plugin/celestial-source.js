@@ -26,6 +26,8 @@
 
 const ephemeris = require("./celestial-ephemeris.js");
 const satelliteSource = require("./satellite-source.js");
+const reentrySource = require("./reentry-source.js");
+const launchSource = require("./launch-source.js");
 
 /**
  * Kp at which a geomagnetic storm (and mid-latitude aurora chance)
@@ -399,9 +401,15 @@ async function fetchSpaceEvents({
   fetchImpl = fetch,
   timeoutMs = 15000,
   nightFn,
+  sunAltFn,
   cloudCoverAt,
   moonGateFn,
   ephemeris: withEphemeris = true,
+  dataDir,
+  spaceTrack,
+  reentryEnabled = true,
+  launchEnabled = true,
+  recordSource,
 }) {
   // Phase 2 ephemeris events are computed first: they need no
   // network, and a failure in the local math degrades to no events
@@ -418,6 +426,62 @@ async function fetchSpaceEvents({
       });
     } catch (_error) {
       localEvents = [];
+    }
+  }
+
+  // Reentry watch (work doc #36): Space-Track TIP predictions under
+  // the vessel's own account, refined by CelesTrak elements, gated to
+  // what the vessel could actually see. Degrades independently; the
+  // source answers silently when unconfigured (absent, not failed).
+  if (reentryEnabled) {
+    if (spaceTrack?.identity && spaceTrack?.password) {
+      try {
+        const events = await reentrySource.fetchReentryEvents({
+          identity: spaceTrack.identity,
+          password: spaceTrack.password,
+          dataDir,
+          lat,
+          lon,
+          from: now,
+          cloudCoverAt,
+          sunAltAt:
+            sunAltFn ??
+            ((date, nlat, nlon) =>
+              ephemeris.bodyAltitudeDeg("Sun", date, nlat, nlon)),
+          fetchImpl,
+          timeoutMs,
+        });
+        localEvents = [...localEvents, ...events];
+        recordSource?.("reentry");
+      } catch (error) {
+        recordSource?.("reentry", error);
+      }
+    } else {
+      recordSource?.("reentry", null, { absent: true });
+    }
+  }
+
+  // Visible-launch notes (work doc #36): Launch Library 2 schedule,
+  // gated to the twilight-launch geometry. Degrades independently.
+  if (launchEnabled) {
+    try {
+      const events = await launchSource.fetchLaunchEvents({
+        dataDir,
+        lat,
+        lon,
+        from: now,
+        cloudCoverAt,
+        sunAltAt:
+          sunAltFn ??
+          ((date, nlat, nlon) =>
+            ephemeris.bodyAltitudeDeg("Sun", date, nlat, nlon)),
+        fetchImpl,
+        timeoutMs,
+      });
+      localEvents = [...localEvents, ...events];
+      recordSource?.("launch");
+    } catch (error) {
+      recordSource?.("launch", error);
     }
   }
 

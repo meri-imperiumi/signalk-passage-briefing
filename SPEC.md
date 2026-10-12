@@ -197,7 +197,7 @@ interface UnifiedWeatherPayload {
     bulletinText: string;
   };
   spaceEvents?: {
-    kind: string;               // 'aurora' | 'comet' | 'conjunction' | 'opposition' | 'meteor' | 'moonPhase' | 'lunarEclipse' | 'solarEclipse'
+    kind: string;               // 'aurora' | 'comet' | 'conjunction' | 'opposition' | 'meteor' | 'moonPhase' | 'lunarEclipse' | 'solarEclipse' | 'satellite' | 'reentry' | 'launch'
     timestamp: string;          // ISO timestamp
     tactical: boolean;          // 24h dashboard banner vs strategic sky note
     description: string;

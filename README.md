@@ -41,7 +41,7 @@ The Open-Meteo entries below are the fallback weather source: used when no Weath
 - [Open-Meteo Forecast API](https://open-meteo.com/en/docs) — surface wind, gusts, MSL pressure, CAPE and the pressure-layer fields behind the K-index (best-match model)
 - [NOAA SWPC planetary K-index forecast](https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json) — geomagnetic activity behind the aurora advisories
 - [JPL SBDB query API](https://ssd-api.jpl.nasa.gov/doc/sbdb_query.html) — comet brightness parameters (M1/K1) behind the Sky Notes comets
-- [CelesTrak](https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle) — two-line elements for the crewed stations (ISS, Tiangong); bright satellite passes are propagated locally from the fetched TLEs with SGP4, gated to nautical night, clear sky and a 15° haze line
+- [CelesTrak](https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle) — two-line elements for the crewed stations (ISS, Tiangong); bright satellite passes are propagated locally from the fetched TLEs with SGP4, gated to nautical night, clear sky and a 15° haze line. The same service's per-catalog queries (`gp.php?CATNR=…`) supply the current elements of decaying satellites named by Space-Track's reentry predictions
 - [NOAA TGFTP radiofax tree](https://tgftp.nws.noaa.gov/fax/) and the [BoM difacs charts](http://www.bom.gov.au/difacs/) — synoptic surface-analysis charts per METAREA zone (work doc #11), per the schedule in [otherfax.txt](https://tgftp.nws.noaa.gov/fax/otherfax.txt)
 - [UKHO Admiralty MSI API](https://msi.admiralty.co.uk/) — structured NAVAREA navigational warnings for the resolved zone; the third rung of the GMDSS bulletin fetch ladder (TGFTP raw text, WMO GMDSS portal, then UKHO MSI JSON) and also accepted verbatim as a `bulletin_urls` source
 - [GDACS RSS](https://www.gdacs.org/xml/rss.xml) — EU JRC global disaster alerts (earthquakes, tropical cyclones, floods, volcanic activity), filtered route-relative by alert level and corridor distance: they ride the unified passage timeline and publish as georeferenced chart notes (work doc #22)
@@ -49,6 +49,8 @@ The Open-Meteo entries below are the fallback weather source: used when no Weath
 - NOAA TGFTP (`tgftp.nws.noaa.gov`) — raw METAREA bulletin text for the resolved GMDSS zone's station (e.g. `FQPS01 NFFN` for XIV)
 - WMO GMDSS portal (`weather.gmdss.org`) — per-zone bulletin pages, fallback when the TGFTP station is not configured
 - api.weather.gov product API — US High Seas Forecast texts (default `bulletin_urls`: HSF NP/EP1/EP2); extra sources can be added via the `bulletin_urls` configuration (plain text or api.weather.gov product URLs; UKHO MSI JSON works too)
+- [Space-Track](https://www.space-track.org) — TIP (Trajectory Impact Prediction) messages, the only machine-readable source of satellite reentry predictions; needs a free account configured in the plugin, without which the reentry watch stays off. The predicted decay is refined on board with the object's CelesTrak elements and the vessel-visible geometry (fireball at night, sunlit smoke streak by day) computed from the propagator and the sky, not taken from the message
+- [Launch Library 2](https://thespacedevs.com/llapi) — upcoming rocket launches with pad coordinates (no account); the briefing names only launches whose twilight geometry would make the plume visible from the vessel's position
 
 All external fetches are online-gated and cached to the plugin data directory, so the last payloads survive the offline hours.
 
