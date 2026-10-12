@@ -901,6 +901,58 @@ test("webapp view models", async (t) => {
     );
   });
 
+  await t.test(
+    "computed ephemeris events carry no provenance (doc #31)",
+    () => {
+      // The almanac-computed sky events are on-board computation: no
+      // upstream page exists, so doc #31's rule is that they carry no
+      // provenance record — even with a weather provenance block on the
+      // payload that simulated items chain to. Absence never implies
+      // external authority, and the weather chain must not leak onto
+      // unrelated rows.
+      const fetchedAt = "2026-06-21T06:00:00.000Z";
+      const timeline = mergeTimeline(null, {
+        metadata: {
+          fetchedAt,
+          provenance: {
+            kind: "forecast",
+            label: "Open-Meteo · forecast:best_match",
+            url: "https://open-meteo.com/en/docs?latitude=20&longitude=-160",
+            viewerBase: "/signalk-weather-map/",
+            at: fetchedAt,
+          },
+        },
+        spaceEvents: [
+          {
+            kind: "moonPhase",
+            timestamp: "2026-06-21T18:00:00.000Z",
+            tactical: false,
+            description: "New Moon — darkest skies of the passage",
+          },
+          {
+            kind: "lunarEclipse",
+            timestamp: "2026-06-22T02:00:00.000Z",
+            tactical: true,
+            description: "Total lunar eclipse — copper Moon at peak",
+          },
+          {
+            kind: "solarEclipse",
+            timestamp: "2026-06-22T12:00:00.000Z",
+            tactical: true,
+            description: "Partial solar eclipse — 30% of the Sun covered",
+          },
+        ],
+      });
+      for (const item of timeline) {
+        assert.equal(
+          item.provenance,
+          null,
+          `${item.kind} is computed on board — no provenance record, no glyph`,
+        );
+      }
+    },
+  );
+
   await t.test("mergeTimeline merges payload space and zone events", () => {
     const timeline = mergeTimeline(
       {

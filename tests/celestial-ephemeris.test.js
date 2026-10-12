@@ -1,7 +1,6 @@
 const { test, describe } = require("node:test");
 const assert = require("node:assert/strict");
 
-const A = require("astronomy-engine");
 const ce = require("../plugin/celestial-ephemeris.js");
 
 describe("celestial ephemeris (doc #3 Phase 2)", () => {
@@ -39,7 +38,7 @@ describe("celestial ephemeris (doc #3 Phase 2)", () => {
     // assertion is loose (it gates against haze, not against the
     // nautical almanac)
     const alt = ce.bodyAltitudeDeg(
-      A.Body.Moon,
+      "Moon",
       new Date("2026-10-05T12:00:00Z"),
       -21.1,
       -175.2,
@@ -185,7 +184,7 @@ describe("celestial ephemeris (doc #3 Phase 2)", () => {
     assert.deepEqual(events, []);
   });
 
-  test("cloud gate suppresses events under overcast forecasts", () => {
+  test("cloud gate suppresses tactical events under overcast forecasts", () => {
     const overcast = ce.buildEphemerisEvents({
       lat: 20,
       lon: 60,
@@ -193,7 +192,13 @@ describe("celestial ephemeris (doc #3 Phase 2)", () => {
       hours: 48,
       cloudCoverAt: () => 80,
     });
-    assert.deepEqual(overcast, []);
+    // Tactical events (visible-sky items) stay suppressed; the
+    // informational moon-phase notes are not cloud-gated (doc #35)
+    assert.deepEqual(
+      overcast.filter((e) => e.tactical),
+      [],
+    );
+    assert.ok(!overcast.some((e) => e.kind === "meteor"));
 
     const clear = ce.buildEphemerisEvents({
       lat: 20,
@@ -254,5 +259,135 @@ describe("celestial ephemeris (doc #3 Phase 2)", () => {
       hours: 24,
     });
     assert.ok(later.every((e) => e.kind !== "opposition"));
+  });
+});
+
+describe("almanac migration extras (work doc #35)", () => {
+  test("moon phase events: exact new-moon and full-moon instants", () => {
+    const events = ce.moonPhaseEvents({
+      from: new Date("2026-08-10T00:00:00Z"),
+      hours: 240,
+    });
+    const newMoon = events.find((e) => e.description.startsWith("New Moon"));
+    assert.ok(newMoon, "new moon event present");
+    assert.equal(newMoon.kind, "moonPhase");
+    assert.equal(newMoon.tactical, false);
+    assert.ok(
+      newMoon.timestamp.startsWith("2026-08-12T17:36"),
+      `new moon stamp ${newMoon.timestamp}`,
+    );
+
+    const full = ce.moonPhaseEvents({
+      from: new Date("2026-08-27T00:00:00Z"),
+      hours: 48,
+    });
+    assert.ok(
+      full.some(
+        (e) =>
+          e.kind === "moonPhase" &&
+          e.description.startsWith("Full Moon") &&
+          e.timestamp.startsWith("2026-08-28T04:18"),
+      ),
+      "full moon event present with its exact instant",
+    );
+  });
+
+  test("lunar eclipse: 2026-03-03 total eclipse visible from the Pacific", () => {
+    const events = ce.eclipseEvents({
+      from: new Date("2026-03-01T00:00:00Z"),
+      hours: 96,
+      lat: 20,
+      lon: -160,
+    });
+    const lunar = events.filter((e) => e.kind === "lunarEclipse");
+    assert.equal(lunar.length, 1);
+    assert.ok(
+      lunar[0].timestamp.startsWith("2026-03-03T11:33"),
+      `peak stamp ${lunar[0].timestamp}`,
+    );
+    assert.match(lunar[0].description, /Total lunar eclipse/);
+    assert.equal(lunar[0].tactical, true);
+  });
+
+  test("lunar eclipse skipped in daylight: same eclipse from the Indian Ocean", () => {
+    // 11:33 UTC = 16:33 local at lon 60: the Sun is well above the
+    // civil twilight line, so the peak is not a night-watch event
+    const events = ce.eclipseEvents({
+      from: new Date("2026-03-01T00:00:00Z"),
+      hours: 96,
+      lat: 20,
+      lon: 60,
+    });
+    assert.ok(events.every((e) => e.kind !== "lunarEclipse"));
+  });
+
+  test("solar eclipse: 2026-08-12 total eclipse from Iceland", () => {
+    const events = ce.eclipseEvents({
+      from: new Date("2026-08-11T00:00:00Z"),
+      hours: 48,
+      lat: 64.1,
+      lon: -21.9,
+    });
+    const solar = events.filter((e) => e.kind === "solarEclipse");
+    assert.equal(solar.length, 1);
+    assert.ok(
+      solar[0].timestamp.startsWith("2026-08-12T17:48"),
+      `peak stamp ${solar[0].timestamp}`,
+    );
+    assert.match(solar[0].description, /Total solar eclipse/);
+  });
+
+  test("cloud gate applies to eclipses", () => {
+    const overcast = ce.eclipseEvents({
+      from: new Date("2026-03-01T00:00:00Z"),
+      hours: 96,
+      lat: 20,
+      lon: -160,
+      cloudCoverAt: () => 80,
+    });
+    assert.ok(overcast.every((e) => e.kind !== "lunarEclipse"));
+  });
+
+  test("eye-height dip shifts the rise/set stamps the marine way", () => {
+    const base = {
+      from: new Date("2026-10-05T00:00:00Z"),
+      days: 1,
+      lat: 60,
+      lon: 25,
+    };
+    const sea = ce.celestialNights(base)[0];
+    const mast = ce.celestialNights({ ...base, eyeHeightM: 10 })[0];
+    assert.ok(mast.sunrise < sea.sunrise, "raised horizon: earlier sunrise");
+    assert.ok(mast.sunset > sea.sunset, "raised horizon: later sunset");
+    const deltaMs = new Date(sea.sunrise) - new Date(mast.sunrise);
+    assert.ok(
+      deltaMs > 20000 && deltaMs < 600000,
+      `sunrise shift in seconds, got ${deltaMs} ms`,
+    );
+  });
+
+  test("eye height out of range falls back to the sea-level crossing", () => {
+    const base = {
+      from: new Date("2026-10-05T00:00:00Z"),
+      days: 1,
+      lat: 60,
+      lon: 25,
+    };
+    const sea = ce.celestialNights(base)[0];
+    const absurd = ce.celestialNights({ ...base, eyeHeightM: 99999 })[0];
+    const bad = ce.celestialNights({ ...base, eyeHeightM: -5 })[0];
+    assert.equal(absurd.sunrise, sea.sunrise);
+    assert.equal(bad.sunset, sea.sunset);
+  });
+
+  test("buildEphemerisEvents carries the new kinds in one call", () => {
+    const events = ce.buildEphemerisEvents({
+      lat: 20,
+      lon: 60,
+      from: new Date("2026-08-12T00:00:00Z"),
+      hours: 48,
+    });
+    assert.ok(events.some((e) => e.kind === "moonPhase"));
+    assert.ok(events.some((e) => e.kind === "meteor"));
   });
 });

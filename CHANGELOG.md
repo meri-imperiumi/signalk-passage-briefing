@@ -4,6 +4,11 @@
 
 ### Added
 - The header always names when the served briefing was made: a quiet `Compiled MM-DD HH:MM` pill next to the connectivity and ship's-time pills, stamped from the payload's `fetchedAt` in ship's time on every load (route and here modes alike, any age — the stale-age banner stays the alarm past 24 h, this is the fact next to it). A briefing with no fetch time hides the pill rather than inventing a stamp; the label re-renders when the vessel's timezone arrives.
+- Eclipse and moon-phase sky events (work doc #35): the ephemeris now emits discrete moon phase instants (`moonPhase` notes — "New Moon — darkest skies of the passage", "Full Moon — moonlit night watches") and visible eclipses with almanac's built-in observer visibility — lunar eclipses gated on the Moon up at peak, the Sun below the civil twilight line and the cloud gate; solar eclipses on the Sun above the horizon and the cloud gate. Timeline and here-view sky cards carry them like every other event; nothing new is fetched, all local computation. Like every computed-on-board item they carry no provenance record (work doc #31: absence never implies external authority) — pinned by a regression test so the weather provenance chain never leaks onto sky rows.
+- Eye height above the water as plugin configuration (`celestial_eye_height_m`, default 0): sunrise, sunset and moonrise/set stamps in `celestialNights` — the timeline's night rows and the conditions-here sky line — correct for the dip of the vessel's raised horizon (a couple of minutes from cockpit height). Twilight lines are altitude angles, not horizon crossings, so they stay put.
+
+### Changed
+- The ephemeris engine is `@openwaters/almanac` (MIT, the maintained TypeScript port of astronomy-engine at a pinned commit, checked against JPL/USNO/Espenak fixtures over 1950–2100), replacing astronomy-engine — same math lineage and accuracy class, 21.9 KB vs 44 KB, and the twilight chain collapses from three chained searches to window event lists. Rise/set stamps shift by seconds (almanac uses the Sun's true semidiameter instead of a fixed −0.833°); everything else stays behaviorally identical. The npm package is ESM-only, loaded through `require(esm)` — the minimum Node moves to 22.12.0.
 
 ## [0.8.1] - 2026-10-08
 

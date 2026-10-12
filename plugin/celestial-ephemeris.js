@@ -2,8 +2,9 @@
  * Offline ephemeris engine (work doc #3, Phase 2).
  *
  * Everything predictable in the sky is computed locally with
- * `astronomy-engine` (MIT, zero transitive dependencies): no network,
- * no bandwidth budget spent. The module produces
+ * `@openwaters/almanac` (MIT, zero transitive dependencies — the
+ * migration work doc #35 replaces astronomy-engine, its upstream
+ * source): no network, no bandwidth budget spent. The module produces
  *
  * - planetary conjunctions and oppositions during nautical night,
  * - meteor-shower peaks (static annual calendar) gated by moonlight
@@ -23,10 +24,33 @@
  * The visibility gate also backs the Phase-1 aurora alert
  * (`celestial-source.js`), replacing its coarse local-night check.
  *
+ * Almanac serves 1950 through 2100 and throws
+ * `AlmanacOutOfRangeError` outside that window; the event builders
+ * degrade those failures to null bounds or empty lists like any other
+ * missing crossing (polar day/night behaves the same way).
+ *
+ * Beyond the migration (work doc #35), the module also emits events
+ * astronomy-engine had no off-the-shelf answer for: discrete moon
+ * phase instants, and lunar/solar eclipses with built-in observer
+ * visibility — the timeline's sky items and the strategic dark-sky
+ * notes read these.
+ *
  * @file celestial-ephemeris.js
  */
 
-const A = require("astronomy-engine");
+const {
+  lunarEclipseVisibility,
+  lunarEclipses,
+  moonAltAz,
+  moonIllumination: almanacMoonIllumination,
+  moonEvents,
+  planetAltAz,
+  planetIllumination,
+  searchMoonPhases,
+  solarEclipses,
+  sunAltAz,
+  sunEvents,
+} = require("@openwaters/almanac");
 
 /**
  * Sun altitude (degrees) below which it is nautical night: the
@@ -71,6 +95,34 @@ const MIN_RADIANT_ALTITUDE_DEG = 20;
 const CLOUD_COVER_MAX_PERCENT = 30;
 
 /**
+ * Watch-note copy for the discrete moon phases (work doc #35): the
+ * new moon names the darkest skies, the full moon the moonlit
+ * watches; the quarters mark the half-lit evenings.
+ */
+const MOON_PHASE_LABELS = {
+  new: "New Moon — darkest skies of the passage",
+  firstQuarter: "First Quarter Moon",
+  full: "Full Moon — moonlit night watches",
+  lastQuarter: "Last Quarter Moon",
+};
+
+/**
+ * Watch-note copy for visible eclipses (work doc #35), keyed by the
+ * almanac eclipse kinds.
+ */
+const ECLIPSE_DESCRIPTIONS = {
+  lunar: {
+    penumbral: "Penumbral lunar eclipse — faint shading of the Moon at peak",
+    partial: "Partial lunar eclipse — a bite out of the Moon at peak",
+    total: "Total lunar eclipse — copper Moon at peak",
+  },
+  solar: {
+    partial: "Partial",
+    annular: "Annular",
+  },
+};
+
+/**
  * Major annual meteor showers with well-behaved peaks. `peakHourUtc`
  * is the typical shower maximum expressed in UTC hours on the peak
  * date (approximate — the gate is a night-level screen, not an
@@ -90,7 +142,7 @@ const METEOR_SHOWERS = [
     zhr: 25,
   },
   { name: "Perseids", month: 8, day: 12, peakHourUtc: 20, dec: 58, zhr: 100 },
-  { name: "Orionids", month: 10, day: 21, peakHourUtc: 23, dec: 15, zhr: 20 },
+  { name: "Orionids", month: 10, day: 21, peakHourUtc: 21, dec: 15, zhr: 20 },
   { name: "Leonids", month: 11, day: 17, peakHourUtc: 6, dec: 22, zhr: 15 },
   { name: "Geminids", month: 12, day: 14, peakHourUtc: 13, dec: 32, zhr: 120 },
   { name: "Ursids", month: 12, day: 22, peakHourUtc: 10, dec: 76, zhr: 10 },
@@ -98,24 +150,55 @@ const METEOR_SHOWERS = [
 
 /**
  * Naked-eye planets the module watches for conjunctions; oppositions
- * only apply to the superior ones.
+ * only apply to the superior ones. Bodies use almanac's lowercase
+ * planet identifiers; the altitude helpers also accept astronomy-
+ * engine-style capitalized body names for compatibility.
  */
 const PLANETS = [
-  { body: A.Body.Venus, name: "Venus", superior: false },
-  { body: A.Body.Mars, name: "Mars", superior: true },
-  { body: A.Body.Jupiter, name: "Jupiter", superior: true },
-  { body: A.Body.Saturn, name: "Saturn", superior: true },
+  { body: "venus", name: "Venus", superior: false },
+  { body: "mars", name: "Mars", superior: true },
+  { body: "jupiter", name: "Jupiter", superior: true },
+  { body: "saturn", name: "Saturn", superior: true },
 ];
 
 /**
- * Builds an Observer for a vessel position.
+ * Search-window length (milliseconds) for the next rise, set, or
+ * twilight crossing: the 1.5-day limit the astronomy-engine searches
+ * used, kept so a missing crossing degrades at the same boundary.
+ */
+const SEARCH_WINDOW_MS = 1.5 * 86400000;
+
+/**
+ * Builds an almanac observer for a vessel position.
  *
  * @param {number} lat - Degrees
  * @param {number} lon - Degrees east
- * @returns {object} astronomy-engine Observer
+ * @returns {{latitudeDeg: number, longitudeDeg: number}} Observer
  */
 function observerAt(lat, lon) {
-  return new A.Observer(lat, lon, 0);
+  return { latitudeDeg: lat, longitudeDeg: lon };
+}
+
+/**
+ * Resolves a body name to an almanac position function. Accepts the
+ * astronomy-engine-style capitalized names (`Sun`, `Moon`, `Venus`)
+ * and almanac's lowercase planet identifiers.
+ *
+ * @param {string} body - Body name
+ * @returns {function(Date, object): {altDeg: number, azDeg: number}}
+ */
+function altAzFunctionFor(body) {
+  if (body === "Sun") {
+    return sunAltAz;
+  }
+  if (body === "Moon") {
+    return moonAltAz;
+  }
+  const planet = body.toLowerCase();
+  if (planet === "earth") {
+    throw new RangeError(`Invalid body: ${body}`);
+  }
+  return (time, observer) => planetAltAz(planet, time, observer);
 }
 
 /**
@@ -123,43 +206,38 @@ function observerAt(lat, lon) {
  * included (the gate compares against haze, not against geometric
  * sunrise lines).
  *
- * @param {string} body - astronomy-engine Body constant
+ * @param {string} body - Body name (`Sun`, `Moon`, or a planet)
  * @param {Date} date - Instant
  * @param {number} lat - Degrees
  * @param {number} lon - Degrees east
  * @returns {number} Altitude in degrees (negative below horizon)
  */
 function bodyAltitudeDeg(body, date, lat, lon) {
-  const observer = observerAt(lat, lon);
-  const time = A.MakeTime(date);
-  const eqd = A.Equator(body, time, observer, true, true);
-  const hor = A.Horizon(time, observer, eqd.ra, eqd.dec, "normal");
-  return hor.altitude;
+  return altAzFunctionFor(body)(date, observerAt(lat, lon)).altDeg;
 }
 
 /**
  * Moon phase angle at an instant: 0 = new, 90 = first quarter,
  * 180 = full, 270 = third quarter. The webapp maps this onto its
  * night glyphs (work doc #3: actual moon phase instead of a fixed
- * crescent).
+ * crescent). Almanac carries the phase as a 0..1 cycle (0 = new,
+ * 0.5 = full); the degree form is its 360° mapping.
  *
  * @param {Date} date - Instant
  * @returns {number} Phase angle 0..360 degrees
  */
 function moonPhaseDeg(date) {
-  return A.MoonPhase(date);
+  return almanacMoonIllumination(date).phase * 360;
 }
 
 /**
- * Moon illumination fraction at an instant, derived from the phase
- * angle (accurate to well under a percent — the gate compares against
- * a 30 % crescent threshold, not an almanac).
+ * Moon illumination fraction at an instant.
  *
  * @param {Date} date - Instant
  * @returns {number} Illuminated fraction 0..1
  */
 function moonIllumination(date) {
-  return (1 - Math.cos(A.MoonPhase(date) * (Math.PI / 180))) / 2;
+  return almanacMoonIllumination(date).fraction;
 }
 
 /**
@@ -172,14 +250,20 @@ function moonIllumination(date) {
  * @returns {boolean}
  */
 function isNauticalNight(date, lat, lon) {
-  return bodyAltitudeDeg(A.Body.Sun, date, lat, lon) < NAUTICAL_TWILIGHT_DEG;
+  return bodyAltitudeDeg("Sun", date, lat, lon) < NAUTICAL_TWILIGHT_DEG;
 }
 
 /**
  * Twilight times for the night starting at or after `date` at a
- * position: the crossing instants of the civil (−6°), nautical (−12°)
- * and astronomical (−18°) Sun-altitude lines. A search window that
- * misses a crossing (polar day/night) degrades that bound to null.
+ * position: the crossings of the civil (−6°), nautical (−12°) and
+ * astronomical (−18°) Sun-altitude lines. A night that misses a
+ * crossing (polar day/night) degrades that bound to null.
+ *
+ * Dusk chain first: the first falling crossing of each line, each
+ * nested inside the previous one, then the dawn chain searches after
+ * the dusk anchor so both sides belong to the same night. One
+ * `sunEvents` call per side replaces the astronomy-engine search
+ * chain; almanac returns every crossing in the window already sorted.
  *
  * @param {Date} date - Instant the search starts from
  * @param {number} lat - Degrees
@@ -190,50 +274,72 @@ function isNauticalNight(date, lat, lon) {
  */
 function twilightTimes(date, lat, lon) {
   const observer = observerAt(lat, lon);
-  const search = (direction, limitDeg, start) => {
-    try {
-      const found = A.SearchAltitude(
-        A.Body.Sun,
-        observer,
-        direction,
-        A.MakeTime(start),
-        1.5,
-        limitDeg,
-      );
-      return found ? found.date.toISOString() : null;
-    } catch (_error) {
-      return null;
-    }
-  };
-  // Dusk chain first, then the dawn chain searches forward from the
-  // dusk anchor, so both sides belong to the same night. Polar
-  // day/night degrades the missing crossings to null.
-  const civilDusk = search(-1, -6, date);
-  const nauticalDusk = civilDusk ? search(-1, -12, new Date(civilDusk)) : null;
-  const astronomicalDusk = nauticalDusk
-    ? search(-1, -18, new Date(nauticalDusk))
-    : null;
-  const anchor = astronomicalDusk ?? nauticalDusk ?? civilDusk ?? date;
-  // The dawn searches start a couple of minutes past the dusk
-  // crossing: at the crossing instant itself the Sun's altitude sits
-  // exactly on the limit, and the rising search would trip over the
-  // numerical tangency instead of finding the morning
-  const anchorMs = new Date(anchor).getTime() + 120000;
-  const astronomicalDawn = search(+1, -18, new Date(anchorMs));
-  const nauticalDawn = astronomicalDawn
-    ? search(+1, -12, new Date(new Date(astronomicalDawn).getTime() + 120000))
-    : search(+1, -12, new Date(anchorMs));
-  const civilDawn = nauticalDawn
-    ? search(+1, -6, new Date(new Date(nauticalDawn).getTime() + 120000))
-    : search(+1, -6, new Date(anchorMs));
-  return {
-    civilDusk,
-    nauticalDusk,
-    astronomicalDusk,
-    astronomicalDawn,
-    nauticalDawn,
-    civilDawn,
-  };
+  const iso = (t) => (t ? new Date(t).toISOString() : null);
+  try {
+    const duskEvents = sunEvents(
+      date,
+      new Date(date.getTime() + SEARCH_WINDOW_MS),
+      observer,
+    );
+    const firstAfter = (kind, after) =>
+      duskEvents.find(
+        (e) => e.kind === kind && (after == null || e.time > after),
+      )?.time ?? null;
+    const civilDusk = firstAfter("civilDusk");
+    const nauticalDusk = civilDusk
+      ? firstAfter("nauticalDusk", civilDusk)
+      : null;
+    const astronomicalDusk = nauticalDusk
+      ? firstAfter("astroDusk", nauticalDusk)
+      : null;
+
+    // The dawn chain starts after the dusk anchor; almanac's crossings
+    // are exact roots, so the astronomy-engine +2 min tangency skip is
+    // unnecessary — distinct kinds are distinct instants.
+    const anchor = astronomicalDusk ?? nauticalDusk ?? civilDusk ?? date;
+    const anchorMs = new Date(anchor).getTime() + 120000;
+    const dawnEvents = sunEvents(
+      new Date(anchorMs),
+      new Date(anchorMs + SEARCH_WINDOW_MS),
+      observer,
+    );
+    const astronomicalDawn =
+      dawnEvents.find((e) => e.kind === "astroDawn")?.time ?? null;
+    const nauticalDawn =
+      (astronomicalDawn
+        ? dawnEvents.find(
+            (e) => e.kind === "nauticalDawn" && e.time > astronomicalDawn,
+          )?.time
+        : null) ??
+      dawnEvents.find((e) => e.kind === "nauticalDawn")?.time ??
+      null;
+    const civilDawn =
+      (nauticalDawn
+        ? dawnEvents.find(
+            (e) => e.kind === "civilDawn" && e.time > nauticalDawn,
+          )?.time
+        : null) ??
+      dawnEvents.find((e) => e.kind === "civilDawn")?.time ??
+      null;
+
+    return {
+      civilDusk: iso(civilDusk),
+      nauticalDusk: iso(nauticalDusk),
+      astronomicalDusk: iso(astronomicalDusk),
+      astronomicalDawn: iso(astronomicalDawn),
+      nauticalDawn: iso(nauticalDawn),
+      civilDawn: iso(civilDawn),
+    };
+  } catch (_error) {
+    return {
+      civilDusk: null,
+      nauticalDusk: null,
+      astronomicalDusk: null,
+      astronomicalDawn: null,
+      nauticalDawn: null,
+      civilDawn: null,
+    };
+  }
 }
 
 /**
@@ -245,8 +351,8 @@ function twilightTimes(date, lat, lon) {
  * timeline's night glyph and any future "when is it really dark"
  * display read this instead of re-deriving astronomy in the browser.
  *
- * Rise/set search semantics: sunset is the setting crossing before
- * the night's civil dusk, sunrise the rising crossing after the dusk
+ * Rise/set semantics: sunset is the setting crossing before the
+ * night's civil dusk, sunrise the rising crossing after the dusk
  * anchor; moonrise/moonset are the moon's next crossings after dusk
  * (a moon already up at dusk reports tomorrow's rise — the set stamp
  * is tonight's). Polar day/night and missing crossings degrade to
@@ -257,6 +363,11 @@ function twilightTimes(date, lat, lon) {
  * @param {number} [params.days=8] - Number of nights
  * @param {number} params.lat - Degrees
  * @param {number} params.lon - Degrees east
+ * @param {number} [params.eyeHeightM=0] - Eye height above the water
+ *   (meters, work doc #35): rise/set stamps shift for the dip of the
+ *   vessel's raised horizon. Twilight lines are altitude angles, not
+ *   horizon crossings, so they stay put; only the rise/set stamps
+ *   move (a couple of minutes at cockpit height).
  * @returns {Array<{timestamp: string, moonPhaseDeg: number,
  *   moonIllumination: number, civilDusk: string|null,
  *   nauticalDusk: string|null, astronomicalDusk: string|null,
@@ -264,22 +375,27 @@ function twilightTimes(date, lat, lon) {
  *   civilDawn: string|null, sunrise: string|null, sunset: string|null,
  *   moonrise: string|null, moonset: string|null}>}
  */
-function celestialNights({ from, days = 8, lat, lon }) {
+function celestialNights({ from, days = 8, lat, lon, eyeHeightM = 0 }) {
   const nights = [];
   const observer = observerAt(lat, lon);
-  // First rise/set crossing of a body after `start`; missing
-  // crossings (polar day/night, no crossing within the window)
-  // degrade to null
+  // Eye height drives the dip of the apparent horizon: 0 keeps the
+  // geometric sea-level crossing, a cockpit height shifts the stamps
+  const eye =
+    Number.isFinite(eyeHeightM) && eyeHeightM > 0 && eyeHeightM <= 10000
+      ? eyeHeightM
+      : 0;
+  // First crossing of a body after `start`; missing crossings (polar
+  // day/night, no crossing within the window) degrade to null
   const riseSet = (body, direction, start) => {
     try {
-      const found = A.SearchRiseSet(
-        body,
+      const events = (body === "Moon" ? moonEvents : sunEvents)(
+        start,
+        new Date(start.getTime() + SEARCH_WINDOW_MS),
         observer,
-        direction,
-        A.MakeTime(start),
-        1.5,
+        eye,
       );
-      return found ? found.date.toISOString() : null;
+      const kind = direction < 0 ? "set" : "rise";
+      return events.find((e) => e.kind === kind)?.time.toISOString() ?? null;
     } catch (_error) {
       return null;
     }
@@ -291,22 +407,21 @@ function celestialNights({ from, days = 8, lat, lon }) {
       ? new Date(twilights.nauticalDusk)
       : base;
     // Sunset: the setting crossing before this night's civil dusk —
-    // search from a day back so the search's forward window covers it
+    // search from 18 hours back so the forward window covers it
     const civilDuskMs = twilights.civilDusk
       ? new Date(twilights.civilDusk).getTime()
       : null;
     const sunset = civilDuskMs
-      ? riseSet(A.Body.Sun, -1, new Date(civilDuskMs - 18 * 3600000))
+      ? riseSet("Sun", -1, new Date(civilDuskMs - 18 * 3600000))
       : null;
     // Dawn side: the next rising after the dusk anchor (the same
-    // night's sunrise); the +2 min skips the numerical tangency at
-    // the crossing itself, as the dawn chain does
+    // night's sunrise)
     const afterDusk = new Date(anchor.getTime() + 120000);
-    const sunrise = riseSet(A.Body.Sun, 1, afterDusk);
+    const sunrise = riseSet("Sun", 1, afterDusk);
     // Moon brackets (work docs #32/#33): the next set and rise after
     // dusk — a moon already up at dusk reports tomorrow's rise
-    const moonset = riseSet(A.Body.Moon, -1, afterDusk);
-    const moonrise = riseSet(A.Body.Moon, 1, afterDusk);
+    const moonset = riseSet("Moon", -1, afterDusk);
+    const moonrise = riseSet("Moon", 1, afterDusk);
     nights.push({
       timestamp: anchor.toISOString(),
       moonPhaseDeg: Math.round(moonPhaseDeg(anchor) * 10) / 10,
@@ -352,9 +467,39 @@ function passesCloudGate(timestamp, cloudCoverAt) {
  */
 function passesMoonGate(date, lat, lon) {
   return (
-    bodyAltitudeDeg(A.Body.Moon, date, lat, lon) <= 0 ||
+    bodyAltitudeDeg("Moon", date, lat, lon) <= 0 ||
     moonIllumination(date) < MAX_MOON_ILLUMINATION
   );
+}
+
+/**
+ * Angular separation between two bodies as seen from a position,
+ * from their refracted topocentric alt/az (same sky separation as the
+ * astronomy-engine vector angle it replaces).
+ *
+ * @param {string} bodyA - Body name
+ * @param {string} bodyB - Body name
+ * @param {Date} date - Instant
+ * @param {number} lat - Degrees
+ * @param {number} lon - Degrees east
+ * @returns {number} Separation in degrees
+ */
+function angularSeparationDeg(bodyA, bodyB, date, lat, lon) {
+  const observer = observerAt(lat, lon);
+  const a = altAzFunctionFor(bodyA)(date, observer);
+  const b = altAzFunctionFor(bodyB)(date, observer);
+  const rad = Math.PI / 180;
+  const cos = Math.min(
+    1,
+    Math.max(
+      -1,
+      Math.sin(a.altDeg * rad) * Math.sin(b.altDeg * rad) +
+        Math.cos(a.altDeg * rad) *
+          Math.cos(b.altDeg * rad) *
+          Math.cos((a.azDeg - b.azDeg) * rad),
+    ),
+  );
+  return Math.acos(cos) / rad;
 }
 
 /**
@@ -382,7 +527,13 @@ function planetaryEvents({ from, hours, lat, lon, cloudCoverAt }) {
   const end = from.getTime() + hours * 3600000;
   for (let t = from.getTime(); t < end; t += 3600000) {
     const date = new Date(t);
-    if (!isNauticalNight(date, lat, lon)) {
+    let nautical;
+    try {
+      nautical = isNauticalNight(date, lat, lon);
+    } catch (_error) {
+      continue;
+    }
+    if (!nautical) {
       continue;
     }
     // Closest night-hour separation per pair; only the final scan
@@ -403,7 +554,12 @@ function planetaryEvents({ from, hours, lat, lon, cloudCoverAt }) {
       if (!planet.superior || seenOppositions.has(planet.name)) {
         continue;
       }
-      const elongation = A.Elongation(planet.body, date).elongation;
+      let elongation;
+      try {
+        elongation = planetIllumination(planet.body, date).elongationDeg;
+      } catch (_error) {
+        continue;
+      }
       if (
         elongation >= OPPOSITION_ELONGATION_DEG &&
         bodyAltitudeDeg(planet.body, date, lat, lon) >= MIN_ALTITUDE_DEG &&
@@ -443,24 +599,6 @@ function planetaryEvents({ from, hours, lat, lon, cloudCoverAt }) {
 }
 
 /**
- * Angular separation between two bodies as seen from a position.
- *
- * @param {string} bodyA - astronomy-engine Body constant
- * @param {string} bodyB - astronomy-engine Body constant
- * @param {Date} date - Instant
- * @param {number} lat - Degrees
- * @param {number} lon - Degrees east
- * @returns {number} Separation in degrees
- */
-function angularSeparationDeg(bodyA, bodyB, date, lat, lon) {
-  const observer = observerAt(lat, lon);
-  const time = A.MakeTime(date);
-  const v1 = A.Equator(bodyA, time, observer, true, true).vec;
-  const v2 = A.Equator(bodyB, time, observer, true, true).vec;
-  return A.AngleBetween(v1, v2);
-}
-
-/**
  * Meteor-shower peak events inside the window. The gate: peak within
  * the window, Moon set or a crescent (illumination under 30 %), the
  * radiant able to clear 20° from the vessel's latitude, nautical
@@ -486,7 +624,12 @@ function meteorEvents({ from, hours, lat, lon, cloudCoverAt }) {
       if (peak.getTime() < from.getTime() || peak.getTime() >= end) {
         continue;
       }
-      const illumination = moonIllumination(peak);
+      let illumination;
+      try {
+        illumination = moonIllumination(peak);
+      } catch (_error) {
+        continue;
+      }
       if (illumination >= MAX_MOON_ILLUMINATION) {
         continue;
       }
@@ -494,7 +637,13 @@ function meteorEvents({ from, hours, lat, lon, cloudCoverAt }) {
       if (radiantMaxAlt < MIN_RADIANT_ALTITUDE_DEG) {
         continue;
       }
-      if (!isNauticalNight(peak, lat, lon)) {
+      let nautical;
+      try {
+        nautical = isNauticalNight(peak, lat, lon);
+      } catch (_error) {
+        continue;
+      }
+      if (!nautical) {
         continue;
       }
       if (!passesCloudGate(peak.toISOString(), cloudCoverAt)) {
@@ -513,10 +662,125 @@ function meteorEvents({ from, hours, lat, lon, cloudCoverAt }) {
 }
 
 /**
+ * Discrete moon phase instants inside the window (work doc #35):
+ * `searchMoonPhases` gives the exact new/quarter/full instants, the
+ * timeline and strategic outlook read them as sky notes — a new moon
+ * names the darkest night of the passage, a full moon the moonlit
+ * watches. Informational by nature (the phase instant may fall in
+ * daytime), so no night or cloud gate applies.
+ *
+ * @param {object} params
+ * @param {Date} params.from - Window start
+ * @param {number} params.hours - Window length
+ * @returns {Array<{kind: string, timestamp: string, tactical: boolean,
+ *   description: string}>}
+ */
+function moonPhaseEvents({ from, hours }) {
+  try {
+    return searchMoonPhases(
+      from,
+      new Date(from.getTime() + hours * 3600000),
+    ).map((entry) => ({
+      kind: "moonPhase",
+      timestamp: entry.time.toISOString(),
+      tactical: false,
+      description: MOON_PHASE_LABELS[entry.phase] ?? "Moon phase change",
+    }));
+  } catch (_error) {
+    return [];
+  }
+}
+
+/**
+ * Lunar and solar eclipses the vessel can see inside the window
+ * (work doc #35). Lunar: peak within the window, visibility from the
+ * eclipse geometry, the Sun below the civil twilight line at peak (an
+ * eclipse is a bright event — visible through twilight, not the
+ * nautical gate the faint events use) and the cloud gate. Solar:
+ * almanac returns only eclipses the observer can see, gated on the
+ * Sun above the horizon at peak and the cloud gate.
+ *
+ * @param {object} params
+ * @param {Date} params.from - Window start
+ * @param {number} params.hours - Window length
+ * @param {number} params.lat - Degrees
+ * @param {number} params.lon - Degrees east
+ * @param {((timestamp: string) => number|null)|undefined} [params.cloudCoverAt]
+ * @returns {Array<{kind: string, timestamp: string, tactical: boolean,
+ *   description: string}>}
+ */
+function eclipseEvents({ from, hours, lat, lon, cloudCoverAt }) {
+  const events = [];
+  const end = new Date(from.getTime() + hours * 3600000);
+  const observer = observerAt(lat, lon);
+  try {
+    for (const eclipse of lunarEclipses(from, end)) {
+      let visibility;
+      try {
+        visibility = lunarEclipseVisibility(eclipse, observer);
+      } catch (_error) {
+        continue;
+      }
+      if (!visibility?.visibleAtPeak) {
+        continue;
+      }
+      try {
+        if (bodyAltitudeDeg("Sun", eclipse.peak, lat, lon) >= -6) {
+          continue;
+        }
+      } catch (_error) {
+        continue;
+      }
+      if (!passesCloudGate(eclipse.peak.toISOString(), cloudCoverAt)) {
+        continue;
+      }
+      events.push({
+        kind: "lunarEclipse",
+        timestamp: eclipse.peak.toISOString(),
+        tactical: true,
+        description:
+          ECLIPSE_DESCRIPTIONS.lunar[eclipse.kind] ??
+          "Lunar eclipse peak tonight",
+      });
+    }
+  } catch (_error) {
+    // Out of almanac's range or a failed search: degrade to no events
+  }
+  try {
+    for (const eclipse of solarEclipses(from, end, observer)) {
+      const peak = eclipse.peak;
+      try {
+        if (sunAltAz(peak, observer).altDeg <= 0) {
+          continue;
+        }
+      } catch (_error) {
+        continue;
+      }
+      if (!passesCloudGate(peak.toISOString(), cloudCoverAt)) {
+        continue;
+      }
+      events.push({
+        kind: "solarEclipse",
+        timestamp: peak.toISOString(),
+        tactical: true,
+        description:
+          eclipse.obscuration === 1
+            ? "Total solar eclipse — the Sun fully covered"
+            : `${ECLIPSE_DESCRIPTIONS.solar[eclipse.kind] ?? "Solar"} solar eclipse — ${Math.round(eclipse.obscuration * 100)}% of the Sun covered`,
+      });
+    }
+  } catch (_error) {
+    // Out of almanac's range or a failed search: degrade to no events
+  }
+  return events;
+}
+
+/**
  * Builds the Phase-2 ephemeris events for a position and window:
- * planetary conjunctions and oppositions, meteor-shower peaks. Every
- * event has already passed the full tactical visibility gate
- * (nautical night, cloud cover, altitude, moonlight where relevant).
+ * planetary conjunctions and oppositions, meteor-shower peaks, moon
+ * phase instants and visible eclipses. Every visible event has
+ * already passed the full tactical visibility gate (nautical night,
+ * cloud cover, altitude, moonlight); moon phases are informational.
  *
  * @param {object} params
  * @param {number} params.lat - Degrees
@@ -537,6 +801,8 @@ function buildEphemerisEvents({
   return [
     ...planetaryEvents({ from, hours, lat, lon, cloudCoverAt }),
     ...meteorEvents({ from, hours, lat, lon, cloudCoverAt }),
+    ...moonPhaseEvents({ from, hours }),
+    ...eclipseEvents({ from, hours, lat, lon, cloudCoverAt }),
   ];
 }
 
@@ -605,6 +871,8 @@ module.exports = {
   planetaryEvents,
   angularSeparationDeg,
   meteorEvents,
+  moonPhaseEvents,
+  eclipseEvents,
   buildEphemerisEvents,
   cloudCoverLookup,
 };

@@ -11,7 +11,7 @@
  *
  * Phase 2 (offline, `celestial-ephemeris.js`): planetary
  * conjunctions, oppositions and meteor-shower peaks, computed locally
- * with astronomy-engine, plus bright station passes (ISS, Tiangong)
+ * with @openwaters/almanac, plus bright station passes (ISS, Tiangong)
  * propagated locally from CelesTrak TLEs (`satellite-source.js`).
  * `fetchSpaceEvents` merges all sources; the Phase-1 aurora gate is
  * upgraded to the full tactical visibility gate (nautical night, moon

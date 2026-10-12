@@ -193,6 +193,10 @@ const DEFAULTS = {
   departure_daylight_auto: true,
   departure_prep_hours: 1.5,
   departure_dawn_altitude_deg: -6,
+  /** Eye height above the water (work doc #35): rise/set stamps in
+   * the briefing's night context correct for the vessel's raised
+   * horizon when set. */
+  celestial_eye_height_m: 0,
   /** Verified NWS High Seas Forecast feeds (METAREA XII/XV). The
    * METAREA XIV issuer (MetService) gets added as a URL once a
    * working endpoint is confirmed on board. */
@@ -243,6 +247,9 @@ module.exports = (app) => {
     prepHours: DEFAULTS.departure_prep_hours,
     dawnAltitudeDeg: DEFAULTS.departure_dawn_altitude_deg,
   };
+  /** Vessel eye height above the water (work doc #35): the dip of
+   * the apparent horizon that the rise/set stamps correct for. */
+  let celestialEyeHeightM = DEFAULTS.celestial_eye_height_m;
   let hazardFilterConfig = {
     minAlertLevel: DEFAULTS.hazard_min_alert_level,
     offRouteRadiusNm: DEFAULTS.hazard_radius_offroute_nm,
@@ -1140,6 +1147,7 @@ module.exports = (app) => {
         days: 2,
         lat: position.lat,
         lon: position.lon,
+        eyeHeightM: celestialEyeHeightM,
       }),
     );
     await attachHazardEvents(payload, position, waypoints);
@@ -1304,6 +1312,7 @@ module.exports = (app) => {
         days: forecastDays,
         lat: waypoints[0].lat,
         lon: waypoints[0].lon,
+        eyeHeightM: celestialEyeHeightM,
       }),
     );
     // Territorial waters transitions (work doc #17): corridor tiles
@@ -2151,6 +2160,15 @@ module.exports = (app) => {
             "(−6° = civil dawn).",
           default: DEFAULTS.departure_dawn_altitude_deg,
         },
+        celestial_eye_height_m: {
+          type: "number",
+          title: "Eye Height Above Water (meters)",
+          description:
+            "Height of the observer's eye above the water (0–10 m). " +
+            "Sunrise, sunset and moonrise/set stamps in the briefing " +
+            "correct for the dip of the vessel's raised horizon.",
+          default: DEFAULTS.celestial_eye_height_m,
+        },
         cap_enabled: {
           type: "boolean",
           title: "CAP Official Alerts (structured warnings)",
@@ -2260,6 +2278,14 @@ module.exports = (app) => {
         prepHours: config.departure_prep_hours,
         dawnAltitudeDeg: config.departure_dawn_altitude_deg,
       };
+      // Eye height above the water (work doc #35): rise/set stamps
+      // correct for the dip of the vessel's raised horizon
+      celestialEyeHeightM =
+        Number.isFinite(config.celestial_eye_height_m) &&
+        config.celestial_eye_height_m > 0 &&
+        config.celestial_eye_height_m <= 10000
+          ? config.celestial_eye_height_m
+          : 0;
       // Weather source (work doc #16): the server's Weather API when
       // present (signalk-weather-router-plus registers a provider over
       // its decoded ECMWF run), Open-Meteo per config or fallback
