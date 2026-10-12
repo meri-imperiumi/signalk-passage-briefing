@@ -93,6 +93,20 @@ export function compiledLabel(payload) {
 }
 
 /**
+ * Header pill text naming when the next briefing is scheduled: the
+ * state machine's next cron window in ship's time. Null when the
+ * plugin serves none (offline, or no cron scheduled) — the pill hides
+ * rather than inventing an estimate.
+ *
+ * @param {string|null} nextCronRunIso - From `/api/status`
+ * @returns {string|null} `Next MM-DD HH:MM` stamp, or null
+ */
+export function nextCompileLabel(nextCronRunIso) {
+  const stamp = fmtShip(nextCronRunIso);
+  return stamp ? `Next ${stamp}` : null;
+}
+
+/**
  * The vessel's published timezone (Signal K `environment.time.*`, as
  * served by signalk-ships-time): the session-wide state behind
  * {@link fmtShip}. `offsetMinutes` comes from

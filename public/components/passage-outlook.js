@@ -16,6 +16,7 @@ import {
   effectiveDeparture,
   fmtHours,
   fmtShip,
+  nextCompileLabel,
   parseTimezoneOffset,
   setShipTime,
   shipTimeLabel,
@@ -161,6 +162,7 @@ class PassageOutlook extends HTMLElement {
         <h1>Passage Briefing</h1>
         <select id="route" aria-label="Route" style="max-width: 16rem"></select>
         <span class="pill" id="compiled" hidden></span>
+        <span class="pill" id="next" hidden title="Next scheduled briefing window — a manual update can land earlier"></span>
         <span class="pill" id="online">OFFLINE</span>
         <span class="pill" id="shiptime" hidden></span>
       </header>
@@ -182,6 +184,7 @@ class PassageOutlook extends HTMLElement {
     this._onlinePill = this.shadowRoot.getElementById("online");
     this._shiptimePill = this.shadowRoot.getElementById("shiptime");
     this._compiledPill = this.shadowRoot.getElementById("compiled");
+    this._nextPill = this.shadowRoot.getElementById("next");
     this._tabBar = this.shadowRoot.getElementById("tab-bar");
     this._tabTactical = this.shadowRoot.getElementById("tab-tactical");
     this._tabStrategic = this.shadowRoot.getElementById("tab-strategic");
@@ -495,6 +498,12 @@ class PassageOutlook extends HTMLElement {
     const seq = this._loadSeq;
     this.renderLoading();
     try {
+      // The next scheduled compile window rides /api/status (the same
+      // state-machine field the checklist reads); its absence degrades
+      // the Next pill to hidden, never to an invented stamp
+      this._nextCron = await fetchJson(`${PLUGIN_API}/api/status`, 8000)
+        .then((status) => status?.nextCronRun ?? null)
+        .catch(() => null);
       this._briefing = await fetchJson(`${PLUGIN_API}/briefing${query}`, 20000);
       if (seq !== this._loadSeq) {
         return;
@@ -597,6 +606,14 @@ class PassageOutlook extends HTMLElement {
     const label = compiledLabel(this._briefing?.payload);
     this._compiledPill.textContent = label ?? "";
     this._compiledPill.hidden = label == null;
+    // The next scheduled window rides /api/status, fetched with the
+    // briefing; hidden when the plugin serves none (hide rather than
+    // invent — the same rule the compile stamp follows)
+    if (this._nextPill) {
+      const next = nextCompileLabel(this._nextCron);
+      this._nextPill.textContent = next ?? "";
+      this._nextPill.hidden = next == null;
+    }
   }
 
   /** Refreshes the selected route's briefing while online. */

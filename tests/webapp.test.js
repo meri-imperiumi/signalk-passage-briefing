@@ -18,6 +18,7 @@ test("webapp view models", async (t) => {
     fmtLiters,
     fmtHours,
     fmtKn,
+    nextCompileLabel,
     fmtUtc,
     mergeTimeline,
     moonGlyph,
@@ -114,6 +115,24 @@ test("webapp view models", async (t) => {
     // hides rather than inventing a stamp
     assert.equal(compiledLabel({ metadata: {} }), null);
     assert.equal(compiledLabel(null), null);
+  });
+
+  await t.test("nextCompileLabel names the next scheduled window", () => {
+    // The state machine's next cron window, in ship's time like
+    // every stamp
+    assert.equal(
+      nextCompileLabel("2026-06-21T08:15:00.000Z"),
+      "Next 06-21 08:15Z",
+    );
+    setShipTime({ offsetMinutes: 780, region: "Pacific/Tongatapu" });
+    assert.equal(
+      nextCompileLabel("2026-06-21T08:15:00.000Z"),
+      "Next 06-21 21:15 +13",
+    );
+    setShipTime(null);
+    // No cron scheduled (offline): the pill hides
+    assert.equal(nextCompileLabel(null), null);
+    assert.equal(nextCompileLabel(undefined), null);
   });
 
   await t.test("fmtHours buckets days, hours and minutes", () => {
