@@ -4,6 +4,7 @@
 
 ### Fixed
 - The conditions-here celestial & space events card rendered raw ISO timestamps (`2026-10-12T07:06:12.650Z Tiangong pass: …`) instead of the app's formatted stamps: the renderer read a `stamp` field the plugin never sets, falling through to the raw event timestamp. Events now render through the shared ship's-time formatter like every other view (`MM-DD HH:MM` with the zone offset, `MM-DD HH:MMZ` in UTC when the vessel publishes no timezone), per the Signal K visuals time-formatting rules.
+- Energy timeline events rendered their detail stamps in UTC (`battery depleted by 06-22 03:00Z`) while the same rows' timeline stamp renders in ship's time — a leftover from before the ship's-time work, forcing the crew to do arithmetic between two renderings of the same instant. The `until`/`battery depleted by` details now use the shared ship's-time formatter like every other stamp.
 
 ## [0.9.0] - 2026-10-12
 

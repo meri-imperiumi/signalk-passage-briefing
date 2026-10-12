@@ -1582,10 +1582,10 @@ export function mergeTimeline(exceptions, payload = null) {
           ? `${e.netWh >= 0 ? "+" : "−"}${(Math.abs(e.netWh) / 1000).toFixed(1)} kWh`
           : null,
         e.timestamp != null && e.endTimestamp != null
-          ? `until ${fmtUtc(e.endTimestamp)}`
+          ? `until ${fmtShip(e.endTimestamp)}`
           : null,
         deficit && e.timeToEmpty != null
-          ? `battery depleted by ${fmtUtc(e.timeToEmpty)}`
+          ? `battery depleted by ${fmtShip(e.timeToEmpty)}`
           : null,
         e.type === "surplus" ? "run opportunistic loads" : null,
       ]
