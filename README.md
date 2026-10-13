@@ -14,7 +14,7 @@ Offshore passage daily briefing webapp for Signal K: a plugin that plans and rev
 
 The plugin fetches weather along the planned route — from the server's Weather API when a provider answers, Open-Meteo otherwise; fetched online, or via a GRIB/text spool when offline offshore. It runs a step-forward isochrone simulation with a monohull comfort model, learns the crew's sail preferences from the electronic logbook, and serves a two-screen webapp: a 24-hour tactical dashboard and a strategic passage summary. See [SPEC.md](SPEC.md) for the full design.
 
-Part of the Lille Ø offshore suite, alongside [@meri-imperiumi/signalk-energy-predictor](https://github.com/meri-imperiumi/signalk-energy-predictator) and [@meri-imperiumi/signalk-logbook](https://github.com/meri-imperiumi/signalk-logbook).
+Part of the Lille Ø offshore suite, alongside [@meri-imperiumi/signalk-energy-predictor](https://github.com/meri-imperiumi/signalk-energy-predictor) and [@meri-imperiumi/signalk-logbook](https://github.com/meri-imperiumi/signalk-logbook).
 
 ## Data sources
 
