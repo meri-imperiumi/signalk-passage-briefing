@@ -671,15 +671,17 @@ class PassageOutlook extends HTMLElement {
       mode === "here"
         ? "No cached conditions yet"
         : "No cached briefing for this route";
-    const button = document.createElement("button");
-    button.textContent = "Update now";
-    button.disabled = this._status?.online !== true;
-    // Here mode refreshes the conditions payload; the route-select
-    // flow would target the selected route instead
-    button.addEventListener("click", () =>
-      mode === "here" ? this.refreshHereBriefing() : this.refreshBriefing(),
-    );
-    strip.append(text, button);
+    strip.append(text);
+    // Route mode has no other refresh affordance on screen; here mode
+    // carries its own Update now in the conditions card head (work
+    // doc #7) — a second button on the strip read as a duplicate
+    if (mode !== "here") {
+      const button = document.createElement("button");
+      button.textContent = "Update now";
+      button.disabled = this._status?.online !== true;
+      button.addEventListener("click", () => this.refreshBriefing());
+      strip.append(button);
+    }
     this._view.before(strip);
   }
 
