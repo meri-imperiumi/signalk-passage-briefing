@@ -50,6 +50,9 @@ describe("weatherDataToTimeStep", () => {
     assert.equal(step.surface.twd, 45);
     assert.equal(step.surface.mslp, 1013);
     assert.equal(step.surface.gust, 18);
+    // Provider mode carries no precipitation fields — degrade, never invent
+    assert.equal(step.surface.precip, null);
+    assert.equal(step.surface.precipProbability, null);
     assert.equal(step.marine.hsCombined, 1.2);
     assert.equal(step.marine.tpCombined, 7);
     assert.equal(step.marine.dirCombined, 160);

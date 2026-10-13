@@ -389,6 +389,16 @@ export function weatherAt(forecasts, timestamp) {
         sa.cloudCover == null || sb.cloudCover == null
           ? null
           : mix(sa.cloudCover, sb.cloudCover),
+      // Rain fields follow the same honesty rule: unknown on either
+      // side of the span interpolates to null, never invented
+      precip:
+        sa.precip == null || sb.precip == null
+          ? null
+          : mix(sa.precip, sb.precip),
+      precipProbability:
+        sa.precipProbability == null || sb.precipProbability == null
+          ? null
+          : mix(sa.precipProbability, sb.precipProbability),
     },
     marine: {
       hsCombined: mix(ma.hsCombined, mb.hsCombined),
@@ -491,6 +501,22 @@ const CONVECTIVE_K_INDEX = 30;
  * not a red alert.
  */
 const CONVECTIVE_K_INDEX_MARGINAL = 28;
+
+/**
+ * Hourly precipitation rate at which a rain-shower hour is captured
+ * (mm/h). Tropical rain rarely arrives without squalls, so the crew
+ * reads a shower band as probable squalls; below the bar an hour is a
+ * stray drop, not weather.
+ */
+const RAIN_MM_PER_H = 0.5;
+
+/**
+ * Precipitation probability at which a rain-shower hour is captured
+ * (%). The probability field extends detection into the later forecast
+ * days, where some models publish it long after they stop being
+ * confident about hourly rates.
+ */
+const RAIN_PROBABILITY_PERCENT = 50;
 
 /**
  * Maximum gap in hours between two hourly anomalies that still counts
@@ -876,6 +902,7 @@ export function simulateRun({
   const positions = [];
   const seaStateAnomalies = [];
   const upperAirAnomalies = [];
+  const rainHours = [];
   const timeEvents = [];
   let arrivedHours = null;
   let distanceMadeGoodNm = 0;
@@ -1110,6 +1137,24 @@ export function simulateRun({
       });
     }
 
+    // Rain-shower hours (probable squalls): either the model's hourly
+    // rate crosses the shower bar or its probability does — the two
+    // fields have independent availability across the horizon
+    const precip = weather?.surface?.precip;
+    const precipProbability = weather?.surface?.precipProbability;
+    if (
+      (precip != null && precip >= RAIN_MM_PER_H) ||
+      (precipProbability != null &&
+        precipProbability >= RAIN_PROBABILITY_PERCENT)
+    ) {
+      rainHours.push({
+        hoursFromNow: Math.round(hours * 10) / 10,
+        timestamp: t.toISOString(),
+        precip,
+        precipProbability,
+      });
+    }
+
     // Waypoint progress
     if (arrivedNow) {
       if (targetIndex === track.length - 1) {
@@ -1175,6 +1220,7 @@ export function simulateRun({
     positions,
     seaStateAnomalies,
     upperAirAnomalies,
+    rainHours,
     timeEvents,
     hazardAlerts: hazardAlerts(notes, positions),
   };
@@ -1509,6 +1555,7 @@ export function simulatePassage({
     hazardAlerts: nominal.hazardAlerts,
     seaStateAnomalies: nominal.seaStateAnomalies,
     upperAirAnomalies: nominal.upperAirAnomalies,
+    rainHours: nominal.rainHours,
     energy: energySummary(energyHourly, startTime),
     runs: runs.map((run, i) => ({
       twsFactor: ETA_FACTORS[i],
@@ -1687,6 +1734,19 @@ export function filterExceptions(simulationResult, simParams = {}) {
           (episode.kIndex != null && episode.kIndex >= CONVECTIVE_K_INDEX)
         ),
       })),
+      // Rain-shower episodes (probable squalls): contiguous wet hours
+      // merge into one entry carrying the episode's peak rate and
+      // probability; always info-level — rain informs, CAPE warns
+      rainEpisodes: mergeEpisodes(
+        simulationResult.rainHours ?? [],
+        (episode, r) => {
+          episode.precip = maxOf(episode.precip, r.precip);
+          episode.precipProbability = maxOf(
+            episode.precipProbability,
+            r.precipProbability,
+          );
+        },
+      ),
     },
   };
 }

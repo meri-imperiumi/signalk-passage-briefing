@@ -166,7 +166,15 @@ describe("fetchWeatherAlongTrack", () => {
       mslp: 1013,
       gust: 18,
       cloudCover: 25,
+      precip: 0,
+      precipProbability: 10,
     });
+    // Second step carries the wet hour of the fixture
+    assert.equal(payload.waypoints[0].forecasts[1].surface.precip, 2.4);
+    assert.equal(
+      payload.waypoints[0].forecasts[1].surface.precipProbability,
+      80,
+    );
     assert.deepEqual(step.marine, {
       hsCombined: 1.2,
       tpCombined: 7,

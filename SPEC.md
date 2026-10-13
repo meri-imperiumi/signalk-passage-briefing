@@ -287,6 +287,8 @@ interface TimeStepForecast {
     twd: number;                // degrees true
     mslp: number;               // hPa
     cloudCover: number | null;  // percent (0-100); null when the source carries none
+    precip: number | null;      // mm/h; null when the source carries none
+    precipProbability: number | null; // percent (0-100); null when unknown
   };
   marine: {
     hsCombined: number;         // meters
@@ -565,6 +567,12 @@ function filterExceptions(simulationResult) {
       totalFuelGal: simulationResult.fuelConsumptionGal,
       macroSeaAnomalies: simulationResult.seaStateAnomalies.filter(a => a.steepnessRatio < 3.28),
       convectiveWarnings: simulationResult.upperAirAnomalies.filter(u => u.cape > 1000 || u.kIndex > 28),
+      // Rain-shower episodes: hours at or over the shower bar
+      // (precip ≥ 0.5 mm/h or probability ≥ 50 %) merged into one
+      // entry each with the peak rate and probability. The crew reads
+      // probable rain as probable squalls in the tropics — info-level
+      // timeline entries, not warnings
+      rainEpisodes: mergeEpisodes(simulationResult.rainHours),
       // Meteor-shower nights evaluated along the track (work doc #37):
       // per (shower, night) spaceEvents gated at the night's nautical-dusk
       // anchor, the radiant checked at the track's forecasted position;

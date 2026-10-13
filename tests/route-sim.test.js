@@ -33,6 +33,7 @@ function buildPayload({
   set = 0,
   steepHour = null,
   convectiveHour = null,
+  rainHour = null,
 } = {}) {
   const track = sampleRoutePoints(route);
   const waypoints = track.map((w) => ({
@@ -47,6 +48,8 @@ function buildPayload({
           twd,
           mslp: 1013,
           gust: tws + 5,
+          precip: h === rainHour ? 2.5 : 0,
+          precipProbability: h === rainHour ? 80 : 10,
         },
         marine: {
           hsCombined: steep ? 3 : hs,
@@ -293,6 +296,26 @@ describe("simulateRun", () => {
     assert.ok(run.upperAirAnomalies.some((a) => a.kIndex > 28));
   });
 
+  test("collects rain-shower hours over the shower bar", async () => {
+    const { simulateRun } = await simPromise;
+    // START is 06:00Z, so fixture hour 7 is simulated hour 1
+    const run = simulateRun({
+      payload: buildPayload({ rainHour: 7 }),
+      startTime: START,
+      maxHours: 12,
+    });
+    assert.equal(run.rainHours.length, 1);
+    assert.equal(run.rainHours[0].precip, 2.5);
+    assert.equal(run.rainHours[0].precipProbability, 80);
+    // Dry fixture hours stay under the bar
+    const dry = simulateRun({
+      payload: buildPayload({}),
+      startTime: START,
+      maxHours: 12,
+    });
+    assert.equal(dry.rainHours.length, 0);
+  });
+
   test("current pushes the boat off the heading line", async () => {
     const { simulateRun } = await simPromise;
     const withCurrent = simulateRun({
@@ -427,6 +450,7 @@ describe("simulatePassage", () => {
     );
     assert.ok(exceptions.passageSummary.macroSeaAnomalies.length === 0);
     assert.ok(exceptions.passageSummary.convectiveWarnings.length === 0);
+    assert.ok(exceptions.passageSummary.rainEpisodes.length === 0);
     assert.ok(Array.isArray(exceptions.passageSummary.hazards));
   });
 
@@ -490,6 +514,21 @@ describe("simulatePassage", () => {
     const exceptions = filterExceptions(result);
     assert.ok(exceptions.passageSummary.convectiveWarnings.length >= 1);
     assert.equal(exceptions.passageSummary.convectiveWarnings[0].cape, 1800);
+  });
+
+  test("rain episodes surface in the passage summary", async () => {
+    const { filterExceptions, simulatePassage } = await simPromise;
+    const result = simulatePassage({
+      payload: buildPayload({ rainHour: 7 }),
+      startTime: new Date("2026-06-21T06:00:00Z"),
+    });
+    const exceptions = filterExceptions(result);
+    assert.ok(exceptions.passageSummary.rainEpisodes.length >= 1);
+    assert.equal(exceptions.passageSummary.rainEpisodes[0].precip, 2.5);
+    assert.equal(
+      exceptions.passageSummary.rainEpisodes[0].precipProbability,
+      80,
+    );
   });
 
   test("anomalies merge into episodes with peak values, marginal band drops", async () => {

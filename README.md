@@ -7,7 +7,7 @@ Offshore passage daily briefing webapp for Signal K: a plugin that plans and rev
 - Simulates the passage hourly from the boat's actual position: speed from the vessel's polar, current added, ETA percentiles for the remaining route
 - Recommends sail changes hour by hour from what the crew actually did, learned from the electronic logbook
 - Rates every hour on the Sereno comfort scale and flags when light air in a residual swell will be worse than a gale
-- Renders one unified timeline: sail work, tacks and gybes, clock changes, territorial waters, official alerts, sky events and hazards in order
+- Renders one unified timeline: sail work, tacks and gybes, clock changes, territorial waters, official alerts, sky events, rain showers and hazards in order
 - Fetches bulletins, official structured alerts, global disaster events and synoptic charts for the waters the route actually crosses
 - Keeps working offline: everything fetches in the online window and survives the other 23 hours from the cache
 - Shows a mini summary on the chart plotter and learns from every logbook entry the crew writes
@@ -32,13 +32,13 @@ Part of the Lille Ø offshore suite, alongside [@meri-imperiumi/signalk-energy-p
 - [signalk-ships-time](https://github.com/meri-imperiumi/signalk-ships-time) — `environment.time.timezoneOffset` / `.timezoneRegion`, the vessel's published timezone: briefing stamps render in ship's time when available (the offset rides on every stamp), falling back to UTC `Z` when nothing is published
 - [signalk-watch-schedule](https://github.com/hoeken/signalk-watch-schedule) — `watch.state.onWatch`, `watch.state.startedAt`, `watch.system` and `watch.schedule`: the running watch rotation. While a watch is running, planned sail changes anchor to the previous watch handover (both teams awake) instead of sunrise/sunset; boundaries are extrapolated across the forecast horizon from the rotation cycle
 - [@signalk/sailsconfiguration](https://www.npmjs.com/package/@signalk/sailsconfiguration) — sail inventory used to filter free-text noise out of log entries
-- Weather API (`app.weatherApi`) — waypoint forecasts from the registered provider, the preferred source (`weather_source: auto`) whenever one answers; [signalk-weather-router-plus](https://github.com/motamman/signalk-weather-router-plus) serves it from its decoded ECMWF run, so briefing numbers match what the router planned with. That source carries combined sea only: swell/wind-sea partitions and the upper-air fields behind the convective warnings degrade to absent rather than being invented
+- Weather API (`app.weatherApi`) — waypoint forecasts from the registered provider, the preferred source (`weather_source: auto`) whenever one answers; [signalk-weather-router-plus](https://github.com/motamman/signalk-weather-router-plus) serves it from its decoded ECMWF run, so briefing numbers match what the router planned with. That source carries combined sea only: swell/wind-sea partitions, the upper-air fields behind the convective warnings and the precipitation fields behind the rain-shower episodes degrade to absent rather than being invented
 
 ### External
 
-The Open-Meteo entries below are the fallback weather source: used when no Weather API provider answers (or `weather_source` is `open-meteo`), and the only source of the partition and upper-air fields the Weather API providers don't publish.
+The Open-Meteo entries below are the fallback weather source: used when no Weather API provider answers (or `weather_source` is `open-meteo`), and the only source of the partition, upper-air and precipitation fields the Weather API providers don't publish.
 
-- [Open-Meteo Forecast API](https://open-meteo.com/en/docs) — surface wind, gusts, MSL pressure, CAPE and the pressure-layer fields behind the K-index (best-match model)
+- [Open-Meteo Forecast API](https://open-meteo.com/en/docs) — surface wind, gusts, MSL pressure, CAPE, precipitation (hourly rate and probability) and the pressure-layer fields behind the K-index (best-match model)
 - [NOAA SWPC planetary K-index forecast](https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json) — geomagnetic activity behind the aurora advisories
 - [JPL SBDB query API](https://ssd-api.jpl.nasa.gov/doc/sbdb_query.html) — comet brightness parameters (M1/K1) behind the Sky Notes comets
 - [CelesTrak](https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle) — two-line elements for the crewed stations (ISS, Tiangong); bright satellite passes are propagated locally from the fetched TLEs with SGP4, gated to nautical night, clear sky and a 15° haze line. The same service's per-catalog queries (`gp.php?CATNR=…`) supply the current elements of decaying satellites named by Space-Track's reentry predictions

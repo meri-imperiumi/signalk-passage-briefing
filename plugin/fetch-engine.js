@@ -5,9 +5,10 @@
  * Open-Meteo, the same source SV Sabado's passage-weather vetted
  * against raw ECMWF/NOAA GRIB:
  *
- * - forecast API: surface wind (kn), gusts, MSL pressure, CAPE, and
- *   the pressure-layer fields behind the K-index (computed here from
- *   T850/T700/T500 and dewpoints via Magnus);
+ * - forecast API: surface wind (kn), gusts, MSL pressure, CAPE,
+ *   precipitation (rate and probability), and the pressure-layer
+ *   fields behind the K-index (computed here from T850/T700/T500 and
+ *   dewpoints via Magnus);
  * - marine API (`ncep_gfswave025`): combined sea plus wind sea and
  *   swell partitions (the SPEC §3.1 marine block needs the split;
  *   ECMWF's split fields come back empty per passage-weather's
@@ -74,6 +75,8 @@ const FORECAST_HOURLY = [
   "relative_humidity_700hPa",
   "wind_speed_850hPa",
   "cloud_cover",
+  "precipitation",
+  "precipitation_probability",
 ].join(",");
 
 const WAVE_HOURLY = [
@@ -445,6 +448,8 @@ function buildTimeSteps(surfaceMap, marineMap, currentMap) {
         mslp: num(surface.pressure_msl),
         gust,
         cloudCover: num(surface.cloud_cover),
+        precip: num(surface.precipitation),
+        precipProbability: num(surface.precipitation_probability),
       },
       marine: {
         hsCombined: num(marine.wave_height),
@@ -533,6 +538,8 @@ async function fetchWeatherAlongTrack({
       "relative_humidity_700hPa",
       "wind_speed_850hPa",
       "cloud_cover",
+      "precipitation",
+      "precipitation_probability",
     ]);
     const marineMap = hourlyLookup(waveBlocks[index], [
       "wave_height",

@@ -319,6 +319,8 @@ class ConditionsHere extends HTMLElement {
       this._skyEl.innerHTML = "";
       for (const segment of skySegments(payload ?? null, {
         cloudCover: now.cloudCover ?? null,
+        precip: now.precipMmH ?? null,
+        precipProbability: now.precipProbability ?? null,
       })) {
         const span = document.createElement("span");
         span.textContent = segment.text;

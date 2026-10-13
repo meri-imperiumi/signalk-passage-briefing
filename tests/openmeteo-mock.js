@@ -29,6 +29,8 @@ function forecastFixture() {
       relative_humidity_700hPa: [60, 65],
       wind_speed_850hPa: [20, 22],
       cloud_cover: [25, 75],
+      precipitation: [0, 2.4],
+      precipitation_probability: [10, 80],
     },
   };
 }

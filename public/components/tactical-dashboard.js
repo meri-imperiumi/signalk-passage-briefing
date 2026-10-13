@@ -259,11 +259,12 @@ strong.sev {
       return;
     }
     el.innerHTML = "";
-    const nowCloud =
-      this._payload?.waypoints?.[0]?.forecasts?.[0]?.surface?.cloudCover ??
-      null;
+    const nowSurface =
+      this._payload?.waypoints?.[0]?.forecasts?.[0]?.surface ?? null;
     const segments = skySegments(this._payload ?? null, {
-      cloudCover: nowCloud,
+      cloudCover: nowSurface?.cloudCover ?? null,
+      precip: nowSurface?.precip ?? null,
+      precipProbability: nowSurface?.precipProbability ?? null,
     });
     for (const segment of segments) {
       const span = document.createElement("span");

@@ -538,6 +538,8 @@ export function hereNow(payload, rows = []) {
       mslpHpa: null,
       mslpTrend: null,
       cloudCover: null,
+      precipMmH: null,
+      precipProbability: null,
       stamp: "",
     };
   }
@@ -561,6 +563,8 @@ export function hereNow(payload, rows = []) {
     mslpHpa: mslpNow,
     mslpTrend,
     cloudCover: step.surface?.cloudCover ?? null,
+    precipMmH: step.surface?.precip ?? null,
+    precipProbability: step.surface?.precipProbability ?? null,
     stamp: fmtShip(step.timestamp),
   };
 }
@@ -866,12 +870,21 @@ function moonGlyphFor(timestamp, payload) {
  *   picked for (default: the payload's fetch time)
  * @param {number|null} [options.cloudCover] - Cloud cover percent at
  *   that instant
+ * @param {number|null} [options.precip] - Precipitation rate (mm/h) at
+ *   that instant
+ * @param {number|null} [options.precipProbability] - Precipitation
+ *   probability percent at that instant
  * @returns {Array<{text: string, title: string}>} Empty when the
  *   payload predates the sky data
  */
 export function skySegments(
   payload,
-  { timestamp = null, cloudCover = null } = {},
+  {
+    timestamp = null,
+    cloudCover = null,
+    precip = null,
+    precipProbability = null,
+  } = {},
 ) {
   const night = nearestNight(
     timestamp ?? payload?.metadata?.fetchedAt ?? null,
@@ -920,6 +933,26 @@ export function skySegments(
     segments.push({
       text: `☁ ${Math.round(cloudCover)}%`,
       title: `cloud cover ${Math.round(cloudCover)} %`,
+    });
+  }
+  // Rain rides the same line as the cloud it falls from — but only
+  // when it is probable: the segment speaks at the same shower bars
+  // the timeline's rain episodes use (route-sim.mjs RAIN_MM_PER_H /
+  // RAIN_PROBABILITY_PERCENT; mirrored here to keep this module
+  // dependency-light). A 10 % chance is noise, not weather.
+  const rainyRate = precip != null && Number.isFinite(precip) && precip >= 0.5;
+  const rainyProb =
+    precipProbability != null &&
+    Number.isFinite(precipProbability) &&
+    precipProbability >= 50;
+  if (rainyProb || rainyRate) {
+    segments.push({
+      text: rainyProb
+        ? `🌧 ${Math.round(precipProbability)}%`
+        : `🌧 ${precip.toFixed(1)}mm`,
+      title: rainyProb
+        ? `precipitation probability ${Math.round(precipProbability)} %`
+        : `precipitation ${precip.toFixed(1)} mm/h`,
     });
   }
   return segments;
@@ -1348,6 +1381,25 @@ export function mergeTimeline(exceptions, payload = null) {
       detail: episodeDetail(c, [
         c.cape != null ? `CAPE ${Math.round(c.cape)} J/kg` : null,
         c.kIndex != null ? `K ${c.kIndex.toFixed(1)}` : null,
+      ]),
+    });
+  }
+
+  // Rain-shower episodes (probable squalls in the tropics): peak
+  // hourly rate and probability over the range, info-level — rain
+  // informs where convection warns
+  for (const r of summary.rainEpisodes ?? []) {
+    push({
+      hoursFromNow: r.hoursFromNow ?? null,
+      timestamp: r.timestamp ?? null,
+      kind: "rain",
+      severity: "info",
+      label: "Rain showers",
+      detail: episodeDetail(r, [
+        r.precip != null ? `${r.precip.toFixed(1)} mm/h` : null,
+        r.precipProbability != null
+          ? `${Math.round(r.precipProbability)} %`
+          : null,
       ]),
     });
   }

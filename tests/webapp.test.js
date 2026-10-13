@@ -280,7 +280,14 @@ test("webapp view models", async (t) => {
             timestamp: new Date(
               new Date("2026-09-27T00:00:00.000Z").getTime() + i * 3600000,
             ).toISOString(),
-            surface: { tws: 12, twd: 45, mslp: 1013, gust: 18 },
+            surface: {
+              tws: 12,
+              twd: 45,
+              mslp: 1013,
+              gust: 18,
+              precip: 1.2,
+              precipProbability: 65,
+            },
             marine: {
               hsCombined: 1.2,
               tpCombined: 7,
@@ -311,6 +318,9 @@ test("webapp view models", async (t) => {
     assert.equal(now.comfortLevel, rows[0].comfortLevel);
     // Now cloud cover (work doc #33): from the first forecast step
     assert.equal(now.cloudCover, null);
+    // Now rain fields ride the same step
+    assert.equal(now.precipMmH, 1.2);
+    assert.equal(now.precipProbability, 65);
   });
 
   await t.test("hereNow and hereHourly handle empty payloads", () => {
@@ -450,6 +460,24 @@ test("webapp view models", async (t) => {
     // No cloud field (provider mode): no cloud segment, never invented
     const clearSky = skySegments(payload, { cloudCover: null });
     assert.ok(!clearSky.some((s) => s.text.startsWith("☁")));
+    // Rain rides the line as probability, or as the hourly rate when
+    // the model publishes no probability
+    const wetSky = skySegments(payload, {
+      cloudCover: 40,
+      precipProbability: 65,
+    });
+    assert.ok(
+      wetSky.some((s) => s.text === "🌧 65%"),
+      wetSky.map((s) => s.text).join(" "),
+    );
+    const rateSky = skySegments(payload, { precip: 0.8 });
+    assert.ok(
+      rateSky.some((s) => s.text === "🌧 0.8mm"),
+      rateSky.map((s) => s.text).join(" "),
+    );
+    // Dry hours stay quiet
+    const drySky = skySegments(payload, { precip: 0.1, precipProbability: 10 });
+    assert.ok(!drySky.some((s) => s.text.startsWith("🌧")));
     // A payload predating the sky data degrades to empty
     assert.deepEqual(skySegments({}, {}), []);
     assert.deepEqual(skySegments(null, {}), []);
@@ -533,6 +561,32 @@ test("webapp view models", async (t) => {
       assert.equal(bare[0].cloudCover, null);
     },
   );
+
+  await t.test("mergeTimeline carries rain episodes as info items", () => {
+    const timeline = mergeTimeline(
+      {
+        passageSummary: {
+          rainEpisodes: [
+            {
+              hoursFromNow: 4,
+              timestamp: "2026-06-21T10:00:00.000Z",
+              untilHoursFromNow: 7,
+              untilTimestamp: "2026-06-21T13:00:00.000Z",
+              precip: 2.5,
+              precipProbability: 80,
+            },
+          ],
+        },
+      },
+      null,
+    );
+    const rain = timeline.filter((i) => i.kind === "rain");
+    assert.equal(rain.length, 1);
+    assert.equal(rain[0].severity, "info");
+    assert.equal(rain[0].label, "Rain showers");
+    assert.match(rain[0].detail, /2\.5 mm\/h/);
+    assert.match(rain[0].detail, /80 %/);
+  });
 
   await t.test(
     "mergeTimeline passes source provenance through (doc #31)",

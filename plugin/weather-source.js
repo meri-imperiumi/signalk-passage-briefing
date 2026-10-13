@@ -98,6 +98,10 @@ function weatherDataToTimeStep(item) {
       // The provider publishes no cloud cover; the celestial
       // visibility gate stays open (work doc #3 Phase 2)
       cloudCover: null,
+      // Nor any precipitation fields; rain-shower episodes degrade
+      // to absent rather than being invented
+      precip: null,
+      precipProbability: null,
     },
     marine: {
       hsCombined: Number.isFinite(item.water?.waveSignificantHeight)

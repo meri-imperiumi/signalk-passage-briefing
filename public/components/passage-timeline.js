@@ -26,6 +26,7 @@ const GLYPHS = {
   sail: "⛵",
   maneuver: "⇄",
   convective: "⚡",
+  rain: "🌧",
   sea: "🌊",
   zone: "⚑",
   space: "✦",
