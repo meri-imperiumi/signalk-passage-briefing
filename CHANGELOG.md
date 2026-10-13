@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-14
+
 ### Added
 - Rain-shower episodes on the unified timeline (probable squalls): Open-Meteo `precipitation` (hourly mm/h) and `precipitation_probability` join the fetch, ride `weatherAt`'s interpolation under the same unknown-stays-null rule as cloud cover, and hours at or over the shower bar (≥ 0.5 mm/h rate or ≥ 50 % probability — whichever the model still publishes at that horizon) merge into contiguous `rainEpisodes` carrying the peak rate and probability. They render as info-level 🌧 timeline entries (“Rain showers · 2.5 mm/h · 80 % · until …”) — tropical rain rarely arrives without squalls, so probable rain is the crew's probable-squall advisory without claiming convection's warning weight. The sky line on tactical and here gains the now rain segment above the same bars (🌧 65 %, or 🌧 0.8 mm/h when the model publishes only a rate — drier hours stay quiet); Weather API provider mode publishes no precipitation fields and degrades to absent rather than inventing them.
 
