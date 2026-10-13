@@ -7,7 +7,7 @@
  * consumes the same file with `import()`.
  *
  * The comfort model rates a passage hour on the Sereno scale
- * (Champagne > Easy > Coffee > Rough > Sick) from two independent
+ * (Champagne > Easy > Sporty > Rough > Miserable) from two independent
  * vectors, the worse of which sets the level:
  *
  * 1. **Wind over the deck** — apparent wind speed bands derived from
@@ -23,8 +23,12 @@
  * (https://github.com/sailing12388/passage-weather, MIT), adapted for a
  * monohull: the catamaran beam-roll and bridgedeck-slam factors are
  * replaced by a heel multiplier and a waterline pitching resonance
- * term. Not calibrated against a logged passage until the backtest CLI
- * (SPEC §7) tunes k_heel/k_pitch against the vessel's own history.
+ * term. This is a modified Sereno scale, not a direct copy — the
+ * slatting penalty is this project's own addition, upstream has
+ * nothing like it (a catamaran slats far less, and light-air
+ * discomfort rarely gets modeled at all). Not calibrated against a
+ * logged passage until the backtest CLI (SPEC §7) tunes k_heel/k_pitch
+ * against the vessel's own history.
  *
  * Conventions:
  * - wind speeds and boat speeds in knots, angles in radians unless a
@@ -53,7 +57,13 @@ export const KN_TO_MS = 0.514444;
  * Comfort tiers, best first. The index in this array is the severity
  * rank used when combining vectors.
  */
-export const COMFORT_TIERS = ["champagne", "easy", "coffee", "rough", "sick"];
+export const COMFORT_TIERS = [
+  "champagne",
+  "easy",
+  "sporty",
+  "rough",
+  "miserable",
+];
 
 /**
  * One-line meaning per comfort tier, display order best first, with
@@ -74,10 +84,10 @@ export const COMFORT_SCALE_INFO = [
     text: "Comfortable: moving around below is easy.",
   },
   {
-    tier: "coffee",
+    tier: "sporty",
     maxAws: 23,
     maxAz: 0.63,
-    text: "You can still hold a hot coffee without wearing it.",
+    text: "Lively enough that a hot coffee needs a firm grip.",
   },
   {
     tier: "rough",
@@ -86,22 +96,22 @@ export const COMFORT_SCALE_INFO = [
     text: "One hand for the boat — loose objects go flying.",
   },
   {
-    tier: "sick",
+    tier: "miserable",
     maxAws: null,
     maxAz: null,
-    text: "Beyond rough: seasickness very likely — think shelter or a course change.",
+    text: "Nobody is enjoying this. Seasickness very likely.",
   },
 ];
 
 /**
  * Apparent wind speed (knots) at or above which each tier is lost
- * (Champagne, Easy, Coffee, Rough). SPEC §5.2 vector 1.
+ * (Champagne, Easy, Sporty, Rough). SPEC §5.2 vector 1.
  */
 export const AWS_BANDS_KNOTS = [12, 18, 23, 33];
 
 /**
  * RMS vertical acceleration (m/s²) at or above which each tier is lost
- * (Champagne, Easy, Coffee, Rough). SPEC §5.2 vector 2, ISO 2631-1.
+ * (Champagne, Easy, Sporty, Rough). SPEC §5.2 vector 2, ISO 2631-1.
  */
 export const AZ_BANDS_MS2 = [0.15, 0.315, 0.63, 1.25];
 

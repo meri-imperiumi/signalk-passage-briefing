@@ -18,9 +18,9 @@
   /* Comfort tiers (Sereno physics, SPEC §5.2) — night-lean defaults */
   --comfort-champagne: #33616b;
   --comfort-easy: #4a7555;
-  --comfort-coffee: #8a5318;
+  --comfort-sporty: #8a5318;
   --comfort-rough: #a05218;
-  --comfort-sick: #8f3333;
+  --comfort-miserable: #8f3333;
   --comfort-unknown: #333333;
 
   --color-green: #4a7555;
@@ -39,9 +39,9 @@
 :root[data-mode="day"] {
   --comfort-champagne: #66c6db;
   --comfort-easy: #8dfcbb;
-  --comfort-coffee: #fca847;
+  --comfort-sporty: #fca847;
   --comfort-rough: #ff8847;
-  --comfort-sick: #ff5e5e;
+  --comfort-miserable: #ff5e5e;
   --comfort-unknown: #666666;
 
   --color-green: #8dfcbb;

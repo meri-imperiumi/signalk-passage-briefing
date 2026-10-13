@@ -1170,7 +1170,7 @@ describe("plugin", () => {
 
       // Brief meta serves the same view the tile publishes
       const meta = await call("/api/brief-meta");
-      assert.equal(meta.payload.comfort, "coffee");
+      assert.equal(meta.payload.comfort, "sporty");
       assert.equal(meta.payload.stale, false);
       assert.equal(meta.payload.ageHours, 0);
 

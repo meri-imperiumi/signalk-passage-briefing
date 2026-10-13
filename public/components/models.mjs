@@ -25,9 +25,9 @@ const DEG = Math.PI / 180;
 export const COMFORT_TIERS = [
   { level: "champagne", css: "var(--comfort-champagne)" },
   { level: "easy", css: "var(--comfort-easy)" },
-  { level: "coffee", css: "var(--comfort-coffee)" },
+  { level: "sporty", css: "var(--comfort-sporty)" },
   { level: "rough", css: "var(--comfort-rough)" },
-  { level: "sick", css: "var(--comfort-sick)" },
+  { level: "miserable", css: "var(--comfort-miserable)" },
 ];
 
 const TIER_BY_LEVEL = new Map(COMFORT_TIERS.map((t) => [t.level, t.css]));

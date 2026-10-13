@@ -1,7 +1,7 @@
 /**
  * The ℹ️ next to the comfort tier: an expanding explainer for the
- * Sereno comfort scale (champagne → sick), highlighting the current
- * tier via the `tier` attribute. Used by the tactical dashboard and
+ * project's modified Sereno comfort scale (champagne → miserable),
+ * highlighting the current tier via the `tier` attribute. Used by the tactical dashboard and
  * the conditions-here view.
  *
  * @file components/comfort-info.js

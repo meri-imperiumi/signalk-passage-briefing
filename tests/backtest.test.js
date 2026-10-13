@@ -404,7 +404,7 @@ test("backtest CLI runs against a local history server", async () => {
 
   // Matrix rendering
   const rendered = renderMatrix({
-    tiers: ["champagne", "easy", "coffee", "rough", "sick"],
+    tiers: ["champagne", "easy", "sporty", "rough", "miserable"],
     matrix: [
       [3, 1, 0, 0, 0],
       [0, 4, 0, 0, 0],

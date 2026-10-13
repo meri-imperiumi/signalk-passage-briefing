@@ -18,9 +18,9 @@ describe("comfort bands (SPEC §5.2)", () => {
     assert.deepEqual(p.COMFORT_TIERS, [
       "champagne",
       "easy",
-      "coffee",
+      "sporty",
       "rough",
-      "sick",
+      "miserable",
     ]);
     assert.deepEqual(p.STEEPNESS_RATIO_THRESHOLD, 3.28);
   });
@@ -29,18 +29,18 @@ describe("comfort bands (SPEC §5.2)", () => {
     const { rateApparentWind } = await physics();
     assert.equal(rateApparentWind(11.9), "champagne");
     assert.equal(rateApparentWind(12), "easy");
-    assert.equal(rateApparentWind(18), "coffee");
+    assert.equal(rateApparentWind(18), "sporty");
     assert.equal(rateApparentWind(23), "rough");
-    assert.equal(rateApparentWind(33), "sick");
+    assert.equal(rateApparentWind(33), "miserable");
   });
 
   test("acceleration bands", async () => {
     const { rateAcceleration } = await physics();
     assert.equal(rateAcceleration(0.149), "champagne");
     assert.equal(rateAcceleration(0.15), "easy");
-    assert.equal(rateAcceleration(0.315), "coffee");
+    assert.equal(rateAcceleration(0.315), "sporty");
     assert.equal(rateAcceleration(0.63), "rough");
-    assert.equal(rateAcceleration(1.25), "sick");
+    assert.equal(rateAcceleration(1.25), "miserable");
   });
 });
 
@@ -241,8 +241,8 @@ describe("serenoComfort", () => {
       { twsKnots: 6, twaRad: 0.3 },
     );
     assert.ok(
-      ["rough", "sick"].includes(rough.comfort),
-      `expected rough/sick, got ${rough.comfort}`,
+      ["rough", "miserable"].includes(rough.comfort),
+      `expected rough/miserable, got ${rough.comfort}`,
     );
     // Champagne glass conditions: light following breeze, gentle swell
     const idyllic = serenoComfort(

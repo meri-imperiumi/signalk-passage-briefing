@@ -441,15 +441,17 @@ Executed inside `public/worker.js` for time steps $\Delta t = 1.0\text{ hour}$:
 
 ### 5.2 Monohull Sereno Comfort Index Formulation
 
+A modified Sereno comfort scale, not a direct copy of the upstream planner's: the band thresholds and motion math derive from passage-weather, the tier names and their one-line meanings are this project's own, and the slatting & roll-dampening penalty below is a vector upstream has nothing of — a catamaran slats far less, and light-air discomfort rarely gets modeled.
+
 #### Vector 1: Apparent Wind Speed Rating
 
 $$AWS = \sqrt{TWS^2 + STW^2 + 2 \cdot TWS \cdot STW \cdot \cos(TWA)}$$
 
 * $AWS < 12\text{ kt} \implies \mathbf{Champagne}$
 * $12\text{ kt} \le AWS < 18\text{ kt} \implies \mathbf{Easy}$
-* $18\text{ kt} \le AWS < 23\text{ kt} \implies \mathbf{Coffee}$
+* $18\text{ kt} \le AWS < 23\text{ kt} \implies \mathbf{Sporty}$
 * $23\text{ kt} \le AWS < 33\text{ kt} \implies \mathbf{Rough}$
-* $AWS \ge 33\text{ kt} \implies \mathbf{Sick}$
+* $AWS \ge 33\text{ kt} \implies \mathbf{Miserable}$
 
 #### Vector 2: Monohull Vertical Acceleration ($a_z$)
 
@@ -484,9 +486,9 @@ $$a_z = a_{z,\text{base}} \cdot \mu_{\text{heel}} \cdot \mu_{\text{pitch}}$$
 
 * $a_z < 0.15\text{ m/s}^2 \implies \mathbf{Champagne}$
 * $0.15 \le a_z < 0.315\text{ m/s}^2 \implies \mathbf{Easy}$
-* $0.315 \le a_z < 0.630\text{ m/s}^2 \implies \mathbf{Coffee}$
+* $0.315 \le a_z < 0.630\text{ m/s}^2 \implies \mathbf{Sporty}$
 * $0.630 \le a_z < 1.250\text{ m/s}^2 \implies \mathbf{Rough}$
-* $a_z \ge 1.250\text{ m/s}^2 \implies \mathbf{Sick}$
+* $a_z \ge 1.250\text{ m/s}^2 \implies \mathbf{Miserable}$
 
 #### Slatting & Roll-Dampening Penalty (work doc #14)
 
@@ -529,9 +531,9 @@ $$\text{IntersectCount} = \sum_{j=1}^{k} \text{RayCrossesSegment}(P_{\text{inter
   --color-fg: #ffcc00;
   --color-champagne: #00ffcc;
   --color-easy: #00ff00;
-  --color-coffee: #ffcc00;
+  --color-sporty: #ffcc00;
   --color-rough: #ff6600;
-  --color-sick: #ff0000;
+  --color-miserable: #ff0000;
   --font-family: 'Courier New', Courier, monospace;
 }
 
@@ -613,7 +615,7 @@ Displays:
 
 #### `<horizon-sparkline>` (SVG Renderer)
 
-Renders a 24-column SVG bar chart where bar background color maps to `comfortLevel` (Champagne, Easy, Coffee, Rough, Sick) and bar height represents $AWS$.
+Renders a 24-column SVG bar chart where bar background color maps to `comfortLevel` (Champagne, Easy, Sporty, Rough, Miserable) and bar height represents $AWS$.
 
 ---
 

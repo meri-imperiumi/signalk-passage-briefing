@@ -19,9 +19,9 @@
               "map": [
                 { "value": "champagne", "state": "green" },
                 { "value": "easy", "state": "green" },
-                { "value": "coffee", "state": "amber" },
+                { "value": "sporty", "state": "amber" },
                 { "value": "rough", "state": "amber" },
-                { "value": "sick", "state": "red" }
+                { "value": "miserable", "state": "red" }
               ],
               "default": "neutral",
               "reason": "Comfort tier unknown",

@@ -178,7 +178,7 @@ describe("simulateRun", () => {
     // Comfort evaluated every hour
     for (const block of run.hourly) {
       assert.ok(
-        ["champagne", "easy", "coffee", "rough", "sick"].includes(
+        ["champagne", "easy", "sporty", "rough", "miserable"].includes(
           block.comfortLevel,
         ),
       );

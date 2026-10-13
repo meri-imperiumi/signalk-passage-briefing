@@ -29,7 +29,7 @@ test("bundled example set parses and references published paths", () => {
   const comfortCheck = tile.checks[0];
   assert.deepEqual(
     comfortCheck.map.map((m) => m.value),
-    ["champagne", "easy", "coffee", "rough", "sick"],
+    ["champagne", "easy", "sporty", "rough", "miserable"],
   );
   const footerPaths = tile.footer.map((f) => f.path);
   assert.ok(footerPaths.includes("navigation.briefing.ageHours"));

@@ -279,9 +279,9 @@ class BriefExtWidget extends HTMLElement {
       {
         champagne: "#8dfcbb",
         easy: "#8dfcbb",
-        coffee: "#fca847",
+        sporty: "#fca847",
         rough: "#fca847",
-        sick: "#ff5e5e",
+        miserable: "#ff5e5e",
       }[String(comfort).toLowerCase()] ?? "var(--text-main, #c4c4c4)";
     const stale = this.values["navigation.briefing.stale"] === true;
     const ageEl = root.querySelector("#age");

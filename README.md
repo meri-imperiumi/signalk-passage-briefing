@@ -64,7 +64,7 @@ All external fetches are online-gated and cached to the plugin data directory, s
 
 ## Acknowledgments
 
-The comfort model and the whole idea of "what will each departure actually feel like" come from SV Sabado's [passage-weather](https://github.com/sailing12388/passage-weather) ensemble departure planner by Ray Hendricks. The Sereno comfort scale (Champagne, Easy, Coffee, Rough, Sick), the encounter-period motion math, and the ISO 2631-1 comfort bands are adapted from it for a monohull (heel and waterline-pitch resonance instead of catamaran beam-roll and bridgedeck slam).
+The comfort model and the whole idea of "what will each departure actually feel like" come from SV Sabado's [passage-weather](https://github.com/sailing12388/passage-weather) ensemble departure planner by Ray Hendricks. Ours is a modified Sereno comfort scale, not a direct copy: the thresholds and the encounter-period motion math are adapted for a monohull (heel and waterline-pitch resonance instead of catamaran beam-roll and bridgedeck slam), the tier names with their meanings are our own — Champagne, Easy, Sporty, Rough, Miserable — and the slatting penalty (light air over a residual swell snap-rolling the boat, which raw acceleration scores as calm) is a vector upstream lacks entirely; a catamaran slats far less, and few models bother with light-air discomfort. The ISO 2631-1 comfort bands complete the model.
 
 ## License
 

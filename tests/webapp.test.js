@@ -154,7 +154,7 @@ test("webapp view models", async (t) => {
       const blocks = [
         { hoursFromNow: 0, comfortLevel: "champagne", awsKnots: 10 },
         { hoursFromNow: 1, comfortLevel: "rough", awsKnots: 20 },
-        { hoursFromNow: 2, comfortLevel: "sick", awsKnots: 0 },
+        { hoursFromNow: 2, comfortLevel: "miserable", awsKnots: 0 },
       ];
       const cols = sparklineColumns(blocks);
       assert.equal(cols.length, 3);
@@ -162,7 +162,7 @@ test("webapp view models", async (t) => {
       assert.equal(cols[1].heightPct, 100);
       assert.equal(cols[2].heightPct, 4); // Floor
       assert.match(cols[0].color, /champagne/);
-      assert.match(cols[2].color, /sick/);
+      assert.match(cols[2].color, /miserable/);
       assert.ok(cols[1].title.includes("20.0 kn"));
     },
   );
@@ -192,7 +192,7 @@ test("webapp view models", async (t) => {
   await t.test("comfort tiers cover the Sereno scale", () => {
     assert.deepEqual(
       COMFORT_TIERS.map((tier) => tier.level),
-      ["champagne", "easy", "coffee", "rough", "sick"],
+      ["champagne", "easy", "sporty", "rough", "miserable"],
     );
     assert.match(comfortColor("unknown"), /unknown/);
   });
@@ -203,7 +203,7 @@ test("webapp view models", async (t) => {
         comfortBlocks: [
           {
             hoursFromNow: 0,
-            comfortLevel: "coffee",
+            comfortLevel: "sporty",
             awsKnots: 14.2,
             timestamp: "2026-06-21T06:00:00Z",
           },
@@ -211,10 +211,10 @@ test("webapp view models", async (t) => {
       },
     };
     const now = tacticalNow(exceptions);
-    assert.equal(now.comfortLevel, "coffee");
+    assert.equal(now.comfortLevel, "sporty");
     assert.equal(now.awsKnots, 14.2);
     assert.equal(now.stamp, "06-21 06:00Z");
-    assert.match(now.color, /coffee/);
+    assert.match(now.color, /sporty/);
 
     assert.equal(tacticalNow(null).comfortLevel, null);
     assert.match(tacticalNow(null).color, /unknown/);
@@ -765,7 +765,7 @@ test("webapp view models", async (t) => {
               twaDeg: 75,
               hsMeters: 1.5,
               tpSeconds: 8,
-              comfortLevel: "coffee",
+              comfortLevel: "sporty",
             },
           },
           {
@@ -781,7 +781,7 @@ test("webapp view models", async (t) => {
     // the wind is the first thing the crew reads when rigging
     assert.equal(
       timeline[0].detail,
-      "close reach · 14.2 kn TWS · Hs 1.5 m · coffee",
+      "close reach · 14.2 kn TWS · Hs 1.5 m · sporty",
     );
     // Missing sea state degrades without inventing values; a
     // pre-TWA payload just loses the point of sail, not the line
@@ -831,7 +831,7 @@ test("webapp view models", async (t) => {
             hoursFromNow: 10,
             lat: -18.9,
             lon: 174.5,
-            comfortLevel: "coffee",
+            comfortLevel: "sporty",
             slatting: false,
           },
           {
@@ -857,18 +857,18 @@ test("webapp view models", async (t) => {
             hoursFromNow: 19,
             timestamp: "2026-06-22T01:00:00.000Z",
             sailState: "MAIN_2_REEF",
-            conditions: { twsKnots: 22, comfortLevel: "sick" },
+            conditions: { twsKnots: 22, comfortLevel: "miserable" },
           },
         ],
       },
     });
     const sea = timeline.find((item) => item.kind === "sea");
-    assert.equal(sea.comfortLevel, "coffee");
+    assert.equal(sea.comfortLevel, "sporty");
     assert.equal(sea.slatting, false);
     // The sail change's own enriched conditions block wins over the
     // nearest track hour — it is the reefing logic's tier
     const sail = timeline.find((item) => item.kind === "sail");
-    assert.equal(sail.comfortLevel, "sick");
+    assert.equal(sail.comfortLevel, "miserable");
     // No track: the tier degrades to unknown, not invented
     const bare = mergeTimeline({
       passageSummary: {
