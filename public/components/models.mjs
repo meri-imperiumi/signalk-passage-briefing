@@ -14,6 +14,7 @@ import {
   serenoComfort,
   travelDirection,
 } from "../sereno-physics.mjs";
+import { pointOfSail } from "../tack-gybe.js";
 
 const DEG = Math.PI / 180;
 
@@ -1304,15 +1305,16 @@ export function mergeTimeline(exceptions, payload = null) {
     const label = maneuver
       ? `${e.maneuver === "tack" ? "Tack" : "Gybe"} to ${e.toTack ?? tack ?? "?"}`
       : sailEventLabel(e) || state;
-    // Conditions at the change point (work doc #18): what the crew
-    // is rigging into — true wind, sea state, comfort tier. Falls
-    // back to the bare maneuver TWS for payloads without the
+    // Conditions at the change point (work doc #18): how the boat
+    // sits to the wind, then true wind, sea state, comfort tier.
+    // Falls back to the bare maneuver TWS for payloads without the
     // enriched conditions block. When the tier came from the
     // slatting penalty (work doc #14: light air over a residual
     // swell), the detail says so — "rough" alone would send someone
     // looking for wind that isn't there.
     const conditions = e.conditions ?? null;
     const tws = conditions?.twsKnots ?? e.twsAtManeuver ?? null;
+    const posText = pointOfSail(conditions?.twaDeg ?? null);
     // Why the change sits where it sits: watch handover when a watch
     // schedule runs, else the sunrise/sunset it waits for
     const anchorText =
@@ -1333,6 +1335,7 @@ export function mergeTimeline(exceptions, payload = null) {
         e.distanceFromStartNm != null
           ? `${Math.round(e.distanceFromStartNm)} nm`
           : null,
+        posText,
         tws != null ? `${fmtKn(tws)} TWS` : null,
         conditions?.hsMeters != null
           ? `Hs ${conditions.hsMeters.toFixed(1)} m`

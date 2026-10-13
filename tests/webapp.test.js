@@ -762,6 +762,7 @@ test("webapp view models", async (t) => {
             conditions: {
               twsKnots: 14.2,
               awsKnots: 18.4,
+              twaDeg: 75,
               hsMeters: 1.5,
               tpSeconds: 8,
               comfortLevel: "coffee",
@@ -776,8 +777,14 @@ test("webapp view models", async (t) => {
         ],
       },
     });
-    assert.equal(timeline[0].detail, "14.2 kn TWS · Hs 1.5 m · coffee");
-    // Missing sea state degrades without inventing values
+    // The point of sail leads the conditions: how the boat sits to
+    // the wind is the first thing the crew reads when rigging
+    assert.equal(
+      timeline[0].detail,
+      "close reach · 14.2 kn TWS · Hs 1.5 m · coffee",
+    );
+    // Missing sea state degrades without inventing values; a
+    // pre-TWA payload just loses the point of sail, not the line
     assert.equal(timeline[1].detail, "8.0 kn TWS · champagne");
 
     // The slatting regime names itself: "rough" alone would send
@@ -791,6 +798,7 @@ test("webapp view models", async (t) => {
             sailState: "GENOA_1",
             conditions: {
               twsKnots: 10,
+              twaDeg: -170,
               hsMeters: 1.7,
               comfortLevel: "rough",
               slatting: true,
@@ -799,7 +807,10 @@ test("webapp view models", async (t) => {
         ],
       },
     });
-    assert.equal(slatting[0].detail, "10.0 kn TWS · Hs 1.7 m · slatting");
+    assert.equal(
+      slatting[0].detail,
+      "running · 10.0 kn TWS · Hs 1.7 m · slatting",
+    );
   });
 
   await t.test("mergeTimeline carries the conditions tier for the tab", () => {

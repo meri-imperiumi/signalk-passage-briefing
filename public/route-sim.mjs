@@ -39,7 +39,7 @@ import {
   suggestSailState,
   travelDirection,
 } from "./sereno-physics.mjs";
-import { detectManeuvers } from "./tack-gybe.js";
+import { detectManeuvers, wrap180 } from "./tack-gybe.js";
 import tzLookup from "./vendor/tz-lookup/tz-lookup.mjs";
 
 /**
@@ -1530,6 +1530,15 @@ export function simulatePassage({
               conditions: {
                 twsKnots: row.twsKnots ?? null,
                 awsKnots: row.awsKnots ?? null,
+                // Signed TWA at the change point (positive = wind
+                // from starboard, same convention as the maneuvers):
+                // the timeline names the point of sail, tiles and
+                // widgets read the precise angle
+                twaDeg:
+                  typeof row.headingDeg === "number" &&
+                  typeof row.twdDeg === "number"
+                    ? Math.round(wrap180(row.twdDeg - row.headingDeg) * 10) / 10
+                    : null,
                 hsMeters: row.hsMeters ?? null,
                 tpSeconds: row.tpSeconds ?? null,
                 comfortLevel: row.comfortLevel ?? null,

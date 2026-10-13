@@ -442,6 +442,14 @@ describe("simulatePassage", () => {
     for (const change of exceptions.passageSummary.sailChanges) {
       if (change.conditions) {
         assert.equal(change.conditions.cloudCover, null);
+        // Signed TWA at the change point (work doc #5): the angle
+        // behind the timeline's point-of-sail text — within ±180°
+        assert.ok(
+          change.conditions.twaDeg == null ||
+            (change.conditions.twaDeg > -180 &&
+              change.conditions.twaDeg <= 180),
+          `twaDeg ${change.conditions.twaDeg} out of range`,
+        );
       }
     }
     assert.equal(

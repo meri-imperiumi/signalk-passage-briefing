@@ -52,6 +52,37 @@ export function tackSide(signedTwaDeg) {
 }
 
 /**
+ * Point of sail for a signed TWA, by the standard true-wind-angle
+ * bands: close-hauled (≤ 60°), close reach (≤ 80°), beam reach
+ * (≤ 100°), broad reach (≤ 150°), running beyond. The sign is
+ * deliberately ignored — tack side is `tackSide`'s business — so a
+ * timeline detail can name how the boat sits to the wind without
+ * duplicating the maneuver label's tack call.
+ *
+ * @param {number|null} signedTwaDeg
+ * @returns {string|null} Band name, or null without usable input
+ */
+export function pointOfSail(signedTwaDeg) {
+  if (typeof signedTwaDeg !== "number" || !Number.isFinite(signedTwaDeg)) {
+    return null;
+  }
+  const abs = Math.abs(signedTwaDeg);
+  if (abs <= 60) {
+    return "close-hauled";
+  }
+  if (abs <= 80) {
+    return "close reach";
+  }
+  if (abs <= 100) {
+    return "beam reach";
+  }
+  if (abs <= 150) {
+    return "broad reach";
+  }
+  return "running";
+}
+
+/**
  * Whether a simulation hour is a sailing step: not motoring, actually
  * making way (drift-mode hours sit at SOG 0) and the plan's rig up —
  * with canvas down there is nothing to tack or gybe (work doc #5

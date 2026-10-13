@@ -220,4 +220,19 @@ describe("tack & gybe detection", () => {
     assert.equal(events.length, 1);
     assert.equal(events[0].sailState, "@port");
   });
+
+  test("pointOfSail names the true-wind-angle band, sign-blind", async () => {
+    const { pointOfSail } = await tgPromise;
+    assert.equal(pointOfSail(45), "close-hauled");
+    assert.equal(pointOfSail(-60), "close-hauled");
+    assert.equal(pointOfSail(70), "close reach");
+    assert.equal(pointOfSail(-90), "beam reach");
+    assert.equal(pointOfSail(120), "broad reach");
+    assert.equal(pointOfSail(-170), "running");
+    assert.equal(pointOfSail(180), "running");
+    // Without usable input there is nothing to say — old payloads
+    // without a conditions TWA degrade to the bare detail line
+    assert.equal(pointOfSail(null), null);
+    assert.equal(pointOfSail(undefined), null);
+  });
 });
