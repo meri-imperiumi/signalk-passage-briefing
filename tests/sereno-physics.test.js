@@ -252,6 +252,71 @@ describe("serenoComfort", () => {
     );
     assert.equal(idyllic.comfort, "champagne");
   });
+
+  test("encounter period floor derives from the waterline", async () => {
+    const { encounterPeriodFloorSeconds } = await physics();
+    // Wave period whose deep-water wavelength equals 9.4 m: ~2.45 s
+    approx(encounterPeriodFloorSeconds(9.4), 2.45, 0.01);
+    // Scales as sqrt(L)
+    approx(
+      encounterPeriodFloorSeconds(18.8) / encounterPeriodFloorSeconds(9.4),
+      Math.SQRT2,
+      0.001,
+    );
+  });
+
+  test("sub-waterline chop rolls off instead of growing as 1/T²", async () => {
+    const { verticalAcceleration } = await physics();
+    const vessel = {
+      sogKnots: 0,
+      headingRad: 0,
+      waterlineLengthM: 9.4,
+      kHeel: 0.35,
+      kPitch: 0.4,
+    };
+    const wind = { twsKnots: 0, twaRad: 0 };
+    // A 1 m @ 2 s ripple: bridged, so the base is computed at the
+    // 2.45 s floor, not at 2 s
+    const ripple = verticalAcceleration(
+      { tpSeconds: 2, hsMeters: 1, waveTravelDirectionRad: 0 },
+      vessel,
+      wind,
+    );
+    approx(ripple.effectivePeriod, ripple.encounterPeriodFloor, 1e-9);
+    assert.ok(ripple.effectivePeriod > ripple.encounterPeriod);
+    // The floored base matches the floor-period formula exactly
+    approx(
+      ripple.base,
+      ((4 * Math.PI * Math.PI) /
+        (ripple.encounterPeriodFloor * ripple.encounterPeriodFloor)) *
+        0.5,
+      1e-9,
+    );
+    // Longer waves are untouched: 6 s encounter stays 6 s, and the
+    // base matches the unfloored 1/T² formula
+    const swell = verticalAcceleration(
+      { tpSeconds: 6, hsMeters: 1, waveTravelDirectionRad: 0 },
+      vessel,
+      wind,
+    );
+    approx(swell.effectivePeriod, swell.encounterPeriod, 1e-9);
+    approx(
+      swell.base,
+      ((4 * Math.PI * Math.PI) /
+        (swell.encounterPeriod * swell.encounterPeriod)) *
+        0.5,
+      1e-9,
+    );
+    // Bridging a shorter ripple must yield less acceleration than
+    // the raw 1/T² extrapolation at 2 s would give (same pitch and
+    // heel multipliers on both sides of the comparison)
+    const raw =
+      ((4 * Math.PI * Math.PI) / (2 * 2)) *
+      0.5 *
+      ripple.pitch *
+      ripple.heel;
+    assert.ok(ripple.value < raw);
+  });
 });
 
 describe("day/night bucket", () => {

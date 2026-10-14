@@ -704,6 +704,24 @@ export function isNight(
  *   breakdown; `value` is the effective RMS vertical acceleration
  *   (m/s²)
  */
+/**
+ * Encounter period floor derived from the waterline length: the wave
+ * period whose deep-water wavelength equals the waterline. Waves
+ * shorter than the hull are bridged, not followed — the vessel does
+ * not ride their surface, so the vertical acceleration base must not
+ * grow with 1/T² below this floor. Backtest finding (work doc #38):
+ * sub-3 s extrapolation of the Hs/T² weighting is unphysical; a 1 m
+ * @ 5 s Baltic chop is nasty while a 1 m @ 2 s ripple is nothing.
+ *
+ * T = sqrt(2π·L/g) with L = waterline length; 9.4 m → ≈2.45 s.
+ *
+ * @param {number} waterlineLengthM - Waterline length in meters
+ * @returns {number} Floor for the encounter period in seconds
+ */
+export function encounterPeriodFloorSeconds(waterlineLengthM) {
+  return Math.sqrt((2 * Math.PI * waterlineLengthM) / G);
+}
+
 export function verticalAcceleration(sea, vessel, wind) {
   const awsKnots = apparentWindSpeedKnots({
     twsKnots: wind.twsKnots,
@@ -736,10 +754,15 @@ export function verticalAcceleration(sea, vessel, wind) {
     waveTravelDirectionRad: sea.waveTravelDirectionRad,
     headingRad: vessel.headingRad,
   });
+  const encounterPeriodFloor = encounterPeriodFloorSeconds(
+    vessel.waterlineLengthM,
+  );
   // RMS elevation of a sinusoidal sea is Hs/4; RMS acceleration of the
-  // riding vessel follows the sea at the encounter frequency.
+  // riding vessel follows the sea at the encounter frequency, floored
+  // at the period the hull starts bridging instead of following.
+  const effectivePeriod = Math.max(encounterPeriod, encounterPeriodFloor);
   const base =
-    ((4 * Math.PI * Math.PI) / (encounterPeriod * encounterPeriod)) *
+    ((4 * Math.PI * Math.PI) / (effectivePeriod * effectivePeriod)) *
     (sea.hsMeters / 2);
   const heel = heelMultiplier(heelDeg, vessel.kHeel);
   const pitch = pitchMultiplier(
@@ -752,6 +775,8 @@ export function verticalAcceleration(sea, vessel, wind) {
   );
   return {
     encounterPeriod,
+    encounterPeriodFloor,
+    effectivePeriod,
     base,
     heel,
     pitch,
