@@ -58,6 +58,10 @@ const {
 // module lives under public/ and loads through require(esm).
 const meteors = require("../public/components/meteors.mjs");
 
+// The polar day/night classifier lives with the shared physics (the
+// webapp's simulation uses it per passage day on the moved boat)
+const { sunDayKind } = require("../public/sereno-physics.mjs");
+
 // Shower calendar and its thresholds live with the shared evaluation
 // (work doc #37) — re-exported below for this module's API stability
 const { METEOR_SHOWERS, MIN_RADIANT_ALTITUDE_DEG, MAX_MOON_ILLUMINATION } =
@@ -326,10 +330,15 @@ function twilightTimes(date, lat, lon) {
  *
  * Rise/set semantics: sunset is the setting crossing before the
  * night's civil dusk, sunrise the rising crossing after the dusk
- * anchor; moonrise/moonset are the moon's next crossings after dusk
- * (a moon already up at dusk reports tomorrow's rise — the set stamp
- * is tonight's). Polar day/night and missing crossings degrade to
- * null like the twilight bounds.
+ * anchor; moonrise/moonset are the moon's crossings *inside* the
+ * night window (dusk→sunrise) — the moon's ~24.8 h day means one of
+ * the two crossings misses the window roughly once a month, and the
+ * neighbouring night's stamps read as wrong times. The
+ * `moonUpAllNight`/`moonDownAllNight` flags say so explicitly when
+ * no crossing belongs to the window. Polar day/night classify the
+ * span explicitly (`polarNight`/`midnightSun`) instead of leaving
+ * silent nulls, and missing crossings degrade to null like the
+ * twilight bounds.
  *
  * @param {object} params
  * @param {Date} params.from - Window start
@@ -373,12 +382,50 @@ function celestialNights({ from, days = 8, lat, lon, eyeHeightM = 0 }) {
       return null;
     }
   };
+  // First crossing of the moon strictly inside the night window —
+  // the window-relative semantics (work doc #40 session feedback):
+  // "next crossing after dusk" can pick tomorrow's event and present
+  // a pair from two different nights, which reads as weird times
+  const riseSetInWindow = (body, direction, startMs, endMs) => {
+    if (startMs == null || endMs == null) {
+      return null;
+    }
+    try {
+      const events = (body === "Moon" ? moonEvents : sunEvents)(
+        new Date(startMs),
+        new Date(endMs),
+        observer,
+        eye,
+      );
+      const kind = direction < 0 ? "set" : "rise";
+      const hit = events.find(
+        (e) =>
+          e.kind === kind &&
+          e.time.getTime() >= startMs &&
+          e.time.getTime() <= endMs,
+      );
+      return hit ? hit.time.toISOString() : null;
+    } catch (_error) {
+      return null;
+    }
+  };
   for (let d = 0; d < days; d++) {
     const base = new Date(from.getTime() + d * 86400000);
     const twilights = twilightTimes(base, lat, lon);
-    const anchor = twilights.nauticalDusk
-      ? new Date(twilights.nauticalDusk)
-      : base;
+    const anchor =
+      twilights.nauticalDusk != null
+        ? new Date(twilights.nauticalDusk)
+        : twilights.civilDusk != null
+          ? new Date(twilights.civilDusk)
+          : base;
+    // Polar classification over the daylight span that ends with
+    // this night (work doc #40 session feedback): hourly scan of the
+    // 24 h before the anchor — all below the horizon is polar night,
+    // all above the midnight sun, anything else an ordinary day
+    const anchorMs = anchor.getTime();
+    const dayKind = sunDayKind(anchorMs - 24 * 3600000, anchorMs, lat, lon);
+    const polarNight = dayKind === "polarNight";
+    const midnightSun = dayKind === "midnightSun";
     // Sunset: the setting crossing before this night's civil dusk —
     // search from 18 hours back so the forward window covers it
     const civilDuskMs = twilights.civilDusk
@@ -391,19 +438,42 @@ function celestialNights({ from, days = 8, lat, lon, eyeHeightM = 0 }) {
     // night's sunrise)
     const afterDusk = new Date(anchor.getTime() + 120000);
     const sunrise = riseSet("Sun", 1, afterDusk);
-    // Moon brackets (work docs #32/#33): the next set and rise after
-    // dusk — a moon already up at dusk reports tomorrow's rise
-    const moonset = riseSet("Moon", -1, afterDusk);
-    const moonrise = riseSet("Moon", 1, afterDusk);
+    // Moon brackets relative to the night window: the crossings
+    // inside dusk→sunrise, or an explicit all-night state when the
+    // moon never crosses (the moon's ~24.8 h day means one of the two
+    // crossings misses the window roughly once a month — the stamps
+    // from the neighbouring night were the confusing numbers). The
+    // end anchor is the sunrise stamp when present, else dusk + 14 h
+    // (a full night's length at any latitude the window survives).
+    const sunriseMs = sunrise ? Date.parse(sunrise) : null;
+    const windowEndMs =
+      sunriseMs ?? (civilDuskMs ? civilDuskMs + 14 * 3600000 : null);
+    const moonDuskAlt = bodyAltitudeDeg("Moon", anchor, lat, lon);
+    const moonEndAlt =
+      windowEndMs != null
+        ? bodyAltitudeDeg("Moon", new Date(windowEndMs), lat, lon)
+        : null;
+    const moonUpAtDusk = moonDuskAlt > 0;
+    const moonUpAtEnd = moonEndAlt != null ? moonEndAlt > 0 : null;
+    const moonset = riseSetInWindow("Moon", -1, anchorMs, windowEndMs);
+    const moonrise = riseSetInWindow("Moon", 1, anchorMs, windowEndMs);
+    const moonUpAllNight =
+      windowEndMs != null && moonUpAtDusk && moonUpAtEnd === true;
+    const moonDownAllNight =
+      windowEndMs != null && !moonUpAtDusk && moonUpAtEnd === false;
     nights.push({
       timestamp: anchor.toISOString(),
       moonPhaseDeg: Math.round(moonPhaseDeg(anchor) * 10) / 10,
       moonIllumination: Math.round(moonIllumination(anchor) * 1000) / 1000,
+      polarNight,
+      midnightSun,
       ...twilights,
       sunset,
       sunrise,
       moonrise,
       moonset,
+      moonUpAllNight,
+      moonDownAllNight,
     });
   }
   return nights;
