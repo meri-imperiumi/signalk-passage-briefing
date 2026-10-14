@@ -32,6 +32,7 @@ import {
 import {
   apparentWindSpeedKnots,
   isNight,
+  sunDayKind,
   noSailsRegime,
   SAILS_MAX_AWS_KNOTS,
   serenoComfort,
@@ -927,9 +928,17 @@ export function simulateRun({
   // time-of-day is the day boundary, so day N begins 24 h after
   // departure. Context only: the comfort model never reads it.
   const dayCheckpoints = [];
+  const sunDayTransitions = [];
   const passageStartMs =
     passageStartedAt == null ? null : Date.parse(passageStartedAt);
   let prevDayAtSea = null;
+  // Polar day/night tracking (work doc #40 session feedback): the
+  // kind is judged per simulated day at the boat's *moved* position,
+  // so sailing across the polar circle flips the timeline at the
+  // right moment. The first day anchors the baseline without a
+  // transition row; later flips emit one.
+  let prevSunKind = null;
+  let prevSunKindDate = null;
   const timeEvents = [];
   let arrivedHours = null;
   let distanceMadeGoodNm = 0;
@@ -1155,14 +1164,39 @@ export function simulateRun({
       cloudCover: weather?.surface?.cloudCover ?? null,
     });
 
+    // Polar day/night: judge the 24 h ending at this row at the
+    // boat's position, once per simulated day
+    const sunKindDate = t.toISOString().slice(0, 10);
+    let sunKind = null;
+    if (sunKindDate !== prevSunKindDate) {
+      sunKind = sunDayKind(
+        t.getTime() - 24 * 3600000,
+        t.getTime(),
+        pos.lat,
+        pos.lon,
+      );
+      if (prevSunKindDate != null && sunKind !== prevSunKind) {
+        sunDayTransitions.push({
+          hoursFromNow: Math.round(hours * 10) / 10,
+          timestamp: t.toISOString(),
+          from: prevSunKind,
+          to: sunKind,
+        });
+      }
+      prevSunKind = sunKind;
+      prevSunKindDate = sunKindDate;
+    }
+
     // Day-at-sea checkpoint: the first row of each new passage day
     // announces the count. Neutral marker — the easing thresholds the
-    // original idea imagined did not survive the backtest.
+    // original idea imagined did not survive the backtest. The polar
+    // kind rides along so the row can name the sun regime.
     if (dayAtSea != null && dayAtSea !== prevDayAtSea) {
       dayCheckpoints.push({
         hoursFromNow: Math.round(hours * 10) / 10,
         timestamp: t.toISOString(),
         dayAtSea,
+        sunDayKind: prevSunKind,
       });
       prevDayAtSea = dayAtSea;
     }
@@ -1299,6 +1333,7 @@ export function simulateRun({
     rainHours,
     squallHours,
     dayCheckpoints,
+    sunDayTransitions,
     timeEvents,
     hazardAlerts: hazardAlerts(notes, positions),
   };
@@ -1647,6 +1682,7 @@ export function simulatePassage({
     rainHours: nominal.rainHours,
     squallHours: nominal.squallHours,
     dayCheckpoints: nominal.dayCheckpoints,
+    sunDayTransitions: nominal.sunDayTransitions,
     energy: energySummary(energyHourly, startTime),
     runs: runs.map((run, i) => ({
       twsFactor: ETA_FACTORS[i],
@@ -1841,6 +1877,7 @@ export function filterExceptions(simulationResult, simParams = {}) {
       // Sea-legs day checkpoints (work doc #40): one per passage day,
       // already deduplicated by the simulator — no merging needed
       dayCheckpoints: simulationResult.dayCheckpoints ?? [],
+      sunDayTransitions: simulationResult.sunDayTransitions ?? [],
       // Squall-risk episodes (work doc #38 session feedback): hours
       // where the forecasted gusts dwarf the base wind merge into one
       // entry carrying the peak gust factor — the timeline's "advise

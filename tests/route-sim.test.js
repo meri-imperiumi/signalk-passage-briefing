@@ -1549,3 +1549,35 @@ test("day checkpoints surface in the passage summary", async () => {
   assert.ok(days.length >= 2, `days ${JSON.stringify(days)}`);
   assert.deepEqual(days, [...new Set(days)]);
 });
+
+test("polar day/night transitions fire as the boat sails", async () => {
+  const { filterExceptions, simulatePassage } = await simPromise;
+  // Bodø 67°N → Tromsø 69.7°N in mid-July (GeoJSON [lon, lat]): the
+  // midnight sun begins somewhere along the leg — time moving and
+  // boat moving together
+  const result = simulatePassage({
+    payload: buildPayload({
+      route: [
+        [14.0, 67.0],
+        [18.9, 69.7],
+      ],
+    }),
+    startTime: new Date("2026-07-10T06:00:00Z"),
+    passageStartedAt: "2026-07-08T06:00:00Z",
+  });
+  const exceptions = filterExceptions(result);
+  const days = exceptions.passageSummary.dayCheckpoints;
+  const kinds = days.map((d) => d.sunDayKind);
+  // The leg starts below the polar circle and ends above it
+  assert.ok(
+    kinds.includes(null) && kinds.includes("midnightSun"),
+    `kinds ${JSON.stringify(kinds)}`,
+  );
+  const transitions = exceptions.passageSummary.sunDayTransitions;
+  assert.ok(Array.isArray(transitions) && transitions.length >= 1);
+  // Any transition must move into midnight sun on this leg
+  for (const t of transitions) {
+    assert.equal(t.to, "midnightSun");
+    assert.ok(typeof t.timestamp === "string");
+  }
+});
