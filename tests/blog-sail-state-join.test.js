@@ -3,7 +3,7 @@ const assert = require("node:assert");
 const {
   sailEvents,
   joinSailState,
-} = require("/data/data/com.termux/files/home/projects/signalk-passage-briefing/bin/blog-sail-state-join.js");
+} = require("../bin/blog-sail-state-join.js");
 
 test("parses the observed logbook event styles", () => {
   const events = sailEvents([
