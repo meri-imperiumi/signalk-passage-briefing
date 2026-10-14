@@ -1507,3 +1507,45 @@ describe("meteor nights along the track (work doc #37)", () => {
     assert.deepEqual(exceptions.passageSummary.meteorEvents, []);
   });
 });
+
+test("passage start gives day-at-sea rows and one checkpoint per day", async () => {
+  const { simulateRun } = await simPromise;
+  // START is 2026-06-21T06:00Z; a departure 48 h earlier makes the
+  // simulated hours day 3 at sea
+  const run = simulateRun({
+    payload: buildPayload({}),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    maxHours: 30,
+    passageStartedAt: "2026-06-19T06:00:00Z",
+  });
+  assert.equal(run.hourly[0].dayAtSea, 3);
+  // The departure time-of-day is the day boundary: rows 24 h after
+  // the start tick over to day 4
+  assert.ok(run.hourly.some((h) => h.dayAtSea === 4));
+  // One checkpoint per distinct day, carrying the count — the 30 h
+  // window spans days 3 and 4
+  const days = run.dayCheckpoints.map((c) => c.dayAtSea);
+  assert.deepEqual(days, [3, 4]);
+  assert.ok(run.dayCheckpoints.every((c) => typeof c.timestamp === "string"));
+  // No passage context: null rows and no checkpoints
+  const plain = simulateRun({
+    payload: buildPayload({}),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    maxHours: 8,
+  });
+  assert.equal(plain.hourly[0].dayAtSea, null);
+  assert.equal(plain.dayCheckpoints.length, 0);
+});
+
+test("day checkpoints surface in the passage summary", async () => {
+  const { filterExceptions, simulatePassage } = await simPromise;
+  const result = simulatePassage({
+    payload: buildPayload({}),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    passageStartedAt: "2026-06-19T06:00:00Z",
+  });
+  const exceptions = filterExceptions(result);
+  const days = exceptions.passageSummary.dayCheckpoints.map((c) => c.dayAtSea);
+  assert.ok(days.length >= 2, `days ${JSON.stringify(days)}`);
+  assert.deepEqual(days, [...new Set(days)]);
+});

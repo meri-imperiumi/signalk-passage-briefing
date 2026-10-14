@@ -1426,6 +1426,20 @@ export function mergeTimeline(exceptions, payload = null) {
     });
   }
 
+  // Sea-legs day checkpoints (work doc #40): "Day N at sea" markers
+  // on each passage day — neutral context, the crew's own counting
+  // from the departure time of day
+  for (const d of summary.dayCheckpoints ?? []) {
+    push({
+      hoursFromNow: d.hoursFromNow ?? null,
+      timestamp: d.timestamp ?? null,
+      kind: "day",
+      severity: "info",
+      label: `Day ${d.dayAtSea} at sea`,
+      detail: "",
+    });
+  }
+
   // Hazard notes along the track (whole passage; the tactical slice
   // picks up its share by hoursFromNow). Provenance (work doc #31):
   // the note's url is the GDACS event page the note was built from

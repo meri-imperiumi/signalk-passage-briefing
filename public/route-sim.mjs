@@ -890,6 +890,7 @@ export function simulateRun({
   startTime = new Date(),
   twsFactor = 1.0,
   maxHours = 14 * 24,
+  passageStartedAt = null,
 }) {
   const cfg = { ...SIMULATION_DEFAULTS, ...config };
   const pf = parsePerformanceFactor(performanceFactor);
@@ -922,6 +923,13 @@ export function simulateRun({
   const upperAirAnomalies = [];
   const rainHours = [];
   const squallHours = [];
+  // Sea legs (work doc #40): passage day context — the departure
+  // time-of-day is the day boundary, so day N begins 24 h after
+  // departure. Context only: the comfort model never reads it.
+  const dayCheckpoints = [];
+  const passageStartMs =
+    passageStartedAt == null ? null : Date.parse(passageStartedAt);
+  let prevDayAtSea = null;
   const timeEvents = [];
   let arrivedHours = null;
   let distanceMadeGoodNm = 0;
@@ -1112,6 +1120,13 @@ export function simulateRun({
       }
     }
 
+    // Sea legs (work doc #40): passage day context — the departure
+    // time-of-day is the day boundary, so day N begins 24 h after
+    // departure. Context only: the comfort model never reads it.
+    const dayAtSea =
+      passageStartMs != null
+        ? Math.floor((t.getTime() - passageStartMs) / (24 * 3600000)) + 1
+        : null;
     hourly.push({
       hoursFromNow: Math.round(hours * 10) / 10,
       timestamp: t.toISOString(),
@@ -1126,6 +1141,7 @@ export function simulateRun({
       slatting: comfort.slatting,
       twsKnots: tws,
       gustKnots,
+      dayAtSea,
       hsMeters: hs ?? null,
       tpSeconds: tp ?? null,
       stwKnots: stw,
@@ -1138,6 +1154,18 @@ export function simulateRun({
       // actually is
       cloudCover: weather?.surface?.cloudCover ?? null,
     });
+
+    // Day-at-sea checkpoint: the first row of each new passage day
+    // announces the count. Neutral marker — the easing thresholds the
+    // original idea imagined did not survive the backtest.
+    if (dayAtSea != null && dayAtSea !== prevDayAtSea) {
+      dayCheckpoints.push({
+        hoursFromNow: Math.round(hours * 10) / 10,
+        timestamp: t.toISOString(),
+        dayAtSea,
+      });
+      prevDayAtSea = dayAtSea;
+    }
 
     // Anomalies
     if (hs != null && tp != null) {
@@ -1270,6 +1298,7 @@ export function simulateRun({
     upperAirAnomalies,
     rainHours,
     squallHours,
+    dayCheckpoints,
     timeEvents,
     hazardAlerts: hazardAlerts(notes, positions),
   };
@@ -1462,6 +1491,7 @@ export function simulatePassage({
   watch = null,
   startTime = new Date(),
   departure = null,
+  passageStartedAt = null,
 }) {
   // Accept an ISO string (the payload stores fetchedAt as text) or a
   // Date — callers on the wire pass strings
@@ -1482,6 +1512,7 @@ export function simulatePassage({
       notes,
       startTime,
       twsFactor,
+      passageStartedAt,
     }),
   );
   const base = runs.find((r) => r !== null);
@@ -1615,6 +1646,7 @@ export function simulatePassage({
     upperAirAnomalies: nominal.upperAirAnomalies,
     rainHours: nominal.rainHours,
     squallHours: nominal.squallHours,
+    dayCheckpoints: nominal.dayCheckpoints,
     energy: energySummary(energyHourly, startTime),
     runs: runs.map((run, i) => ({
       twsFactor: ETA_FACTORS[i],
@@ -1806,6 +1838,9 @@ export function filterExceptions(simulationResult, simParams = {}) {
           );
         },
       ),
+      // Sea-legs day checkpoints (work doc #40): one per passage day,
+      // already deduplicated by the simulator — no merging needed
+      dayCheckpoints: simulationResult.dayCheckpoints ?? [],
       // Squall-risk episodes (work doc #38 session feedback): hours
       // where the forecasted gusts dwarf the base wind merge into one
       // entry carrying the peak gust factor — the timeline's "advise
