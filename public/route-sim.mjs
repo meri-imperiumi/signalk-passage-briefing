@@ -519,6 +519,24 @@ const RAIN_MM_PER_H = 0.5;
 const RAIN_PROBABILITY_PERCENT = 50;
 
 /**
+ * Gust factor (gust / base wind) at which a squall-risk hour is
+ * captured (work doc #38 session feedback): gusts more than double
+ * the base wind mark unstable, squally air even when the convection
+ * indices stay quiet. Steady trades routinely reach 1.3-1.5 at hourly
+ * resolution — the crew handles those; a doubling is where the
+ * forecast itself says the wind is not one wind.
+ */
+const SQUALL_GUST_FACTOR = 2;
+
+/**
+ * Gust speed (knots) at which a squall-risk hour is captured, beside
+ * the factor: a doubling of a 3 kn breeze is 6 kn — real, but not a
+ * canvas decision. The absolute bar sits at the top of the moderate
+ * breeze, where reefing and rig choices start to matter.
+ */
+const SQUALL_GUST_KNOTS = 16;
+
+/**
  * Maximum gap in hours between two hourly anomalies that still counts
  * as one continuing episode (covers hourly forecast steps and the
  * partial-hour arrival jitter; 3-hourly steps stay separate).
@@ -903,6 +921,7 @@ export function simulateRun({
   const seaStateAnomalies = [];
   const upperAirAnomalies = [];
   const rainHours = [];
+  const squallHours = [];
   const timeEvents = [];
   let arrivedHours = null;
   let distanceMadeGoodNm = 0;
@@ -914,6 +933,15 @@ export function simulateRun({
     const weather = weatherAt(track[nearest].forecasts, t);
     const tws =
       weather?.surface?.tws != null ? weather.surface.tws * twsFactor : null;
+    // Forecast gusts never touch the comfort model (the backtest
+    // showed gust-peak tier evaluation overcalls the trades); they
+    // ride the row and drive the squall-risk advisory instead —
+    // gusts far above the base wind are the forecast saying the air
+    // is squally: canvas may need to come off for the gusts and the
+    // reduced canvas then slats in the lulls (work doc #38)
+    const gustKnots = weather?.surface?.gust ?? null;
+    const gustFactor =
+      gustKnots != null && tws != null && tws > 0 ? gustKnots / tws : null;
     const twaRad =
       weather?.surface?.twd != null
         ? normalizeAngle(weather.surface.twd * DEG - heading)
@@ -1097,6 +1125,7 @@ export function simulateRun({
       comfortLevel: comfort.comfort,
       slatting: comfort.slatting,
       twsKnots: tws,
+      gustKnots,
       hsMeters: hs ?? null,
       tpSeconds: tp ?? null,
       stwKnots: stw,
@@ -1152,6 +1181,25 @@ export function simulateRun({
         timestamp: t.toISOString(),
         precip,
         precipProbability,
+      });
+    }
+
+    // Squall-risk hours (work doc #38 session feedback): the
+    // forecasted gusts dwarf the base wind — unstable air where the
+    // crew should expect sail changes on gust cycles, advise care,
+    // and not plan light canvas
+    if (
+      gustKnots != null &&
+      tws != null &&
+      gustKnots >= SQUALL_GUST_KNOTS &&
+      gustFactor >= SQUALL_GUST_FACTOR
+    ) {
+      squallHours.push({
+        hoursFromNow: Math.round(hours * 10) / 10,
+        timestamp: t.toISOString(),
+        twsKnots: tws,
+        gustKnots,
+        gustFactor: Math.round(gustFactor * 100) / 100,
       });
     }
 
@@ -1221,6 +1269,7 @@ export function simulateRun({
     seaStateAnomalies,
     upperAirAnomalies,
     rainHours,
+    squallHours,
     timeEvents,
     hazardAlerts: hazardAlerts(notes, positions),
   };
@@ -1565,6 +1614,7 @@ export function simulatePassage({
     seaStateAnomalies: nominal.seaStateAnomalies,
     upperAirAnomalies: nominal.upperAirAnomalies,
     rainHours: nominal.rainHours,
+    squallHours: nominal.squallHours,
     energy: energySummary(energyHourly, startTime),
     runs: runs.map((run, i) => ({
       twsFactor: ETA_FACTORS[i],
@@ -1754,6 +1804,20 @@ export function filterExceptions(simulationResult, simParams = {}) {
             episode.precipProbability,
             r.precipProbability,
           );
+        },
+      ),
+      // Squall-risk episodes (work doc #38 session feedback): hours
+      // where the forecasted gusts dwarf the base wind merge into one
+      // entry carrying the peak gust factor — the timeline's "advise
+      // care" marker for squally air that the convection indices may
+      // not see
+      squallEpisodes: mergeEpisodes(
+        simulationResult.squallHours ?? [],
+        (episode, s) => {
+          episode.gustFactor = Math.max(episode.gustFactor, s.gustFactor);
+          episode.gustKnots = maxOf(episode.gustKnots, s.gustKnots);
+          // Peak gust pairs with the calmest base wind of the episode
+          episode.twsKnots = Math.min(episode.twsKnots, s.twsKnots);
         },
       ),
     },

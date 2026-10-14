@@ -1407,6 +1407,25 @@ export function mergeTimeline(exceptions, payload = null) {
     });
   }
 
+  // Squall-risk episodes (work doc #38 session feedback): gusts far
+  // above the base wind — squally air where the crew should expect
+  // sail changes on gust cycles. Warn-level: unlike the convection
+  // indices this is measured in the wind field itself
+  for (const s of summary.squallEpisodes ?? []) {
+    push({
+      hoursFromNow: s.hoursFromNow ?? null,
+      timestamp: s.timestamp ?? null,
+      kind: "squall",
+      severity: "warn",
+      label: "Squall risk",
+      detail: episodeDetail(s, [
+        s.gustKnots != null ? `gusts to ${Math.round(s.gustKnots)} kn` : null,
+        s.twsKnots != null ? `base ${Math.round(s.twsKnots)} kn` : null,
+        s.gustFactor != null ? `×${s.gustFactor.toFixed(1)}` : null,
+      ]),
+    });
+  }
+
   // Hazard notes along the track (whole passage; the tactical slice
   // picks up its share by hoursFromNow). Provenance (work doc #31):
   // the note's url is the GDACS event page the note was built from

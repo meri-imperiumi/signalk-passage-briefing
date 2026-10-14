@@ -34,6 +34,8 @@ function buildPayload({
   steepHour = null,
   convectiveHour = null,
   rainHour = null,
+  /** Forecast gust override (kt); default keeps gusts at tws + 5. */
+  gust = null,
 } = {}) {
   const track = sampleRoutePoints(route);
   const waypoints = track.map((w) => ({
@@ -47,7 +49,7 @@ function buildPayload({
           tws: twsByHour != null ? (twsByHour[h] ?? tws) : tws,
           twd,
           mslp: 1013,
-          gust: tws + 5,
+          gust: gust ?? tws + 5,
           precip: h === rainHour ? 2.5 : 0,
           precipProbability: h === rainHour ? 80 : 10,
         },
@@ -537,6 +539,52 @@ describe("simulatePassage", () => {
       exceptions.passageSummary.rainEpisodes[0].precipProbability,
       80,
     );
+  });
+
+  test("squall-risk hours need both the factor and the absolute gust", async () => {
+    const { simulateRun } = await simPromise;
+    // tws 10 with gusts 22: factor 2.2 over the doubling bar and the
+    // gust itself well into reefing weather
+    const squally = simulateRun({
+      payload: buildPayload({ tws: 10, gust: 22 }),
+      startTime: new Date("2026-06-21T06:00:00Z"),
+      maxHours: 6,
+    });
+    assert.ok(squally.squallHours.length >= 1);
+    assert.ok(squally.squallHours[0].gustFactor >= 2);
+    assert.equal(squally.squallHours[0].gustKnots, 22);
+    // The row carries the gust for the conditions tab
+    assert.equal(squally.hourly[0].gustKnots, 22);
+    // Default fixture gusts (tws + 5 = 15, factor 1.5) stay quiet:
+    // trades, not squalls
+    const trades = simulateRun({
+      payload: buildPayload({ tws: 10 }),
+      startTime: new Date("2026-06-21T06:00:00Z"),
+      maxHours: 6,
+    });
+    assert.equal(trades.squallHours.length, 0);
+    // A doubling of a 3 kn breeze is 6 kn — real but no canvas
+    // decision, so the absolute bar keeps it out
+    const breeze = simulateRun({
+      payload: buildPayload({ tws: 3, gust: 7 }),
+      startTime: new Date("2026-06-21T06:00:00Z"),
+      maxHours: 6,
+    });
+    assert.equal(breeze.squallHours.length, 0);
+  });
+
+  test("squall episodes surface in the passage summary", async () => {
+    const { filterExceptions, simulatePassage } = await simPromise;
+    const result = simulatePassage({
+      payload: buildPayload({ tws: 10, gust: 22 }),
+      startTime: new Date("2026-06-21T06:00:00Z"),
+    });
+    const exceptions = filterExceptions(result);
+    assert.ok(exceptions.passageSummary.squallEpisodes.length >= 1);
+    const episode = exceptions.passageSummary.squallEpisodes[0];
+    assert.equal(episode.gustKnots, 22);
+    assert.equal(episode.twsKnots, 10);
+    assert.ok(episode.gustFactor >= 2);
   });
 
   test("anomalies merge into episodes with peak values, marginal band drops", async () => {
