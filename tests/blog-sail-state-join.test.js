@@ -1,9 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const {
-  sailEvents,
-  joinSailState,
-} = require("../bin/blog-sail-state-join.js");
+const { sailEvents, joinSailState } = require("../bin/blog-sail-state-join.js");
 
 test("parses the observed logbook event styles", () => {
   const events = sailEvents([
