@@ -295,21 +295,57 @@ export const SLATTING_TWS_DOWNWIND_KNOTS = 12;
 export const SLATTING_MULTIPLIER = 2.5;
 
 /**
+ * Wave steepness (Hs/Tp²) at or above which motoring into head seas
+ * keeps the slatting forced-Rough floor (work doc #38 three-way
+ * rule). The 470-day backtest separated the motoring-into-head-seas
+ * hours by steepness, not period: the archetypal banging day
+ * (2022-09-12, broken cars) ran Hs/Tp² 0.026–0.035, while the
+ * comfortable motoring-in-head-swell hours sat at p50 0.014. Long
+ * gentle head swell under motor is slow pitching, not the washing
+ * machine.
+ */
+export const SLATTING_HEAD_STEEPNESS = 0.02;
+
+/**
  * Whether the hour sits in the slatting & roll-dampening regime (work
- * doc #14): a residual swell (combined Hs at or over
+ * doc #14, refined by the #38 three-way rule from the 470-day
+ * backtest): a residual swell (combined Hs at or over
  * {@link SLATTING_HS_MAX_M}) with too little true wind to keep the
  * sails loaded — the threshold depends on the point of sail, upwind
  * losing dampening sooner than downwind. A glassy calm bypasses the
  * penalty entirely; this is the "washing machine", not the gale.
+ *
+ * The three-way refinement of the sail-state-joined flagged hours:
+ * when the sails are drawing the flag is a false alarm (89% of
+ * drawing + following hours sat on champagne/easy days) and is
+ * suppressed; motoring keeps the forced floor only when banging
+ * into steep head seas — long swell rides fine under motor in
+ * either direction, where the plain motion evaluation already covers
+ * the discomfort; without sail-state knowledge the legacy behavior
+ * stands (conservative).
  *
  * @param {object} params
  * @param {number} params.hsMeters - Combined significant wave height (m)
  * @param {number} params.twsKnots - True wind speed (knots)
  * @param {number} params.twaRad - True wind angle (rad, signed, 0 =
  *   wind from dead ahead)
+ * @param {number} [params.tpSeconds] - Wave period (s)
+ * @param {number} [params.waveTravelDirectionRad] - Direction the
+ *   waves travel toward (rad)
+ * @param {number} [params.headingRad] - Vessel heading (rad)
+ * @param {string} [params.sailState] - 'sailing' | 'motoring' | null
+ *   when unknown
  * @returns {boolean}
  */
-export function slattingRisk({ hsMeters, twsKnots, twaRad }) {
+export function slattingRisk({
+  hsMeters,
+  twsKnots,
+  twaRad,
+  tpSeconds,
+  waveTravelDirectionRad,
+  headingRad,
+  sailState,
+}) {
   if (!Number.isFinite(hsMeters) || hsMeters < SLATTING_HS_MAX_M) {
     return false;
   }
@@ -320,7 +356,34 @@ export function slattingRisk({ hsMeters, twsKnots, twaRad }) {
   const threshold = upwind
     ? SLATTING_TWS_UPWIND_KNOTS
     : SLATTING_TWS_DOWNWIND_KNOTS;
-  return twsKnots < threshold;
+  if (twsKnots >= threshold) {
+    return false;
+  }
+  // Three-way rule: drawing sails keep flow attached, no flapping
+  if (sailState === "sailing") {
+    return false;
+  }
+  if (sailState === "motoring") {
+    if (
+      !Number.isFinite(tpSeconds) ||
+      tpSeconds <= 0 ||
+      !Number.isFinite(waveTravelDirectionRad) ||
+      !Number.isFinite(headingRad)
+    ) {
+      return false;
+    }
+    if (hsMeters / (tpSeconds * tpSeconds) < SLATTING_HEAD_STEEPNESS) {
+      return false;
+    }
+    let rel = waveTravelDirectionRad - headingRad;
+    if (rel > Math.PI) rel -= 2 * Math.PI;
+    if (rel < -Math.PI) rel += 2 * Math.PI;
+    // Head seas: the waves travel against the heading (the backtest's
+    // waveRelDeg convention — 0° following, 180° head)
+    return Math.abs(rel) > Math.PI / 2;
+  }
+  // Sail state unknown: legacy conservative behavior
+  return true;
 }
 
 /**
@@ -811,6 +874,10 @@ export function serenoComfort(sea, vessel, wind) {
     hsMeters: sea.hsMeters,
     twsKnots: wind.twsKnots,
     twaRad: wind.twaRad,
+    tpSeconds: sea.tpSeconds,
+    waveTravelDirectionRad: sea.waveTravelDirectionRad,
+    headingRad: vessel.headingRad,
+    sailState: vessel.sailState,
   });
   const awsComfort = rateApparentWind(awsKnots);
   const motionComfort = rateAcceleration(

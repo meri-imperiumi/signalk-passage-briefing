@@ -2010,6 +2010,104 @@ async function summarize(file) {
 }
 
 /**
+ * Rescores the comfort tiers on stored day records without any
+ * network traffic: recomputes `serenoComfort` per hour from the
+ * stored inputs (wind, waves, vessel state) and refreshes the
+ * hour-tier fields plus the day aggregates that derive from them.
+ * The fast arm of the #38 regression harness — a physics change
+ * re-evaluates the whole 470-day corpus in seconds.
+ *
+ * @param {string} inputFile - Baseline day records
+ * @param {string} outputFile - Rescored day records
+ */
+async function rescoreFile(inputFile, outputFile) {
+  const { open } = require("node:fs/promises");
+  const { createReadStream } = require("node:fs");
+  const { createInterface } = require("node:readline");
+  const physics = await loadPhysics();
+  const handle = await open(outputFile, "w");
+  const stream = handle.createWriteStream();
+  const lines = createInterface({ input: createReadStream(inputFile) });
+  let days = 0;
+  for await (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+    const day = JSON.parse(line);
+    for (const hour of day.hours ?? []) {
+      const vessel = {
+        sogKnots: hour.sogKnots ?? 0,
+        headingRad: hour.headingRad ?? 0,
+        waterlineLengthM: WATERLINE_M,
+        kHeel: K_HEEL,
+        kPitch: K_PITCH,
+        sailState: hour.sailState ?? null,
+      };
+      const wind = {
+        twsKnots: hour.twsKnots ?? 0,
+        twaRad: hour.twaRad ?? Math.PI,
+      };
+      const comfort =
+        hour.hsMeters != null && hour.tpSeconds != null
+          ? physics.serenoComfort(
+              {
+                hsMeters: hour.hsMeters,
+                tpSeconds: hour.tpSeconds,
+                waveTravelDirectionRad: hour.waveTravelRad ?? null,
+              },
+              vessel,
+              wind,
+            )
+          : null;
+      const pm = backtest.waveFromWind(hour.awsKnots ?? hour.twsKnots ?? 0);
+      const pmComfort = physics.serenoComfort(
+        {
+          hsMeters: pm.hsMeters,
+          tpSeconds: pm.tpSeconds,
+          waveTravelDirectionRad:
+            hour.headingRad == null || hour.awaRad == null
+              ? 0
+              : (hour.headingRad + hour.awaRad + Math.PI) % (2 * Math.PI),
+        },
+        vessel,
+        wind,
+      );
+      hour.comfort = comfort?.comfort ?? pmComfort.comfort;
+      hour.awsTier = (comfort ?? pmComfort).awsComfort;
+      hour.motionTier = (comfort ?? pmComfort).motionComfort;
+      hour.slatting = comfort?.slatting ?? false;
+      hour.pmComfort = pmComfort.comfort;
+      hour.pmSlatting = pmComfort.slatting;
+      if (comfort) {
+        hour.encounterPeriod = comfort.acceleration.encounterPeriod;
+        hour.encounterPeriodFloor = comfort.acceleration.encounterPeriodFloor;
+        hour.effectivePeriod = comfort.acceleration.effectivePeriod;
+      }
+    }
+    const underway = (day.hours ?? []).filter((hour) => hour.underway);
+    const countTiers = (key) => {
+      const counts = new Map();
+      for (const row of underway) {
+        counts.set(row[key], (counts.get(row[key]) ?? 0) + 1);
+      }
+      return physics.COMFORT_TIERS.filter((t) => counts.has(t)).map((t) => [
+        t,
+        counts.get(t),
+      ]);
+    };
+    day.underwayHours = underway.length;
+    day.histogram = countTiers("comfort");
+    day.pmHistogram = countTiers("pmComfort");
+    day.slattingHours = underway.filter((row) => row.slatting).length;
+    days++;
+    stream.write(`${JSON.stringify(day)}\n`);
+  }
+  await new Promise((resolve) => stream.end(resolve));
+  await handle.close();
+  console.error(`rescored ${days} days -> ${outputFile}`);
+}
+
+/**
  * Compares two day-record files (baseline vs candidate model run):
  * per-regime harsher-rate deltas, the protected-set check (gale days
  * and crew-D5+ hours must not get calmer), and the headline day/hour
@@ -2152,6 +2250,8 @@ async function compareRuns(baselineFile, candidateFile) {
     }
   }
   const agreeDelta = { improved: 0, regressed: 0, unchanged: 0 };
+  let meanImproved = 0;
+  let meanRegressed = 0;
   for (const date of shared) {
     const label = labels.get(date);
     if (!label || label.scope === "anchored" || label.scope === "land") {
@@ -2178,9 +2278,33 @@ async function compareRuns(baselineFile, candidateFile) {
     } else {
       agreeDelta.unchanged++;
     }
+    // Dominant-tier flips can be histogram tie-break artifacts; the
+    // per-day mean severity is the honest movement metric
+    const meanSeverity = (record) => {
+      const underway = (record.hours ?? []).filter((hour) => hour.underway);
+      if (underway.length === 0) {
+        return null;
+      }
+      return (
+        underway.reduce((sum, hour) => sum + (rank.get(hour.comfort) ?? 0), 0) /
+        underway.length
+      );
+    };
+    const baseMean = meanSeverity(base.get(date));
+    const candMean = meanSeverity(cand.get(date));
+    if (baseMean != null && candMean != null) {
+      if (candMean < baseMean - 1e-9) {
+        meanImproved++;
+      } else if (candMean > baseMean + 1e-9) {
+        meanRegressed++;
+      }
+    }
   }
   console.log(
     `\n== LLM-label day agreement: ${agreeDelta.improved} improved, ${agreeDelta.regressed} regressed, ${agreeDelta.unchanged} unchanged ==`,
+  );
+  console.log(
+    `== mean-severity movement: ${meanImproved} days softened, ${meanRegressed} days harshened ==`,
   );
 }
 
@@ -2223,6 +2347,11 @@ async function main() {
   const marine = !process.argv.slice(2).includes("--no-marine");
   const jsonFile = option("json", null);
   const summarizeFile = option("summarize", null);
+  const rescoreFile_ = option("rescore", null);
+  if (rescoreFile_) {
+    await rescoreFile(rescoreFile_, option("out", `${rescoreFile_}.rescored`));
+    return;
+  }
   const compareArgs = (() => {
     const index = process.argv.indexOf("--compare");
     return index >= 0 ? process.argv.slice(index + 1, index + 3) : null;

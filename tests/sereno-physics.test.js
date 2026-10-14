@@ -311,10 +311,7 @@ describe("serenoComfort", () => {
     // the raw 1/T² extrapolation at 2 s would give (same pitch and
     // heel multipliers on both sides of the comparison)
     const raw =
-      ((4 * Math.PI * Math.PI) / (2 * 2)) *
-      0.5 *
-      ripple.pitch *
-      ripple.heel;
+      ((4 * Math.PI * Math.PI) / (2 * 2)) * 0.5 * ripple.pitch * ripple.heel;
     assert.ok(ripple.value < raw);
   });
 });
@@ -582,4 +579,53 @@ describe("no-sails regimes (work doc #26)", () => {
     // No wind data: no regime
     assert.equal(noSailsRegime({ awsKnots: null }), null);
   });
+});
+
+test("three-way rule: drawing sails suppress, motoring keeps head chop", async () => {
+  const { slattingRisk } = await physics();
+  const base = { hsMeters: 1.5, twsKnots: 5, twaRad: 2.5 };
+  // Unknown sail state: legacy conservative behavior
+  assert.equal(slattingRisk(base), true);
+  // Sails drawing: no flapping, no forced penalty (89% of these
+  // hours sat on champagne/easy days in the backtest)
+  assert.equal(slattingRisk({ ...base, sailState: "sailing" }), false);
+  // Motoring with following seas or gentle head swell: motion, not
+  // the washing machine
+  assert.equal(
+    slattingRisk({
+      ...base,
+      sailState: "motoring",
+      tpSeconds: 9.1,
+      waveTravelDirectionRad: 0,
+      headingRad: Math.PI,
+    }),
+    false,
+    "following seas while motoring",
+  );
+  assert.equal(
+    slattingRisk({
+      ...base,
+      sailState: "motoring",
+      tpSeconds: 9.0,
+      waveTravelDirectionRad: Math.PI,
+      headingRad: 0,
+    }),
+    false,
+    "gentle head swell while motoring",
+  );
+  // Motoring into steep head chop: the banging the floor exists for
+  // (the 2022-09-12 family, Hs/Tp² well over 0.02)
+  assert.equal(
+    slattingRisk({
+      ...base,
+      sailState: "motoring",
+      tpSeconds: 6.0,
+      waveTravelDirectionRad: Math.PI,
+      headingRad: 0,
+    }),
+    true,
+  );
+  // Missing period or angle context while motoring: suppress (the
+  // plain motion evaluation still applies)
+  assert.equal(slattingRisk({ ...base, sailState: "motoring" }), false);
 });
