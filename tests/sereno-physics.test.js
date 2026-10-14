@@ -683,3 +683,38 @@ test("sunDayKind classifies polar day, polar night and ordinary days", async () 
     null,
   );
 });
+
+test("regimeBandOf: the shared classifier with distance-only and sounding modes", async () => {
+  const { regimeBandOf } = await physics();
+  // Distance-only (the forecast-only simulator: depthAvailable false,
+  // a null depth means unknown, never deep)
+  assert.equal(
+    regimeBandOf({ distanceToLandNm: 1.2, depthAvailable: false }),
+    "archipelago",
+  );
+  assert.equal(
+    regimeBandOf({ distanceToLandNm: 12, depthAvailable: false }),
+    "coastal",
+  );
+  assert.equal(
+    regimeBandOf({ distanceToLandNm: 40, depthAvailable: false }),
+    "offshore",
+  );
+  assert.equal(regimeBandOf({ depthAvailable: false }), "unknown");
+  // Sounding-bearing data (the backtest): a null depth reading is the
+  // instrument's range limit — deep water
+  assert.equal(regimeBandOf({ distanceToLandNm: 12 }), "offshore");
+  assert.equal(
+    regimeBandOf({
+      distanceToLandNm: 12,
+      depthMeters: 45,
+      depthShallowFraction: 0.5,
+    }),
+    "coastal",
+  );
+  assert.equal(
+    regimeBandOf({ depthMeters: 8, depthShallowFraction: 0.9 }),
+    "archipelago",
+  );
+  assert.equal(regimeBandOf({}), "unknown");
+});

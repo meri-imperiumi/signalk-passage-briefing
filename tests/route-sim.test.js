@@ -1632,3 +1632,63 @@ test("the simulated rig feeds the three-way slatting rule (work doc #38)", async
   // first hour's canvas is genuinely unknown
   assert.equal(rigged.hourly[0].slatting, true);
 });
+
+test("regime rows and transitions follow the distance-to-land annotations", async () => {
+  const { filterExceptions, simulatePassage } = await simPromise;
+  // Two waypoints: start offshore, end well inshore — the regime
+  // flips as the boat closes the coast
+  const track = sampleRoutePoints([
+    [0, 0],
+    [0, 3],
+  ]);
+  const payload = {
+    metadata: { fetchedAt: new Date(Date.UTC(2026, 5, 21, 0)).toISOString() },
+    // Every waypoint carries the fetch engine's annotation,
+    // interpolating 40 nm at the start down to 1 nm at the landfall
+    waypoints: track.map((w, index, all) => ({
+      ...w,
+      distanceToLandNm:
+        Math.round((40 - (39 * index) / (all.length - 1)) * 10) / 10,
+      forecasts: Array.from({ length: 72 }, (_, h) => ({
+        timestamp: new Date(Date.UTC(2026, 5, 21, h)).toISOString(),
+        surface: { tws: 10, twd: 45, mslp: 1013, gust: 15 },
+        marine: { hsCombined: 1.5, tpCombined: 8, dirCombined: 45 },
+        current: { drift: 0, set: 0 },
+      })),
+    })),
+  };
+  const result = simulatePassage({
+    payload,
+    startTime: new Date("2026-06-21T06:00:00Z"),
+  });
+  const exceptions = filterExceptions(result);
+  const rows = result.hourlyComfort ?? [];
+  // Early rows offshore, late rows in the archipelago
+  assert.equal(rows[0].regime, "offshore");
+  assert.equal(rows.at(-1).regime, "archipelago");
+  const transitions = exceptions.passageSummary.regimeTransitions;
+  // Daily-grain transitions: the coastal phase shows when a day
+  // boundary falls inside it
+  assert.ok(
+    transitions.some((t) => t.to === "coastal") ||
+      transitions.some((t) => t.to === "archipelago" && t.from === "offshore"),
+    JSON.stringify(transitions),
+  );
+  assert.ok(
+    transitions.every((t) => t.from != null),
+    "no baseline rows leak as transitions",
+  );
+  // The strategic headline carries the run-length summary over
+  // whole days — the leg's final archipelago hours may not dominate
+  // a day, but the offshore phase does
+  assert.match(exceptions.passageSummary.regimeSummary, /offshore/);
+  assert.ok(!exceptions.passageSummary.regimeSummary.includes("unknown"));
+  // Without annotations the rows read unknown and nothing transitions
+  const bare = buildPayload({});
+  const bareRun = await (await simPromise).simulateRun({
+    payload: bare,
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    maxHours: 3,
+  });
+  assert.equal(bareRun.hourly[0].regime, "unknown");
+});

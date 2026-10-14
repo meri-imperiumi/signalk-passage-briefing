@@ -33,6 +33,7 @@ import {
   apparentWindSpeedKnots,
   isNight,
   noSailsRegime,
+  regimeBandOf,
   SAILS_MAX_AWS_KNOTS,
   serenoComfort,
   steepnessRatio,
@@ -939,6 +940,11 @@ export function simulateRun({
   // transition row; later flips emit one.
   let prevSunKind = null;
   let prevSunKindDate = null;
+  // Regime awareness (work doc #39): the waters the leg sails
+  // through, judged per simulated day at the moved position and
+  // annotated per waypoint by the fetch engine
+  const regimeTransitions = [];
+  let prevRegime = null;
   const timeEvents = [];
   let arrivedHours = null;
   let distanceMadeGoodNm = 0;
@@ -1148,6 +1154,29 @@ export function simulateRun({
       passageStartMs != null
         ? Math.floor((t.getTime() - passageStartMs) / (24 * 3600000)) + 1
         : null;
+    // Distance to land for this position, inverse-distance weighted
+    // across the bracketing waypoints' annotations (work doc #39)
+    const legA = track[Math.max(0, targetIndex - 1)];
+    const legB = track[Math.min(track.length - 1, targetIndex)];
+    const landA = legA?.distanceToLandNm ?? null;
+    const landB = legB?.distanceToLandNm ?? null;
+    let distanceToLandNm = null;
+    if (landA != null || landB != null) {
+      if (landA == null) {
+        distanceToLandNm = landB;
+      } else if (landB == null) {
+        distanceToLandNm = landA;
+      } else {
+        const toA = distanceNm(pos.lat, pos.lon, legA.lat, legA.lon);
+        const toB = distanceNm(pos.lat, pos.lon, legB.lat, legB.lon);
+        distanceToLandNm =
+          toA + toB > 0 ? (landB * toA + landA * toB) / (toA + toB) : landA;
+      }
+    }
+    const regime = regimeBandOf({
+      distanceToLandNm,
+      depthAvailable: false,
+    });
     hourly.push({
       hoursFromNow: Math.round(hours * 10) / 10,
       timestamp: t.toISOString(),
@@ -1163,6 +1192,11 @@ export function simulateRun({
       twsKnots: tws,
       gustKnots,
       dayAtSea,
+      regime,
+      distanceToLandNm:
+        distanceToLandNm != null
+          ? Math.round(distanceToLandNm * 10) / 10
+          : null,
       hsMeters: hs ?? null,
       tpSeconds: tp ?? null,
       stwKnots: stw,
@@ -1179,6 +1213,7 @@ export function simulateRun({
     // Polar day/night: judge the 24 h ending at this row at the
     // boat's position, once per simulated day
     const sunKindDate = t.toISOString().slice(0, 10);
+    const firstDayOfRun = prevSunKindDate == null;
     let sunKind = null;
     if (sunKindDate !== prevSunKindDate) {
       sunKind = sunDayKind(
@@ -1197,6 +1232,15 @@ export function simulateRun({
       }
       prevSunKind = sunKind;
       prevSunKindDate = sunKindDate;
+      if (!firstDayOfRun && regime !== prevRegime) {
+        regimeTransitions.push({
+          hoursFromNow: Math.round(hours * 10) / 10,
+          timestamp: t.toISOString(),
+          from: prevRegime,
+          to: regime,
+        });
+      }
+      prevRegime = regime;
     }
 
     // Day-at-sea checkpoint: the first row of each new passage day
@@ -1209,6 +1253,7 @@ export function simulateRun({
         timestamp: t.toISOString(),
         dayAtSea,
         sunDayKind: prevSunKind,
+        regime,
       });
       prevDayAtSea = dayAtSea;
     }
@@ -1346,6 +1391,7 @@ export function simulateRun({
     squallHours,
     dayCheckpoints,
     sunDayTransitions,
+    regimeTransitions,
     timeEvents,
     hazardAlerts: hazardAlerts(notes, positions),
   };
@@ -1695,6 +1741,7 @@ export function simulatePassage({
     squallHours: nominal.squallHours,
     dayCheckpoints: nominal.dayCheckpoints,
     sunDayTransitions: nominal.sunDayTransitions,
+    regimeTransitions: nominal.regimeTransitions,
     energy: energySummary(energyHourly, startTime),
     runs: runs.map((run, i) => ({
       twsFactor: ETA_FACTORS[i],
@@ -1790,6 +1837,48 @@ function trackMeteorEvents(simulationResult, simParams) {
  */
 export function filterExceptions(simulationResult, simParams = {}) {
   const meteorEvents = trackMeteorEvents(simulationResult, simParams);
+  // Regime summary (work doc #39): the majority regime per simulated
+  // day, run-length encoded for the strategic headline — "offshore
+  // ×3 · coastal ×2". Absent when the payload carries no
+  // distance-to-land annotations (regime rows all unknown).
+  const dayRegimes = new Map();
+  for (const row of simulationResult.hourlyComfort ?? []) {
+    if (row.regime == null || row.regime === "unknown") {
+      continue;
+    }
+    const date = row.timestamp?.slice(0, 10);
+    if (date == null) {
+      continue;
+    }
+    const counts = dayRegimes.get(date) ?? new Map();
+    counts.set(row.regime, (counts.get(row.regime) ?? 0) + 1);
+    dayRegimes.set(date, counts);
+  }
+  let regimeSummary = null;
+  {
+    const runs = [];
+    for (const [, counts] of [...dayRegimes.entries()].sort()) {
+      let best = null;
+      let bestCount = 0;
+      for (const [regime, count] of counts) {
+        if (count > bestCount) {
+          best = regime;
+          bestCount = count;
+        }
+      }
+      const last = runs.at(-1);
+      if (last && last.regime === best) {
+        last.days += 1;
+      } else {
+        runs.push({ regime: best, days: 1 });
+      }
+    }
+    if (runs.length > 0) {
+      regimeSummary = runs
+        .map((run) => `${run.regime} ×${run.days}`)
+        .join(" · ");
+    }
+  }
   return {
     next24h: {
       comfortBlocks: (simulationResult.hourlyComfort ?? []).slice(0, 24),
@@ -1889,7 +1978,9 @@ export function filterExceptions(simulationResult, simParams = {}) {
       // Sea-legs day checkpoints (work doc #40): one per passage day,
       // already deduplicated by the simulator — no merging needed
       dayCheckpoints: simulationResult.dayCheckpoints ?? [],
+      regimeSummary,
       sunDayTransitions: simulationResult.sunDayTransitions ?? [],
+      regimeTransitions: simulationResult.regimeTransitions ?? [],
       // Squall-risk episodes (work doc #38 session feedback): hours
       // where the forecasted gusts dwarf the base wind merge into one
       // entry carrying the peak gust factor — the timeline's "advise

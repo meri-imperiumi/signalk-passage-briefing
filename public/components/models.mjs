@@ -1501,6 +1501,40 @@ export function mergeTimeline(exceptions, payload = null) {
     });
   }
 
+  // Regime transitions (work doc #39): the waters the leg sails
+  // through, judged per simulated day at the moved position. Info
+  // rows — the crew should know which comfort lens applies where.
+  const regimeLabel = {
+    archipelago: "archipelago waters",
+    coastal: "coastal waters",
+    offshore: "offshore waters",
+    unknown: "open sea",
+  };
+  for (const r of summary.regimeTransitions ?? []) {
+    const label =
+      r.to === "archipelago"
+        ? "Entering the archipelago"
+        : r.to === "coastal"
+          ? "Closing the coast"
+          : r.to === "offshore"
+            ? "Offshore leg"
+            : null;
+    if (!label) {
+      continue;
+    }
+    push({
+      hoursFromNow: r.hoursFromNow ?? null,
+      timestamp: r.timestamp ?? null,
+      kind: "regime",
+      severity: "info",
+      label,
+      detail:
+        r.from != null && r.from !== "unknown"
+          ? `from ${regimeLabel[r.from] ?? r.from}`
+          : "",
+    });
+  }
+
   // Hazard notes along the track (whole passage; the tactical slice
   // picks up its share by hoursFromNow). Provenance (work doc #31):
   // the note's url is the GDACS event page the note was built from
@@ -1823,12 +1857,22 @@ export function etaTable(exceptions, payload = null) {
     // publishes no cloud field or the ETA is off the track
     cloud: isNight === true ? cloudFor(timestamp) : null,
   });
+  // Regime summary (work doc #39): the waters sequence of the leg —
+  // null when the payload carries no distance-to-land annotations
+  const regimeRow =
+    summary.regimeSummary != null
+      ? { label: "Waters", stamp: summary.regimeSummary, night: false }
+      : null;
+  const rows = [
+    row("P10", summary.etaP10, night.p10),
+    row("P50", summary.etaP50, night.p50),
+    row("P90", summary.etaP90, night.p90),
+  ];
+  if (regimeRow) {
+    rows.push(regimeRow);
+  }
   return {
-    rows: [
-      row("P10", summary.etaP10, night.p10),
-      row("P50", summary.etaP50, night.p50),
-      row("P90", summary.etaP90, night.p90),
-    ],
+    rows,
     motorHours:
       summary.totalMotorHours != null ? fmtHours(summary.totalMotorHours) : "",
     fuel:

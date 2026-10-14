@@ -491,6 +491,40 @@ function buildTimeSteps(surfaceMap, marineMap, currentMap) {
  * @param {typeof fetch} [params.fetchImpl] - Fetch implementation (tests)
  * @returns {Promise<object>} UnifiedWeatherPayload
  */
+
+/**
+ * Annotates waypoints with their distance to land, via the
+ * maritime-zones reader (work doc #39): the regime awareness reads
+ * this per waypoint in the simulator. First use loads the tiles
+ * (a few seconds, cached on disk); later calls are cheap. Any
+ * failure degrades to absent — the regime rows simply don't render.
+ *
+ * @param {Array<{lat: number, lon: number}>} waypoints - Mutated
+ *   in place when the reader answers
+ * @returns {Promise<void>}
+ */
+async function annotateDistanceToLand(waypoints) {
+  if (!Array.isArray(waypoints) || waypoints.length === 0) {
+    return;
+  }
+  let mz = null;
+  try {
+    mz = await import("@openwaters/maritime-zones");
+  } catch {
+    return; // Reader unavailable: regime context degrades to absent
+  }
+  for (const waypoint of waypoints) {
+    try {
+      const result = await mz.distanceToLand(waypoint.lat, waypoint.lon);
+      if (Number.isFinite(result?.distanceNm)) {
+        waypoint.distanceToLandNm = Math.round(result.distanceNm * 10) / 10;
+      }
+    } catch {
+      // One waypoint failing must not strip the others
+    }
+  }
+}
+
 async function fetchWeatherAlongTrack({
   waypoints,
   forecastDays = DEFAULT_FORECAST_DAYS,
@@ -560,6 +594,7 @@ async function fetchWeatherAlongTrack({
       lat: waypoint.lat,
       lon: waypoint.lon,
       distanceFromStartNm: waypoint.distanceFromStartNm,
+      distanceToLandNm: waypoint.distanceToLandNm ?? null,
       forecasts: buildTimeSteps(surfaceMap, marineMap, currentMap),
     };
   });
@@ -716,6 +751,7 @@ async function listCachedRoutes(dataDir) {
 }
 
 module.exports = {
+  annotateDistanceToLand,
   DEFAULT_FORECAST_DAYS,
   DEFAULT_SAMPLE_INTERVAL_NM,
   KEEP_SNAPSHOTS,

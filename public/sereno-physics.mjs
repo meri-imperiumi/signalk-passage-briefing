@@ -746,6 +746,61 @@ export function isNight(
 }
 
 /**
+ * Inshore/offshore regime band for one position, combining the
+ * sounding (read only to ~100 m: null in deep water, sporadic false
+ * shallow echoes — use the median and shallow fraction, never the
+ * mean) with the distance to land. Enclosed seas sit close to land
+ * yet sail offshore — the deep-water signal decides there. This is
+ * the canonical shared copy for the live sim; the backtest tool
+ * carries its own pinned copy (the browser cannot import the plugin
+ * tree, and the backtest's test suite pins this exact logic).
+ *
+ * @param {{depthMeters?: number|null, depthShallowFraction?: number|null,
+ *   distanceToLandNm?: number|null}} sample
+ * @returns {"archipelago"|"coastal"|"offshore"|"unknown"}
+ */
+export function regimeBandOf({
+  depthMeters = null,
+  depthShallowFraction = null,
+  distanceToLandNm = null,
+  depthAvailable = true,
+} = {}) {
+  // No sounding in this data source at all (the forecast-only
+  // simulator): null depth means unknown, not deep — the distance
+  // alone decides. The sounding-bearing data path (the backtest)
+  // leaves the default: a null depth reading is the instrument's
+  // range limit, i.e. deep water.
+  if (depthAvailable === false) {
+    if (distanceToLandNm == null) {
+      return "unknown";
+    }
+    if (distanceToLandNm < 3) {
+      return "archipelago";
+    }
+    return distanceToLandNm >= 25 ? "offshore" : "coastal";
+  }
+  if (depthMeters == null && distanceToLandNm == null) {
+    // Neither signal — sounder off or data absent: unknown, never
+    // silently offshore
+    return "unknown";
+  }
+  const inArchipelago =
+    (distanceToLandNm != null && distanceToLandNm < 3) ||
+    (distanceToLandNm == null &&
+      depthMeters != null &&
+      depthMeters < 20 &&
+      depthShallowFraction >= 0.8);
+  if (inArchipelago) {
+    return "archipelago";
+  }
+  const deepWater =
+    depthMeters == null ||
+    depthMeters >= 100 ||
+    (distanceToLandNm != null && distanceToLandNm >= 25);
+  return deepWater ? "offshore" : "coastal";
+}
+
+/**
  * Classifies a span as polar day (midnight sun) or polar night by
  * scanning the sun's altitude hourly across it: every sample below
  * the horizon means the sun does not rise in the span, every sample
