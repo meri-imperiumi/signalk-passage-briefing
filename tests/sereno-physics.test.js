@@ -629,3 +629,57 @@ test("three-way rule: drawing sails suppress, motoring keeps head chop", async (
   // plain motion evaluation still applies)
   assert.equal(slattingRisk({ ...base, sailState: "motoring" }), false);
 });
+
+test("sunDayKind classifies polar day, polar night and ordinary days", async () => {
+  const { sunDayKind } = await physics();
+  const D = 24 * 3600000;
+  // Tromsø 69.65°N: midnight sun in July, polar night in January
+  assert.equal(
+    sunDayKind(
+      Date.parse("2026-07-10T00:00Z"),
+      Date.parse("2026-07-10T00:00Z") + D,
+      69.65,
+      18.96,
+    ),
+    "midnightSun",
+  );
+  assert.equal(
+    sunDayKind(
+      Date.parse("2026-01-10T00:00Z"),
+      Date.parse("2026-01-10T00:00Z") + D,
+      69.65,
+      18.96,
+    ),
+    "polarNight",
+  );
+  // The equinox window carries both a rise and a set
+  assert.equal(
+    sunDayKind(
+      Date.parse("2026-03-21T00:00Z"),
+      Date.parse("2026-03-21T00:00Z") + D,
+      69.65,
+      18.96,
+    ),
+    null,
+  );
+  // Helsinki never qualifies
+  assert.equal(
+    sunDayKind(
+      Date.parse("2026-07-10T00:00Z"),
+      Date.parse("2026-07-10T00:00Z") + D,
+      60.17,
+      24.94,
+    ),
+    null,
+  );
+  // Missing position degrades to null
+  assert.equal(
+    sunDayKind(
+      Date.parse("2026-07-10T00:00Z"),
+      Date.parse("2026-07-10T00:00Z") + D,
+      null,
+      null,
+    ),
+    null,
+  );
+});

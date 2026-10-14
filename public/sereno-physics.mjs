@@ -746,6 +746,53 @@ export function isNight(
 }
 
 /**
+ * Classifies a span as polar day (midnight sun) or polar night by
+ * scanning the sun's altitude hourly across it: every sample below
+ * the horizon means the sun does not rise in the span, every sample
+ * above means it does not set. Anything in between returns null —
+ * an ordinary day with both a rise and a set.
+ *
+ * The hourly scan is deliberately coarse: on a grazing day (the sun
+ * touching the horizon for minutes) a real crossing can hide between
+ * samples and read as polar night. That is the same convention the
+ * crew uses — a sun that barely flickers above the horizon reads as
+ * a night, not a day.
+ *
+ * Works on a moving vessel too: the caller passes the position the
+ * span should be judged at, so a passage sailing out of the midnight
+ * sun flips the kind at the right day.
+ *
+ * @param {number} startMs - Span start (epoch ms)
+ * @param {number} endMs - Span end (epoch ms)
+ * @param {number} latDeg - Degrees north
+ * @param {number} lonDeg - Degrees east
+ * @returns {"midnightSun"|"polarNight"|null}
+ */
+export function sunDayKind(startMs, endMs, latDeg, lonDeg) {
+  if (!Number.isFinite(latDeg) || !Number.isFinite(lonDeg)) {
+    return null;
+  }
+  let min = Infinity;
+  let max = -Infinity;
+  for (let t = startMs; t <= endMs; t += 3600000) {
+    const alt = sunAltitudeDeg(new Date(t), latDeg, lonDeg);
+    if (alt < min) {
+      min = alt;
+    }
+    if (alt > max) {
+      max = alt;
+    }
+  }
+  if (max <= 0) {
+    return "polarNight";
+  }
+  if (min >= 0) {
+    return "midnightSun";
+  }
+  return null;
+}
+
+/**
  * Monohull vertical acceleration assessment (SPEC §5.2 vector 2).
  *
  * @param {object} sea
