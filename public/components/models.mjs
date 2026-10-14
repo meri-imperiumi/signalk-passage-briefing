@@ -895,6 +895,20 @@ export function skySegments(
     return [];
   }
   const segments = [];
+  // Polar spans say so instead of staying silent (work doc #40
+  // session feedback): the twilight bounds are null there, and the
+  // sky line would otherwise show nothing but weather
+  if (night.polarNight) {
+    segments.push({
+      text: "☾ polar night",
+      title: "polar night — the sun stays below the horizon",
+    });
+  } else if (night.midnightSun) {
+    segments.push({
+      text: "☀ midnight sun",
+      title: "midnight sun — no night tonight",
+    });
+  }
   if (night.sunset) {
     segments.push({
       text: `☀ ${fmtHm(night.sunset)}↓`,
@@ -918,6 +932,17 @@ export function skySegments(
     const t = new Date(iso).getTime();
     return Number.isFinite(t) && t >= windowStart && t <= windowEnd;
   };
+  if (night.moonUpAllNight) {
+    segments.push({
+      text: "☽ up all night",
+      title: "the moon stays above the horizon all night",
+    });
+  } else if (night.moonDownAllNight) {
+    segments.push({
+      text: "☽ down all night",
+      title: "the moon stays below the horizon all night",
+    });
+  }
   if (night.moonrise && inNight(night.moonrise)) {
     segments.push({
       text: `☽↑ ${fmtHm(night.moonrise)}`,
@@ -1428,7 +1453,7 @@ export function mergeTimeline(exceptions, payload = null) {
 
   // Sea-legs day checkpoints (work doc #40): "Day N at sea" markers
   // on each passage day — neutral context, the crew's own counting
-  // from the departure time of day
+  // from the departure time of day; the polar kind rides the row
   for (const d of summary.dayCheckpoints ?? []) {
     push({
       hoursFromNow: d.hoursFromNow ?? null,
@@ -1436,6 +1461,42 @@ export function mergeTimeline(exceptions, payload = null) {
       kind: "day",
       severity: "info",
       label: `Day ${d.dayAtSea} at sea`,
+      detail:
+        d.sunDayKind === "midnightSun"
+          ? "midnight sun"
+          : d.sunDayKind === "polarNight"
+            ? "polar night"
+            : "",
+    });
+  }
+
+  // Polar day/night transitions (work doc #40 session feedback): the
+  // sun regime flips as the boat sails — time moving and boat moving
+  // together. The wording matches the flip, never invents one
+  const sunKindLabel = {
+    midnightSun: "Midnight sun",
+    polarNight: "Polar night",
+  };
+  for (const s of summary.sunDayTransitions ?? []) {
+    const label =
+      s.to === "midnightSun"
+        ? "Midnight sun begins"
+        : s.to === "polarNight"
+          ? "Polar night begins"
+          : s.from === "midnightSun"
+            ? "Sun sets again"
+            : s.from === "polarNight"
+              ? "Sun rises again"
+              : null;
+    if (!label) {
+      continue;
+    }
+    push({
+      hoursFromNow: s.hoursFromNow ?? null,
+      timestamp: s.timestamp ?? null,
+      kind: "day",
+      severity: "info",
+      label,
       detail: "",
     });
   }

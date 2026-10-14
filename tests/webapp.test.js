@@ -1686,3 +1686,93 @@ test("webapp view models", async (t) => {
     },
   );
 });
+
+test("skySegments say polar day/night and all-night moon states", async (t) => {
+  const { skySegments } = await import("../public/components/models.mjs");
+  // Polar night: no twilights, no rise/set — the marker speaks
+  const polarNight = {
+    metadata: { fetchedAt: "2026-01-10T06:00:00.000Z" },
+    celestialNights: [
+      {
+        timestamp: "2026-01-10T06:00:00.000Z",
+        polarNight: true,
+        midnightSun: false,
+        civilDusk: null,
+        nauticalDusk: null,
+        sunrise: null,
+        sunset: null,
+      },
+    ],
+  };
+  const dark = skySegments(polarNight, {});
+  assert.ok(
+    dark.some((s) => s.text.includes("polar night")),
+    dark.map((s) => s.text).join(" | "),
+  );
+  assert.ok(!dark.some((s) => s.text.includes("☀")), "no sun stamps");
+  // Midnight sun: the sky line names the missing night
+  const polarDay = {
+    metadata: { fetchedAt: "2026-07-10T06:00:00.000Z" },
+    celestialNights: [
+      {
+        timestamp: "2026-07-10T06:00:00.000Z",
+        polarNight: false,
+        midnightSun: true,
+        civilDusk: null,
+        nauticalDusk: null,
+        sunrise: null,
+        sunset: null,
+      },
+    ],
+  };
+  const bright = skySegments(polarDay, {});
+  assert.ok(
+    bright.some((s) => s.text.includes("midnight sun")),
+    bright.map((s) => s.text).join(" | "),
+  );
+  // The moon's once-a-month missing crossings read as a statement,
+  // not as stamps from a neighbouring night
+  const moonDown = {
+    metadata: { fetchedAt: "2026-06-15T06:00:00.000Z" },
+    celestialNights: [
+      {
+        timestamp: "2026-06-15T21:33:00.000Z",
+        moonDownAllNight: true,
+        moonUpAllNight: false,
+        moonrise: null,
+        moonset: null,
+        nauticalDusk: null,
+        civilDusk: "2026-06-15T21:33:00.000Z",
+        sunset: "2026-06-15T19:46:00.000Z",
+        sunrise: "2026-06-15T00:55:00.000Z",
+      },
+    ],
+  };
+  const down = skySegments(moonDown, {});
+  assert.ok(
+    down.some((s) => s.text.includes("down all night")),
+    down.map((s) => s.text).join(" | "),
+  );
+  assert.ok(!down.some((s) => s.text.startsWith("☽↑")));
+  const moonUp = {
+    metadata: { fetchedAt: "2026-06-29T06:00:00.000Z" },
+    celestialNights: [
+      {
+        timestamp: "2026-06-29T21:30:00.000Z",
+        moonUpAllNight: true,
+        moonDownAllNight: false,
+        moonrise: null,
+        moonset: null,
+        nauticalDusk: "2026-06-29T22:30:00.000Z",
+        civilDusk: "2026-06-29T21:33:00.000Z",
+        sunset: "2026-06-29T19:46:00.000Z",
+        sunrise: "2026-06-30T01:00:00.000Z",
+      },
+    ],
+  };
+  const up = skySegments(moonUp, {});
+  assert.ok(
+    up.some((s) => s.text.includes("up all night")),
+    up.map((s) => s.text).join(" | "),
+  );
+});
