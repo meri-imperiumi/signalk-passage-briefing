@@ -2460,3 +2460,82 @@ test("route progress: briefing trims to the sailed legs (work doc #28)", async (
 
   plugin.stop();
 });
+
+test("metarea console: wrong-ocean entries lose the headline to zone bulletins", async () => {
+  const { saveBulletinCache } = require("../plugin/bulletin-source.js");
+  const northPacific = [
+    "ZCZC 2",
+    "HIGH SEAS FORECAST",
+    "NWS OCEAN PREDICTION CENTER",
+    "ISSUED BY NHC/TPC 150300 UTC",
+    ".SYNOPSIS AND FORECAST.",
+    "LOW 59N167W 1006 MB DRIFTING SE. N OF 50N BETWEEN 170W AND 180W.",
+    "WINDS 20 TO 30 KT. SEAS 2.5 TO 4 M.",
+    ".24 HOUR FORECAST LOW DISSIPATED AN.",
+    "NNNN",
+  ].join("\n");
+  const fiji = [
+    "FQPS01 NFFN 011200Z AUG 26",
+    "ZCZC GA14",
+    "NAVAREA XIV 114/26",
+    "GALE WARNING",
+    "DEVELOPING TROUGH T1 WITH SQUALLS AND GALES WITHIN 120NM",
+    "EAST OF AXIS 16S 170E TO 20S 178W TO 25S 175W.",
+    "EXPECT WINDS 35 KNOTS. ROUGH SEAS.",
+    "NNNN",
+  ].join("\n");
+
+  const app = createMockApp();
+  // The boat is in Tonga — 174.2 E, 19 S
+  app.getSelfPath = (path) =>
+    path === "navigation.position"
+      ? { value: { latitude: -19.0, longitude: 174.2 } }
+      : null;
+  const plugin = pluginFactory(app);
+  plugin.start({});
+  plugin.registerWithRouter(app.router);
+  // The cache holds the Fiji zone bulletin (older) and the North
+  // Pacific feed (newest — what the old newest-wins meta served)
+  await saveBulletinCache(app.getDataDirPath(), [
+    {
+      url: "https://api.weather.gov/products/types/HSF/locations/NP",
+      fetchedAt: "2026-10-15T08:31:00.000Z",
+      text: northPacific,
+      source: "api",
+    },
+    {
+      url: "tgftp://fqps01.nffn",
+      fetchedAt: "2026-10-15T08:20:00.000Z",
+      text: fiji,
+      source: "spool",
+      zone: 14,
+    },
+  ]);
+  const r = app.getRoutes().find((x) => x.path === "/api/bulletin");
+  const res = {
+    payload: null,
+    json(p) {
+      this.payload = p;
+    },
+  };
+  await r.handler({ query: {} }, res);
+  const bulletin = res.payload;
+  assert.ok(bulletin, "bulletin served");
+  assert.ok(
+    bulletin.bulletinText.includes("NAVAREA XIV"),
+    "the Fiji bulletin owns the console headline",
+  );
+  assert.ok(
+    !bulletin.bulletinText.includes("59N167W"),
+    "no North Pacific text on the console",
+  );
+  assert.ok(
+    !bulletin.blocks.some((b) => b.text.includes("59N167W")),
+    "no North Pacific blocks on the console",
+  );
+  assert.ok(
+    bulletin.blocks.some((b) => b.text.includes("TROUGH")),
+    "the Fiji gale warning serves",
+  );
+  plugin.stop();
+});

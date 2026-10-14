@@ -321,13 +321,16 @@ function parseCardinalBounds(text) {
 
   // SOUTH OF x means lat ≤ x (x becomes the box's max), NORTH OF x
   // means lat ≥ x (the box's min). The bound's own hemisphere only
-  // sets its sign.
-  const southOf = text.match(/SOUTH OF\s+(\d+(?:\.\d+)?)\s*([NS])/i);
+  // sets its sign. NWS bulletins abbreviate to "N OF"/"S OF" — the
+  // full word is matched first so the abbreviation cannot swallow it
+  // (an unmatched N OF left the band pole-to-pole and a North Pacific
+  // synopsis intersected every water on its longitude band).
+  const southOf = text.match(/(?:SOUTH|S)\s+OF\s+(\d+(?:\.\d+)?)\s*([NS])/i);
   if (southOf) {
     maxLat = hemisphereDegrees(southOf[1], southOf[2].toUpperCase());
     found = true;
   }
-  const northOf = text.match(/NORTH OF\s+(\d+(?:\.\d+)?)\s*([NS])/i);
+  const northOf = text.match(/(?:NORTH|N)\s+OF\s+(\d+(?:\.\d+)?)\s*([NS])/i);
   if (northOf) {
     minLat = hemisphereDegrees(northOf[1], northOf[2].toUpperCase());
     found = true;
@@ -1170,6 +1173,18 @@ function filterBulletin({
       if (!intersectsTrack(geometry, track)) {
         return null; // Discard rule: not on our waters
       }
+      // Coordinates that failed to build geometry still place the
+      // block: a synopsis naming "LOW 59N167W" is other ocean's text
+      // even though the single point builds no ring. Only a block
+      // with no coordinates at all is genuinely unplaceable — the
+      // severity retention must not rescue the placed-but-far ones.
+      if (
+        geometry == null &&
+        track.length > 0 &&
+        textNearTrack(blockText, track, 150) === false
+      ) {
+        return null;
+      }
       // The warnings console is for relevant paragraphs only: a block
       // with neither geography nor severity is transmission
       // boilerplate (preamble, disclaimers, footers) — dropping it
@@ -1377,6 +1392,50 @@ function ukhoGeometry(warning) {
   return null;
 }
 
+/**
+ * Whether a bulletin's own coordinates can plausibly cover a track:
+ * the coarse bounding box of every coordinate the text mentions,
+ * padded by a margin. An entry whose entire coordinate footprint
+ * sits in another ocean (a North Pacific synopsis for a Tonga track)
+ * fails this and must not reach the console — neither as blocks nor
+ * as the headline. A text with no coordinates at all returns null:
+ * it cannot be placed, and the caller keeps it (the storm-named-
+ * without-coordinates case is a conservative keep, never a loss).
+ *
+ * @param {string} rawText - Raw bulletin text
+ * @param {number[][]} track - Track points [[lon, lat], …]
+ * @param {number} [marginNm] - Padding around the coordinate bbox
+ * @returns {boolean|null} False = proven elsewhere, true = plausibly
+ *   covering, null = cannot place
+ */
+function textNearTrack(rawText, track, marginNm = 500) {
+  if (!Array.isArray(track) || track.length === 0) {
+    return true;
+  }
+  const points = parseCoordinatePoints(rawText);
+  if (points.length === 0) {
+    return null;
+  }
+  const lons = points.map((point) => point[0]);
+  const lats = points.map((point) => point[1]);
+  const meanLat =
+    ((Math.min(...lats) + Math.max(...lats)) / 2) * (Math.PI / 180);
+  const latPad = marginNm / 60;
+  const lonPad = latPad / Math.max(0.2, Math.cos(meanLat));
+  const minLon = Math.min(...lons) - lonPad;
+  const maxLon = Math.max(...lons) + lonPad;
+  const minLat = Math.min(...lats) - latPad;
+  const maxLat = Math.max(...lats) + latPad;
+  return track.some(([lon, lat]) =>
+    [0, 360, -360].some((shift) => {
+      const shifted = lon + shift;
+      return (
+        shifted >= minLon && shifted <= maxLon && lat >= minLat && lat <= maxLat
+      );
+    }),
+  );
+}
+
 module.exports = {
   parseAdvisory,
   advisorySeverityLabel,
@@ -1404,6 +1463,7 @@ module.exports = {
   intersectsTrack,
   extractIssuer,
   filterBulletin,
+  textNearTrack,
   fetchRemoteBulletin,
   resolveBulletinSource,
 };

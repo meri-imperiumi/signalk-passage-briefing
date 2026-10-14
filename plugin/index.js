@@ -32,6 +32,7 @@ const { readSailsConfiguration } = require("./sails-configuration.js");
 const {
   filterBulletin,
   resolveBulletinSource,
+  textNearTrack,
   ukhoBlocksFromWarnings,
 } = require("./bulletin-engine.js");
 const { loadBulletinCache, refreshBulletins } = require("./bulletin-source.js");
@@ -644,17 +645,36 @@ module.exports = (app) => {
       return null;
     }
     const track = waypoints.map((w) => [w.lon, w.lat]);
-    const newest = cached[0];
-    const meta = bulletinMetaForEntry(newest) ?? {
-      header: "",
-      issuedAt: newest.fetchedAt ?? new Date(0).toISOString(),
-      bulletinText: newest.text,
-      source: newest.source ?? "api",
-    };
+    // Area gate (bergie session, Tonga fix): an entry whose own
+    // coordinates all sit in another ocean is that ocean's bulletin —
+    // it must not reach the console, neither as severe-but-ungeometric
+    // synopsis blocks nor as the headline. Zone-fetched entries (the
+    // TGFTP stations) were pulled for our zones and are trusted; the
+    // unplaced case (storm named without coordinates) keeps, never
+    // loses.
+    const merged = [];
+    for (const entry of cached.slice(0, MERGE_BULLETINS)) {
+      if (
+        entry.zone == null &&
+        entry.format !== "ukho-json" &&
+        textNearTrack(entry.text, track) === false
+      ) {
+        continue;
+      }
+      const blocks = blocksForEntry(entry, track);
+      if (blocks.length > 0) {
+        merged.push({ entry, blocks });
+      }
+    }
+    if (merged.length === 0) {
+      // Nothing on our waters: an empty console is the honest answer,
+      // not the newest cache entry's foreign text
+      return null;
+    }
     const blocks = [];
     const seen = new Set();
-    for (const entry of cached.slice(0, MERGE_BULLETINS)) {
-      for (const block of blocksForEntry(entry, track)) {
+    for (const { blocks: entryBlocks } of merged) {
+      for (const block of entryBlocks) {
         if (seen.has(block.text)) {
           continue;
         }
@@ -662,6 +682,15 @@ module.exports = (app) => {
         blocks.push(block);
       }
     }
+    // The headline belongs to the bulletin that actually matched: the
+    // newest entry *with retained blocks*, never the cache's newest
+    // entry whatever ocean it came from
+    const meta = bulletinMetaForEntry(merged[0].entry) ?? {
+      header: "",
+      issuedAt: merged[0].entry.fetchedAt ?? new Date(0).toISOString(),
+      bulletinText: merged[0].entry.text,
+      source: merged[0].entry.source ?? "api",
+    };
     return { ...meta, blocks };
   }
 
@@ -2762,7 +2791,10 @@ module.exports = (app) => {
       });
 
       router.get("/api/bulletin", async (req, res) => {
-        // Filtered against the queried route's track, else unfiltered
+        // Filtered against the queried route's track; without a route
+        // the vessel's own position is the track — an empty track
+        // would disable every discard rule and serve the newest cache
+        // entry whatever ocean it came from (bergie session, Tonga fix)
         let waypoints = [];
         if (typeof req.query.route === "string") {
           try {
@@ -2775,6 +2807,11 @@ module.exports = (app) => {
             );
           } catch {
             // Unknown route: serve the unfiltered bulletin
+          }
+        } else {
+          const here = vesselPosition();
+          if (here) {
+            waypoints = [here];
           }
         }
         res.json(await bulletinForTrack(waypoints));

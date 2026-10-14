@@ -1105,10 +1105,13 @@ test("EQUATOR is a real bound in NWS area headers, not a pole default", () => {
     parseCardinalBounds("EQUATOR TO 03.4S"),
     [-180, -3.4, 180, 0],
   );
-  // No equator mention: unchanged behavior
+  // No equator mention: unchanged behavior — except that "S OF"/
+  // "N OF" abbreviations now clamp the latitude band too (NWS
+  // High Seas Forecasts abbreviate; the pole default leaked
+  // other-ocean synopses into consoles as far away as Tonga)
   assert.deepEqual(
     parseCardinalBounds("S OF 32N BETWEEN 169W AND 178W"),
-    [-178, -90, -169, 90],
+    [-178, -90, -169, 32],
   );
 });
 
@@ -1141,4 +1144,70 @@ test("fixed NWS disclaimer paragraphs are stripped whole", () => {
   );
   assert.equal(hasSevereKeyword("HURRICANE RACHEL NEAR 19.4N"), true);
   assert.equal(hasSevereKeyword("TROPICAL CYCLONE FORCE WINDS"), true);
+});
+
+test("textNearTrack: wrong-ocean coordinates prove an entry elsewhere", async () => {
+  const { textNearTrack } = require("../plugin/bulletin-engine.js");
+  // Real Tonga: 174.2 E, 19 S
+  const tonga = [[174.2, -19.0]];
+  // The North Pacific synopsis bergie saw: coordinates 59N167W,
+  // bounds N OF 50N BETWEEN 170W AND 180W — all far from Tonga
+  const northPacific = [
+    ".SYNOPSIS AND FORECAST.",
+    "LOW 59N167W 1006 MB DRIFTING SE. N OF 50N BETWEEN 170W AND 180W.",
+    "WINDS 20 TO 30 KT. SEAS 2.5 TO 4 M.",
+    ".24 HOUR FORECAST LOW DISSIPATED.",
+  ].join("\n");
+  assert.equal(textNearTrack(northPacific, tonga), false);
+  // The Fiji bulletin's coordinates plausibly cover Tonga waters
+  const fiji = [
+    "FQPS01 NFFN 011200Z AUG 26",
+    "DEVELOPING TROUGH T1 WITH SQUALLS AND GALES WITHIN 120NM",
+    "EAST OF AXIS 16S 170E TO 20S 178W TO 25S 175W.",
+  ].join("\n");
+  assert.equal(textNearTrack(fiji, tonga), true);
+  // A storm named without coordinates cannot be placed: null keeps
+  assert.equal(textNearTrack("HURRICANE MARIE MOVING WNW.", tonga), null);
+});
+
+test("severe blocks with far-away coordinates are discarded, not rescued", async () => {
+  const { filterBulletin } = require("../plugin/bulletin-engine.js");
+  const northPacific = [
+    "ZCZC 2",
+    "HIGH SEAS FORECAST",
+    "NWS OCEAN PREDICTION CENTER",
+    ".SYNOPSIS AND FORECAST.",
+    "LOW 59N167W 1006 MB DRIFTING SE. N OF 50N BETWEEN 170W AND 180W.",
+    "WINDS 20 TO 30 KT. SEAS 2.5 TO 4 M.",
+    ".24 HOUR FORECAST LOW DISSIPATED AN.",
+    "NNNN",
+  ].join("\n");
+  // The single 59N167W point builds no ring, but the block is placed
+  // by its own coordinates: far from Tonga means gone, severity or not
+  const bulletin = filterBulletin({
+    rawText: northPacific,
+    source: "api",
+    track: [[-174.2, -19.0]],
+  });
+  const blocks = bulletin?.blocks ?? [];
+  assert.equal(
+    blocks.some((b) => b.text.includes("59N167W")),
+    false,
+    blocks.map((b) => b.text).join(" | "),
+  );
+  // A severe block with no coordinates at all stays the conservative
+  // keep (a named storm without a position must not be lost)
+  const named = [
+    "ZCZC 3",
+    "HIGH SEAS FORECAST",
+    ".WARNINGS.",
+    "HURRICANE MARIE MOVING WNW. WINDS 65 KT.",
+    "NNNN",
+  ].join("\n");
+  const kept = filterBulletin({
+    rawText: named,
+    source: "api",
+    track: [[-174.2, -19.0]],
+  });
+  assert.ok(kept?.blocks?.length >= 1, "unplaceable severe block kept");
 });
