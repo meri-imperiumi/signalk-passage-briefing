@@ -504,6 +504,12 @@ class PassageOutlook extends HTMLElement {
       this._nextCron = await fetchJson(`${PLUGIN_API}/api/status`, 8000)
         .then((status) => status?.nextCronRun ?? null)
         .catch(() => null);
+      // Sea legs (work doc #40): the passage day context. Absent or
+      // failed lookups degrade to null — the timeline checkpoints
+      // simply don't render, never invented
+      this._seaLegs = await fetchJson(`${PLUGIN_API}/api/sea-legs`, 8000)
+        .then((s) => s?.passageStartedAt ?? null)
+        .catch(() => null);
       this._briefing = await fetchJson(`${PLUGIN_API}/briefing${query}`, 20000);
       if (seq !== this._loadSeq) {
         return;
@@ -762,6 +768,9 @@ class PassageOutlook extends HTMLElement {
         // Running watch schedule (signalk-watch-schedule): sail
         // changes anchor to watch changes while it runs
         watch: this._watch ?? null,
+        // Sea legs (work doc #40): passage start for the day-at-sea
+        // checkpoints
+        passageStartedAt: this._seaLegs ?? null,
         // The payload covers the fetch window forward; hours are read
         // from its own timestamps — anchored to the effective
         // departure when one is assumed (work doc #15)

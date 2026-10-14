@@ -75,6 +75,7 @@ const {
   createHistoryWindStats,
   createLogbookWindStats,
 } = require("./history-backfill.js");
+const { seaLegs } = require("./sea-legs.js");
 const {
   DEFAULT_FORECAST_DAYS,
   distanceNm: distanceNmLatLon,
@@ -2605,6 +2606,27 @@ module.exports = (app) => {
     registerWithRouter: (router) => {
       router.get("/api/config", (_req, res) => {
         res.json(simulationConfig);
+      });
+
+      // Sea legs (work doc #40): the passage day context. The history
+      // scan needs a reachable History API — the webapp calls with its
+      // own origin as baseUrl (same server); failures degrade to nulls
+      router.get("/api/sea-legs", async (req, res) => {
+        try {
+          const base =
+            typeof req.query.baseUrl === "string" && req.query.baseUrl
+              ? req.query.baseUrl
+              : `${req.protocol}://${req.get("host")}`;
+          const result = await seaLegs({ baseUrl: base });
+          res.json(result);
+        } catch (error) {
+          res.json({
+            passageStartedAt: null,
+            dayAtSea: null,
+            underwayNow: false,
+            error: error.message,
+          });
+        }
       });
 
       router.get("/api/status", (_req, res) => {
