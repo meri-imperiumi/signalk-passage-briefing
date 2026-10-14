@@ -32,12 +32,12 @@ import {
 import {
   apparentWindSpeedKnots,
   isNight,
-  sunDayKind,
   noSailsRegime,
   SAILS_MAX_AWS_KNOTS,
   serenoComfort,
   steepnessRatio,
   suggestSailState,
+  sunDayKind,
   travelDirection,
 } from "./sereno-physics.mjs";
 import { detectManeuvers, wrap180 } from "./tack-gybe.js";
@@ -1032,23 +1032,35 @@ export function simulateRun({
       fuelLiters += fuelRate * STEP_HOURS;
     }
 
-    // Comfort of the hour (SPEC §5.2)
+    // Comfort of the hour (SPEC §5.2). The simulated rig state rides
+    // in the vessel so the three-way slatting rule (work doc #38,
+    // validated on the 470-day backtest) applies: canvas up keeps
+    // flow attached even under motor (motor-sailing loads the sails),
+    // canvas down is the no-draw motoring case, and an unset state
+    // keeps the legacy conservative behavior.
     const hs = weather?.marine?.hsCombined;
     const tp = weather?.marine?.tpCombined;
     const waveFrom = weather?.marine?.dirCombined;
+    const vessel = {
+      sogKnots: sog,
+      headingRad: heading,
+      waterlineLengthM: cfg.waterline_length_m,
+      kHeel: cfg.k_heel,
+      kPitch: cfg.k_pitch,
+      sailState:
+        sailState == null
+          ? null
+          : sailState === "NO_SAILS"
+            ? "motoring"
+            : "sailing",
+    };
     const comfort = serenoComfort(
       {
         hsMeters: hs ?? 0,
         tpSeconds: tp ?? 0,
         waveTravelDirectionRad: travelDirection((waveFrom ?? 0) * DEG),
       },
-      {
-        sogKnots: sog,
-        headingRad: heading,
-        waterlineLengthM: cfg.waterline_length_m,
-        kHeel: cfg.k_heel,
-        kPitch: cfg.k_pitch,
-      },
+      vessel,
       { twsKnots: tws ?? 0, twaRad },
     );
 

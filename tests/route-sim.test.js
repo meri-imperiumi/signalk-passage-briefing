@@ -1581,3 +1581,54 @@ test("polar day/night transitions fire as the boat sails", async () => {
     assert.ok(typeof t.timestamp === "string");
   }
 });
+
+test("the simulated rig feeds the three-way slatting rule (work doc #38)", async () => {
+  const { simulateRun } = await simPromise;
+  // Light air (5 kn, upwind so TWS < 7) in 0.7 m residual swell: the
+  // blanket slatting rule would force Rough. With the learned rig
+  // known (canvas up), the three-way rule suppresses the flag — the
+  // boat reads what the backtest-validated physics says.
+  const LIGHT_AIR = {
+    twsBinsKnots: [0, 5, 10, 15, 20, 25, 30, 35, 40],
+    twaBinsDegrees: [0, 30, 60, 90, 120, 150, 180],
+    matrix: [
+      {
+        twsBin: 1,
+        twaBin: 1,
+        night: false,
+        preferredSailState: "GENOA_1_MAIN",
+        minTwsGustTrigger: 12,
+        samplesCount: 3,
+      },
+      {
+        twsBin: 1,
+        twaBin: 1,
+        night: true,
+        preferredSailState: "STAYSAIL_MAIN_1_REEF",
+        minTwsGustTrigger: 12,
+        samplesCount: 3,
+      },
+    ],
+  };
+  const rigless = simulateRun({
+    payload: buildPayload({ tws: 5, hs: 0.7, tp: 8 }),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    maxHours: 4,
+  });
+  assert.equal(rigless.hourly[1].comfortLevel, "rough");
+  assert.equal(rigless.hourly[1].slatting, true);
+
+  const rigged = simulateRun({
+    payload: buildPayload({ tws: 5, hs: 0.7, tp: 8 }),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    matrix: LIGHT_AIR,
+    maxHours: 4,
+  });
+  assert.equal(rigged.hourly[1].sailState, "GENOA_1_MAIN");
+  assert.equal(rigged.hourly[1].comfortLevel, "easy");
+  assert.equal(rigged.hourly[1].slatting, false);
+  // Hour 0 still reads legacy: the rig state is set by the
+  // suggestion step that runs after the comfort evaluation, so the
+  // first hour's canvas is genuinely unknown
+  assert.equal(rigged.hourly[0].slatting, true);
+});
