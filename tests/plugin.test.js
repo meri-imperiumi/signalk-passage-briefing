@@ -187,7 +187,10 @@ describe("plugin", () => {
         { values: [{ path: "network.internet.state", value: "online" }] },
       ],
     });
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await waitFor(
+      () => app2.getErrors().some((e) => /Here refresh failed/.test(e)),
+      5000,
+    );
     // Failures land in the plugin error state, not the status line
     assert.match(app2.getErrors().join("\n"), /Here refresh failed/);
     plugin2.stop();
@@ -1161,8 +1164,21 @@ describe("plugin", () => {
     };
     try {
       // The online transition runs the here refresh, which pulls the
-      // zone XIV chart alongside the weather
-      await new Promise((resolve) => setTimeout(resolve, 80));
+      // zone XIV chart alongside the weather. Poll for the compiled
+      // briefing instead of a fixed sleep: the compile's duration
+      // varies with the mocked fetch chain, and slow runners raced
+      // the old fixed wait into a flake
+      const deadline = Date.now() + 5000;
+      for (;;) {
+        const probe = await call("/api/brief-meta");
+        if (probe.payload?.comfort) {
+          break;
+        }
+        if (Date.now() > deadline) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
       const res = await call("/api/synoptic");
       assert.equal(res.type, "image/png");
       assert.equal(res.body[0], 0x89);
