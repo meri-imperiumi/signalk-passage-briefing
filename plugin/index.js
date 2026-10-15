@@ -2690,6 +2690,17 @@ module.exports = (app) => {
         res.json(db ? db.getSailPreferenceMatrix() : null);
       });
 
+      // Sail inventory (work doc #41): the classified inventory the
+      // proactive downwind recommendations deploy from — empty when
+      // no sailsconfiguration data exists
+      router.get("/api/sails", async (_req, res) => {
+        const configPath = app.config?.configPath ?? app.dataDir;
+        const sails = await readSailsConfiguration(
+          join(configPath, "plugin-config-data", "sailsconfiguration.json"),
+        );
+        res.json({ sails });
+      });
+
       router.get("/api/events", (_req, res) => {
         res.json(db ? db.getSailEvents({ limit: 1000 }) : []);
       });

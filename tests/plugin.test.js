@@ -244,6 +244,47 @@ describe("plugin", () => {
     })();
   });
 
+  test("sail inventory: /api/sails serves the classified inventory", async () => {
+    const app = createMockApp();
+    const dir = app.getDataDirPath();
+    mkdirSync(join(dir, "plugin-config-data"), { recursive: true });
+    writeFileSync(
+      join(dir, "plugin-config-data", "sailsconfiguration.json"),
+      JSON.stringify({
+        configuration: {
+          sails: [
+            { name: "Parasailor", minimumWind: 2.6, maximumWind: 12.9 },
+            { name: "Main", area: 21 },
+          ],
+        },
+      }),
+    );
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+    const route = app.getRoutes().find((r) => r.path === "/api/sails");
+    assert.ok(route, "sails route registered");
+    const res = {
+      code: null,
+      payload: null,
+      status(code) {
+        this.code = code;
+        return this;
+      },
+      json(payload) {
+        this.payload = payload;
+      },
+    };
+    await route.handler({ query: {} }, res);
+    assert.equal(res.code, null);
+    const parasailor = res.payload.sails.find((s) => s.name === "Parasailor");
+    assert.equal(parasailor.downwind, true);
+    assert.equal(parasailor.sailFamily, "parasailor");
+    const main = res.payload.sails.find((s) => s.name === "Main");
+    assert.equal(main.downwind, false);
+    plugin.stop();
+  });
+
   test("here mode: served from cache with mode marker and refreshed online", async () => {
     const { mockOpenMeteo } = require("./openmeteo-mock.js");
     const app = createMockApp();

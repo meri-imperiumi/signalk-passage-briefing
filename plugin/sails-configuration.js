@@ -44,6 +44,38 @@ function normalizeSailName(name) {
 const MS_TO_KNOTS = 1.943844;
 
 /**
+ * Downwind sail families the proactive recommendations know (work doc
+ * #41): the sails that hold pressure when the working canvas slats.
+ * Matched case-insensitively against both the configured `type` and
+ * the human `name`, since inventories vary in which field carries the
+ * family.
+ */
+const DOWNWIND_FAMILIES = [
+  [/PARASAILOR/, "parasailor"],
+  [/GENNAKER/, "gennaker"],
+  [/CODE\s*Z(ERO)?/, "code zero"],
+  [/(ASYM|SPINNAKER)/, "spinnaker"],
+];
+
+/**
+ * Classifies one sail into a downwind family, from its configured
+ * `type` and human `name`.
+ *
+ * @param {{type: ?string, name: string}} sail
+ * @returns {{family: string}|null} Family label, null for working
+ *   sails and unclassifiable entries
+ */
+function classifySail({ type, name }) {
+  const hay = `${type ?? ""} ${name ?? ""}`.toUpperCase();
+  for (const [pattern, family] of DOWNWIND_FAMILIES) {
+    if (pattern.test(hay)) {
+      return { family };
+    }
+  }
+  return null;
+}
+
+/**
  * Loads and normalizes the sail inventory.
  *
  * @param {string} filename - Path to `sailsconfiguration.json`
@@ -66,26 +98,35 @@ async function readSailsConfiguration(filename) {
   }
   return sails
     .filter((sail) => sail && typeof sail.name === "string")
-    .map((sail) => ({
-      id: typeof sail.id === "string" ? sail.id : normalizeSailName(sail.name),
-      name: sail.name,
-      nameKey: normalizeSailName(sail.name),
-      type: typeof sail.type === "string" ? sail.type : null,
-      areaM2: typeof sail.area === "number" ? sail.area : null,
-      minimumWindKnots:
-        typeof sail.minimumWind === "number"
-          ? sail.minimumWind * MS_TO_KNOTS
-          : null,
-      maximumWindKnots:
-        typeof sail.maximumWind === "number"
-          ? sail.maximumWind * MS_TO_KNOTS
-          : null,
-      reefAreasM2: Array.isArray(sail.reefs)
-        ? sail.reefs.filter((area) => typeof area === "number")
-        : [],
-      continuousReefing: sail.continuousReefing === true,
-      active: sail.active !== false,
-    }));
+    .map((sail) => {
+      const family = classifySail(sail);
+      return {
+        id:
+          typeof sail.id === "string" ? sail.id : normalizeSailName(sail.name),
+        name: sail.name,
+        nameKey: normalizeSailName(sail.name),
+        type: typeof sail.type === "string" ? sail.type : null,
+        areaM2: typeof sail.area === "number" ? sail.area : null,
+        minimumWindKnots:
+          typeof sail.minimumWind === "number"
+            ? sail.minimumWind * MS_TO_KNOTS
+            : null,
+        maximumWindKnots:
+          typeof sail.maximumWind === "number"
+            ? sail.maximumWind * MS_TO_KNOTS
+            : null,
+        reefAreasM2: Array.isArray(sail.reefs)
+          ? sail.reefs.filter((area) => typeof area === "number")
+          : [],
+        continuousReefing: sail.continuousReefing === true,
+        active: sail.active !== false,
+        // Downwind classification (work doc #41): the proactive
+        // recommendations deploy these when the working canvas would
+        // slat
+        sailFamily: family?.family ?? null,
+        downwind: family != null,
+      };
+    });
 }
 
 /**
@@ -105,7 +146,9 @@ function sailsMatchingStateKey(sails, sailStateKey) {
 
 module.exports = {
   MS_TO_KNOTS,
+  DOWNWIND_FAMILIES,
   normalizeSailName,
   readSailsConfiguration,
   sailsMatchingStateKey,
+  classifySail,
 };
