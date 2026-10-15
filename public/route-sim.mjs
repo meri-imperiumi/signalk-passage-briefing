@@ -22,6 +22,7 @@
  */
 
 import { meteorNightEvents } from "./components/meteors.mjs";
+import { downwindRecommendations } from "./downwind-sails.mjs";
 import { detectLineCrossings } from "./lines-of-interest.js";
 import {
   bearingRad,
@@ -1581,6 +1582,7 @@ export function simulatePassage({
   performanceFactor,
   notes,
   energyHourly,
+  sails = null,
   watch = null,
   startTime = new Date(),
   departure = null,
@@ -1666,6 +1668,21 @@ export function simulatePassage({
     watch,
   );
 
+  // Proactive downwind sail recommendations (work doc #41): the
+  // nominal plan's hours evaluated against the sail inventory — when
+  // the working canvas would slat and a downwind sail's envelope
+  // covers the conditions, recommend deploying it. Runs once over the
+  // nominal plan, not per perturbed ETA run.
+  const downwind = downwindRecommendations(nominal.hourly ?? [], sails, {
+    squallHours: new Set(
+      (nominal.squallHours ?? []).map((s) => s.hoursFromNow),
+    ),
+    rainHours: new Set((nominal.rainHours ?? []).map((s) => s.hoursFromNow)),
+    convectiveHours: new Set(
+      (nominal.upperAirAnomalies ?? []).map((s) => s.hoursFromNow),
+    ),
+  });
+
   return {
     eta: {
       p10: pct(0),
@@ -1723,6 +1740,8 @@ export function simulatePassage({
           : event;
       })
       .sort((x, y) => x.hoursFromNow - y.hoursFromNow),
+    // Proactive downwind sail deployments (work doc #41)
+    downwindRecommendations: downwind,
     // Territorial waters transitions with their place in the passage
     // schedule (work doc #17); undated when the crossing lies beyond
     // the simulated horizon. Each carries the IANA zone at the
@@ -1897,6 +1916,8 @@ export function filterExceptions(simulationResult, simParams = {}) {
       // Whole-route sail-work queue: recommendations plus the
       // tacks/gybes the plan implies (work doc #5)
       sailChanges: simulationResult.sailEvents ?? [],
+      // Proactive downwind sail deployments (work doc #41)
+      downwindRecommendations: simulationResult.downwindRecommendations ?? [],
       // Whole-route hazard alerts (work doc #18): the unified
       // timeline slices per screen, so the summary carries them all
       hazards: simulationResult.hazardAlerts ?? [],

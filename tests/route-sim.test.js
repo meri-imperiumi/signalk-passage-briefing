@@ -1692,3 +1692,75 @@ test("regime rows and transitions follow the distance-to-land annotations", asyn
   });
   assert.equal(bareRun.hourly[0].regime, "unknown");
 });
+
+test("downwind recommendations fire in the slatting regime on a run (work doc #41)", async () => {
+  const { simulatePassage } = await simPromise;
+  const SAILS = [
+    {
+      name: "Parasailor",
+      downwind: true,
+      sailFamily: "parasailor",
+      minimumWindKnots: 5,
+      maximumWindKnots: 25,
+      active: true,
+    },
+    { name: "Main", downwind: false },
+  ];
+  // Dead run (wind from astern) at 10 kn over the fixture's 1.5 m
+  // swell: the slatting regime the Parasailor fixes. The trade-wind
+  // gusts (tws + 5) stay under the squall bars.
+  const result = simulatePassage({
+    payload: buildPayload({ twd: 180 }),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    sails: SAILS,
+  });
+  const recs = result.downwindRecommendations;
+  assert.ok(recs.length >= 1, JSON.stringify(recs));
+  assert.equal(recs[0].sailName, "Parasailor");
+  assert.ok(recs[0].hoursCount >= 3, `hours ${recs[0].hoursCount}`);
+  // The retract boundary carries its named reason (nightfall breaks
+  // the day stretches by default)
+  assert.ok(
+    recs.every(
+      (r) =>
+        r.retractReason == null ||
+        ["nightfall", "sails drawing", "wind envelope exit"].includes(
+          r.retractReason,
+        ),
+    ),
+    JSON.stringify(recs.map((r) => r.retractReason)),
+  );
+  // The summary carries them for the timeline
+  const { filterExceptions } = await simPromise;
+  const exceptions = filterExceptions(result);
+  assert.deepEqual(exceptions.passageSummary.downwindRecommendations, recs);
+});
+
+test("squally air kills the downwind recommendation (work doc #41)", async () => {
+  const { simulatePassage } = await simPromise;
+  // Gusts at twice the base wind and over the absolute bar: squall
+  // windows the whole way, no deployment is worth it
+  const result = simulatePassage({
+    payload: buildPayload({ twd: 180, gust: 22 }),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    sails: [
+      {
+        name: "Parasailor",
+        downwind: true,
+        minimumWindKnots: 5,
+        maximumWindKnots: 25,
+        active: true,
+      },
+    ],
+  });
+  assert.deepEqual(result.downwindRecommendations, []);
+});
+
+test("no downwind sails in the inventory, no recommendations", async () => {
+  const { simulatePassage } = await simPromise;
+  const result = simulatePassage({
+    payload: buildPayload({ twd: 180 }),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+  });
+  assert.deepEqual(result.downwindRecommendations, []);
+});
