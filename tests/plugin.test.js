@@ -657,6 +657,11 @@ describe("plugin", () => {
   test("briefing routes: refresh caches, briefing serves the cache, offline refuses", async () => {
     const { mockOpenMeteo } = require("./openmeteo-mock.js");
     const app = createMockApp();
+    // The route is active: distances serve for the active route only
+    app.getSelfPath = (path) =>
+      path === "navigation.course.activeRoute"
+        ? { value: { href: "/resources/routes/r1" } }
+        : null;
     app.resourcesApi = {
       async getResource(resType, resId) {
         if (resType === "routes" && resId === "r1") {
@@ -2553,5 +2558,91 @@ test("metarea console: wrong-ocean entries lose the headline to zone bulletins",
     bulletin.blocks.some((b) => b.text.includes("TROUGH")),
     "the Fiji gale warning serves",
   );
+  plugin.stop();
+});
+
+test("routes listing: cached with stale-while-revalidate, distances active-only", async () => {
+  const app = createMockApp();
+  app.getSelfPath = (path) =>
+    path === "navigation.course.activeRoute"
+      ? { value: { href: "/resources/routes/r1" } }
+      : null;
+  let listCalls = 0;
+  app.resourcesApi = {
+    async getResource(resType, resId) {
+      if (resType === "routes" && resId === "r1") {
+        return {
+          name: "Active crossing",
+          feature: {
+            geometry: {
+              coordinates: [
+                [0, 0],
+                [0, 1.5],
+              ],
+            },
+          },
+        };
+      }
+      throw new Error("not found");
+    },
+    async listResources(resType) {
+      if (resType === "routes") {
+        listCalls += 1;
+        return {
+          r1: {
+            name: "Active crossing",
+            feature: {
+              geometry: {
+                coordinates: [
+                  [0, 0],
+                  [0, 1.5],
+                ],
+              },
+            },
+          },
+          stale: {
+            name: "Stale weather route",
+            feature: {
+              geometry: {
+                coordinates: [
+                  [0, 0],
+                  [0, 2],
+                ],
+              },
+            },
+          },
+        };
+      }
+      return {};
+    },
+  };
+  const plugin = pluginFactory(app);
+  plugin.start({});
+  plugin.registerWithRouter(app.router);
+  const call = async (path) => {
+    const route = app.getRoutes().find((r) => r.path === path);
+    const res = {
+      payload: null,
+      json(p) {
+        this.payload = p;
+      },
+    };
+    await route.handler({ query: {} }, res);
+    return res;
+  };
+  // First call pays the listing once
+  const first = await call("/api/routes");
+  assert.equal(listCalls, 1);
+  const active = first.payload.find((r) => r.id === "r1");
+  assert.equal(active.active, true);
+  assert.ok(active.distanceNm > 89 && active.distanceNm < 91);
+  // Inactive routes serve name and id only: no distance computed for
+  // the stale weather routes that accumulate beneath the API
+  const stale = first.payload.find((r) => r.id === "stale");
+  assert.equal(stale.active, false);
+  assert.equal(stale.distanceNm, null);
+  // Second call within the TTL serves the cache: no second listing
+  await call("/api/routes");
+  assert.equal(listCalls, 1);
   plugin.stop();
 });

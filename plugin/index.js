@@ -302,6 +302,18 @@ module.exports = (app) => {
   let teardownStatusTiles = null;
   let teardownNotesProvider = null;
   let notesStore = null;
+  /** Route-list cache (bergie session perf pass): the resources
+   * listing is seconds-slow per call and the list changes rarely —
+   * stale-while-revalidate keeps the picker instant. */
+  const routeListCache = {
+    at: 0,
+    list: [],
+    distances: {},
+    inFlight: null,
+    error: null,
+  };
+  /** Route-list TTL before a background refresh fires. */
+  const ROUTES_CACHE_TTL_MS = 120000;
   /** Publish METAREA blocks as resources/notes (doc #12). */
   let publishNotesEnabled = true;
   /** Track-weather fetch the briefing windows call (work doc #16):
@@ -2897,17 +2909,71 @@ module.exports = (app) => {
               .json({ error: "Resources API not available on this server" });
             return;
           }
-          const routes = await app.resourcesApi.listResources("routes", {});
+          // The resources listing is one of the slowest calls on the
+          // server (a second or three per request even for a handful
+          // of routes — the store layer re-reads everything, and
+          // stale weather-routing routes accumulate beneath it). The
+          // list changes rarely, so serve the cache immediately and
+          // refresh in the background past the TTL: every UI load
+          // after the first is instant, nobody waits for a re-list
+          // they did not ask for.
+          const now = Date.now();
+          const fresh = now - routeListCache.at < ROUTES_CACHE_TTL_MS;
+          const refresh = () => {
+            if (routeListCache.inFlight) {
+              return;
+            }
+            routeListCache.inFlight = (async () => {
+              try {
+                const routes = await app.resourcesApi.listResources(
+                  "routes",
+                  {},
+                );
+                const activeId = activeRouteId(observations[ACTIVE_ROUTE_PATH]);
+                routeListCache.list = Object.entries(routes || {}).map(
+                  ([id, route]) => ({
+                    id,
+                    name: route?.name ?? id,
+                  }),
+                );
+                // Distance only for the active route: inactive
+                // weather-routing routes can be numerous, and the
+                // picker needs nothing from them but name and id
+                const active = Object.entries(routes || {}).find(
+                  ([id]) => id === activeId,
+                );
+                if (active) {
+                  routeListCache.distances[active[0]] = routeDistanceNm(
+                    active?.[1]?.feature?.geometry?.coordinates ?? [],
+                  );
+                }
+                routeListCache.at = Date.now();
+              } catch (error) {
+                routeListCache.error = error.message;
+              } finally {
+                routeListCache.inFlight = null;
+              }
+            })();
+          };
+          if (routeListCache.list.length === 0) {
+            // First call ever: pay the listing once so the picker has
+            // its routes from the first paint
+            refresh();
+            await routeListCache.inFlight;
+          } else if (!fresh) {
+            // Stale-while-revalidate: answer from cache now
+            refresh();
+          }
+          // The active flag and distance are stamped at serve time:
+          // the cached list itself must not go stale on a route switch
           const activeId = activeRouteId(observations[ACTIVE_ROUTE_PATH]);
-          const list = Object.entries(routes || {}).map(([id, route]) => ({
-            id,
-            name: route?.name ?? id,
-            distanceNm: routeDistanceNm(
-              route?.feature?.geometry?.coordinates ?? [],
-            ),
-            active: id === activeId,
-          }));
-          res.json(list);
+          res.json(
+            routeListCache.list.map((entry) => ({
+              ...entry,
+              distanceNm: routeListCache.distances[entry.id] ?? null,
+              active: entry.id === activeId,
+            })),
+          );
         } catch (error) {
           res.status(500).json({ error: error.message });
         }
