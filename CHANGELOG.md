@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-15
+
 ### Added
 - Regime awareness in the route timeline and strategic headline (work doc #39): the fetch engine annotates each waypoint with its distance to land via the maritime-zones reader (tiles cached on disk, failures degrade to absent), the simulator classifies each hour's waters (archipelago/coastal/offshore) and fires timeline entries when they change as the boat moves, day checkpoints name their regime, and the strategic ETA table gains a Waters row with the per-day run-length summary.
 - Route-list performance (bergie session perf pass): /api/routes serves from a stale-while-revalidate cache — the server's resources listing costs seconds per call regardless of payload, the list changes rarely, and only the active route's distance is computed (inactive weather-routing routes can be numerous and need nothing but name and id). The active flag and distance are stamped at serve time so a route switch reads correctly immediately.
