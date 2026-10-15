@@ -15,6 +15,7 @@ const { join } = require("node:path");
 
 const {
   collectFeatures,
+  coalesceWarningBlocks,
   parseAdvisory,
   extractGeometry,
   filterBulletin,
@@ -721,11 +722,93 @@ test("FQPS01 NFFN 2026-10-15: TD01F tracked, Neiafu vessel sees the depression",
     "OCR'd latitude bound no longer false-keeps the area",
   );
 
-  // The gale warning area polygon itself is far north-east: dropped
+  // The gale warning area polygon itself is far north-east: the whole
+  // warning dies with it — no floating header or trailer fragments
+  assert.ok(
+    !texts.some((t) => t.includes("GALE WARNING 004")),
+    "gale header coalesced into its area and dropped with it",
+  );
+  assert.ok(
+    !texts.some((t) => t.includes("AREA OF GALES")),
+    "gale trailer dropped with its area",
+  );
   assert.ok(
     !texts.some((t) => t.includes("AREA BOUNDED BY")),
     "gale area dropped for Neiafu",
   );
+
+  // A vessel inside the gale area reads the complete warning as one
+  const inside = filterBulletin({
+    rawText: raw,
+    source: "spool",
+    track: [[-163, -6]],
+  }).blocks;
+  const warning = inside.find((b) => /GALE WARNING 004/.test(b.text));
+  assert.ok(warning, "complete gale warning kept for a vessel inside it");
+  assert.equal(warning.geometryType, "polygon");
+  assert.match(warning.text, /AREA BOUNDED BY/);
+  assert.match(warning.text, /CANCELS AND REPLACES/);
+});
+
+test("warning-section prose fragments coalesce into their anchored area", () => {
+  const coalesce = coalesceWarningBlocks;
+  // NFFN gale-warning style: header, area, trailer, cancel notice
+  const merged = coalesce([
+    "PART 1 : WARNING GALE WARNING 004 ISSUED FROM RSMC NADI Oct 151845\nUTC.",
+    "IN THE AREA BOUNDED BY 05S 162W 07S 162W 07S 163W 07S 166W 06S 176W\n05S 162W, EXPECT NORTHWESTERLY WINDS UP TO 35 KNOTS.",
+    "AREA OF GALES SLOW MOVING.",
+    "THIS WARNING CANCELS AND REPLACES WARNING 003.",
+  ]);
+  assert.equal(merged.length, 1);
+  assert.match(merged[0], /^PART 1 : WARNING/);
+  assert.match(merged[0], /AREA BOUNDED BY/);
+  assert.match(merged[0], /CANCELS AND REPLACES/);
+
+  // The trailer merges into the area above it, not the area below
+  const two = coalesce([
+    "GALE WARNING 001 ISSUED FROM RSMC NADI 121800 UTC.",
+    "AREA BOUNDED BY 05S 162W 07S 162W 07S 163W 07S 166W 06S 176W 05S 162W. GALE 35 KNOTS.",
+    "AREA OF GALES SLOW MOVING.",
+    "AREA BOUNDED BY 08S 165W 10S 165W 10S 168W 08S 168W 08S 165W. GALE 40 KNOTS.",
+  ]);
+  assert.equal(two.length, 2);
+  assert.match(two[0], /AREA OF GALES/);
+  assert.match(two[0], /35 KNOTS/);
+  assert.doesNotMatch(two[0], /40 KNOTS/);
+  assert.match(two[1], /40 KNOTS/);
+
+  // A text-only warning (no anchored block) passes through unchanged:
+  // the conservative keep stands
+  const textOnly = coalesce(["GALE WARNING. EXPECT 35 KNOTS OVER WATERS."]);
+  assert.deepEqual(textOnly, ["GALE WARNING. EXPECT 35 KNOTS OVER WATERS."]);
+
+  // A bounds-only area (no coordinate pairs at all) anchors itself
+  // instead of merging into a coordinate-bearing neighbour: merging
+  // would trade its bbox for the neighbour's chain
+  const boundsFirst = coalesce([
+    ".WARNINGS.",
+    ".HURRICANE RACHEL NEAR 19.8N 112.5W 977 MB AT 2100 UTC OCT 03.\nTROPICAL STORM FORCE WINDS WITHIN 100 NM W SEMICIRCLE...130 NM NE",
+    "QUADRANT AND 120 NM SE QUADRANT. ELSEWHERE FROM 16N TO 22N\nBETWEEN 107W AND 116W WINDS 20 TO 33 KT.",
+  ]);
+  assert.equal(boundsFirst.length, 2);
+  // The heading rides with the bounds block (its nearest anchor)
+  assert.match(boundsFirst[1], /^\.WARNINGS\./);
+  assert.match(boundsFirst[1], /BETWEEN 107W AND 116W/);
+  // The coordinate-bearing half stays its own conservative keep
+  assert.match(boundsFirst[0], /RACHEL NEAR 19\.8N 112\.5W/);
+  assert.doesNotMatch(boundsFirst[0], /BETWEEN 107W/);
+
+  // A coordinate-bearing block that places to null is never swallowed:
+  // with no anchored block in the section at all, everything keeps the
+  // conservative passthrough
+  const stranded = coalesce([
+    ".WARNINGS.",
+    ".HURRICANE RACHEL NEAR 19.8N 112.5W 977 MB AT 2100 UTC OCT 03.\nMAXIMUM SUSTAINED WINDS 70 KT.",
+    "SEAS 4 M OR GREATER WITHIN 180 NM W SEMICIRCLE WITH SEAS TO 11 M.",
+  ]);
+  assert.equal(stranded.length, 3);
+  assert.match(stranded[1], /RACHEL NEAR/);
+  assert.match(stranded[2], /SEAS 4 M OR GREATER/);
 });
 
 test("FQPS01 NFFN 2026-10-15: a track into the TD wind field keeps the band", () => {

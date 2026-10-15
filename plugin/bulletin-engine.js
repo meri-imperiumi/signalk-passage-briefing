@@ -169,14 +169,15 @@ function shouldRetainSubject(subject, retained = RETAINED_SUBJECTS) {
 }
 
 /**
- * Segments cleaned bulletin text into semantic blocks: first on
- * GMDSS section anchors (PART 1 WARNING, SYNOPSIS AND FORECAST,
- * …), then on blank lines within each section.
+ * Segments cleaned bulletin text into sections on GMDSS section
+ * anchors (PART 1 WARNING, SYNOPSIS AND FORECAST, …), then each
+ * section into semantic blocks on blank lines. The preamble before
+ * the first anchor is its own section.
  *
  * @param {string} text - Cleaned bulletin text
- * @returns {string[]} Non-empty blocks
+ * @returns {string[][]} Sections of non-empty blocks
  */
-function segmentBlocks(text) {
+function segmentSections(text) {
   const lines = text.split(/\r?\n/);
   const sections = [];
   let current = [];
@@ -191,8 +192,8 @@ function segmentBlocks(text) {
     sections.push(current);
   }
   // Blank-line split within sections, keeping substantive paragraphs
-  const blocks = [];
-  for (const section of sections) {
+  return sections.map((sectionLines) => {
+    const blocks = [];
     let paragraph = [];
     const flush = () => {
       const text = paragraph.join("\n").trim();
@@ -201,7 +202,7 @@ function segmentBlocks(text) {
       }
       paragraph = [];
     };
-    for (const line of section) {
+    for (const line of sectionLines) {
       if (line.trim().length === 0) {
         flush();
       } else {
@@ -209,8 +210,106 @@ function segmentBlocks(text) {
       }
     }
     flush();
+    return blocks;
+  });
+}
+
+/**
+ * Segments cleaned bulletin text into semantic blocks: first on
+ * GMDSS section anchors (PART 1 WARNING, SYNOPSIS AND FORECAST,
+ * …), then on blank lines within each section.
+ *
+ * @param {string} text - Cleaned bulletin text
+ * @returns {string[]} Non-empty blocks
+ */
+function segmentBlocks(text) {
+  return segmentSections(text).flat();
+}
+
+/**
+ * Whether a section is a warning section: its anchor line (the
+ * section's first block's first line) is a GMDSS anchor naming
+ * WARNING — `PART 1 : WARNING`, `.WARNINGS.` — as opposed to the
+ * synopsis/forecast sections where per-paragraph filtering is the
+ * point.
+ *
+ * @param {string[]} sectionBlocks - One section's blocks
+ * @returns {boolean}
+ */
+function isWarningSection(sectionBlocks) {
+  const anchor = sectionBlocks[0]?.split(/\r?\n/, 1)[0]?.trim() ?? "";
+  return SECTION_ANCHORS.test(anchor) && /WARNING/i.test(anchor);
+}
+
+/**
+ * Coalesces a warning section's prose fragments into their anchored
+ * area block: a bare "PART 1 : WARNING GALE WARNING 004 ISSUED FROM
+ * RSMC NADI…" header or an "AREA OF GALES SLOW MOVING." trailer
+ * carries no geography of its own, so it must live or die with the
+ * area paragraph it describes — a discarded area must not leave its
+ * warning header floating on the console unanchored, and a kept one
+ * should read as the complete warning.
+ *
+ * Anchored means the block extracts geometry of its own — including
+ * cardinal-bounds areas, which carry no coordinate pairs at all
+ * ("BETWEEN 107W AND 116W"); those must anchor themselves, not merge
+ * into a coordinate-bearing neighbour and lose their bounds. Only
+ * pure-prose fragments (no coordinate pairs at all) attach, so a
+ * spliced stray point can never corrupt a neighbour's chain; a block
+ * with coordinates that still places to null keeps its own
+ * conservative severe-keyword keep. Sections with no anchored block
+ * (a text-only warning) pass through unchanged.
+ *
+ * @param {string[]} sectionBlocks - One section's blocks
+ * @param {Map<string, number[][]>} [features] - `collectFeatures` map
+ * @returns {string[]} Blocks with fragments merged into their
+ *   nearest anchored block, original order preserved
+ */
+function coalesceWarningBlocks(sectionBlocks, features = new Map()) {
+  const anchored = [];
+  sectionBlocks.forEach((block, i) => {
+    if (extractGeometry(block, features) != null) {
+      anchored.push(i);
+    }
+  });
+  if (anchored.length === 0) {
+    return sectionBlocks;
   }
-  return blocks;
+  // Block → the anchored block it will be emitted with. Anchors own
+  // themselves; attachable fragments (no coordinate pairs) join their
+  // nearest anchor, ties to the earlier one — a trailer describes the
+  // area above it. Coordinate-bearing blocks that place to null stay
+  // unowned: they emit as their own blocks, never merged.
+  const owner = new Map();
+  for (const i of anchored) {
+    owner.set(i, i);
+  }
+  for (let i = 0; i < sectionBlocks.length; i++) {
+    if (owner.has(i) || parseCoordinatePoints(sectionBlocks[i]).length > 0) {
+      continue;
+    }
+    const target = anchored.reduce((best, candidate) =>
+      Math.abs(candidate - i) < Math.abs(best - i) ? candidate : best,
+    );
+    owner.set(i, target);
+  }
+  const outputs = [];
+  for (let i = 0; i < sectionBlocks.length; i++) {
+    const anchor = owner.get(i);
+    if (anchor === undefined) {
+      outputs.push(sectionBlocks[i]); // Unowned: keep as its own block
+      continue;
+    }
+    if (anchor !== i) {
+      continue; // Emitted with its group's first member below
+    }
+    const members = [...owner.entries()]
+      .filter(([, target]) => target === i)
+      .map(([index]) => index)
+      .sort((a, b) => a - b);
+    outputs.push(members.map((index) => sectionBlocks[index]).join("\n\n"));
+  }
+  return outputs;
 }
 
 /**
@@ -1357,7 +1456,12 @@ function filterBulletin({
   }
   const features = collectFeatures(cleaned);
   const header = cleaned.split(/\r?\n/, 1)[0]?.trim() ?? "";
-  const blocks = segmentBlocks(cleaned)
+  const blocks = segmentSections(cleaned)
+    .flatMap((sectionBlocks) =>
+      isWarningSection(sectionBlocks)
+        ? coalesceWarningBlocks(sectionBlocks, features)
+        : sectionBlocks,
+    )
     .map((blockText) => {
       const geometry = extractGeometry(blockText, features);
       if (!intersectsTrack(geometry, track)) {
@@ -1639,6 +1743,9 @@ module.exports = {
   navtexSubject,
   shouldRetainSubject,
   segmentBlocks,
+  segmentSections,
+  isWarningSection,
+  coalesceWarningBlocks,
   lookupFeature,
   resolveNamedEndpoints,
   stormDeclarationPoint,
