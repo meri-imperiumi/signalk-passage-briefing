@@ -47,8 +47,11 @@ const MS_TO_KNOTS = 1.943844;
  * Downwind sail families the proactive recommendations know (work doc
  * #41): the sails that hold pressure when the working canvas slats.
  * Matched case-insensitively against both the configured `type` and
- * the human `name`, since inventories vary in which field carries the
- * family.
+ * the human `name`. The `type` field is the sailsconfiguration
+ * plugin's fixed enum (staysail, headsail, jib, genoa, spinnaker,
+ * gennaker, mainsail, lug, mizzen, steadying sail) — of which
+ * spinnaker and gennaker are downwind; code zeros get typed
+ * headsail/genoa and rely on their name, as do parasailors.
  */
 const DOWNWIND_FAMILIES = [
   [/PARASAILOR/, "parasailor"],

@@ -35,10 +35,28 @@ test("classifySail recognizes the downwind families from type and name", () => {
     family: "spinnaker",
   });
 
+  // The sailsconfiguration `type` enum pins the vocabulary: of its
+  // ten values, spinnaker and gennaker are the downwind ones
+  assert.deepEqual(classifySail({ name: "A2", type: "spinnaker" }), {
+    family: "spinnaker",
+  });
+  assert.deepEqual(
+    classifySail({ name: "Symmetric spinnaker", type: "spinnaker" }),
+    { family: "spinnaker" },
+  );
+
   // Working sails and unknown entries classify as nothing
   assert.equal(classifySail({ name: "Main", type: "mainsail" }), null);
-  assert.equal(classifySail({ name: "Genoa 1", type: "headsail" }), null);
-  assert.equal(classifySail({ name: "Storm jib", type: "stormsail" }), null);
+  assert.equal(classifySail({ name: "Genoa 1", type: "genoa" }), null);
+  assert.equal(classifySail({ name: "Storm jib", type: "staysail" }), null);
+  assert.equal(classifySail({ name: "Jib", type: "jib" }), null);
+  assert.equal(classifySail({ name: "Headsail", type: "headsail" }), null);
+  assert.equal(classifySail({ name: "Mizzen", type: "mizzen" }), null);
+  assert.equal(classifySail({ name: "Lug", type: "lug" }), null);
+  assert.equal(
+    classifySail({ name: "Steadiersail", type: "steadying sail" }),
+    null,
+  );
 });
 
 test("readSailsConfiguration marks downwind sails in the inventory", async () => {
