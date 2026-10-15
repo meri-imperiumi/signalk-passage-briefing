@@ -94,6 +94,15 @@ test("geometryPosition: bbox center, wrapped line midpoint", () => {
   });
   assert.equal(line.longitude, -180);
   assert.equal(line.latitude, -10.6667);
+
+  // A named-system declaration places at the analysed position
+  // itself: TD01F's note belongs on the storm centre
+  const point = geometryPosition({
+    type: "point",
+    coordinates: [-163.4, -10.1],
+  });
+  assert.ok(Math.abs(point.longitude + 163.4) < 1e-9);
+  assert.equal(point.latitude, -10.1);
 });
 
 test("noteTitle: first sentence, truncated on a word boundary", () => {

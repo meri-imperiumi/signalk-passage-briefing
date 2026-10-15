@@ -125,11 +125,18 @@ function stripBoilerplate(text) {
       kept.push(line);
     }
   }
-  return kept
-    .join("\n")
-    .replace(/\bGULF OF AMERICA\b/gi, "GULF OF MEXICO")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return (
+    kept
+      .join("\n")
+      .replace(/\bGULF OF AMERICA\b/gi, "GULF OF MEXICO")
+      // OCR misread of the digit zero as a letter O ("NORTH OF O5S"):
+      // an O directly opening a number run is always a zero in these
+      // all-caps bulletins, and an unparsed latitude bound widens the
+      // area to pole-to-pole
+      .replace(/\bO(?=\d)/g, "0")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  );
 }
 
 /**
@@ -415,11 +422,158 @@ const FEATURE_DECLARATION =
 const FEATURE_NAME = "(CF|L|H|[A-Z]\\d+)";
 
 /**
+ * Tropical-system declarations the feature map also recognizes:
+ * `TROPICAL DEPRESSION 01F`, `SEVERE TROPICAL CYCLONE KEILA`. The
+ * name may lead with digits (Nadi's `01F` numbering) or be a word.
+ */
+const STORM_DECLARATION =
+  /^(?:SEVERE\s+)?TROPICAL\s+(?:DEPRESSION|CYCLONE|STORM)\s+([A-Z0-9]{2,})\b/i;
+
+/** Name-shaped token referenced from other blocks: prefixed storm
+ * shorthand (`TD01F`), named features (`T1`, `L1`, `CF`), and word
+ * storm names (`KEILA`). Only used where the matched name is then
+ * resolved against the feature map, so prose that happens to match
+ * the shape is left untouched. */
+const FEATURE_REFERENCE =
+  "T[DCS]\\s*[A-Z0-9]{2,}|[A-Z]\\d+|\\d{1,2}[A-Z]|CF|L\\d*|H\\d*|[A-Z]{3,}";
+
+/**
+ * Resolves a referenced feature name to its defining points: direct
+ * map hit first, then the storm shorthand prefixes stripped (`TD01F`
+ * names the system collected as `01F`).
+ *
+ * @param {string} name - Referenced name
+ * @param {Map<string, number[][]>} features - `collectFeatures` map
+ * @returns {number[][]|null}
+ */
+function lookupFeature(name, features) {
+  const key = String(name ?? "")
+    .toUpperCase()
+    .replace(/\s+/g, "");
+  if (features.has(key)) {
+    return features.get(key);
+  }
+  const stripped = key.replace(/^(?:TD|TC|TS)/, "");
+  return stripped !== key && features.has(stripped)
+    ? features.get(stripped)
+    : null;
+}
+
+/**
+ * Formats a point back into bulletin coordinate shorthand, for
+ * splicing named references into chains: `[-163.4, -10.1]` reads
+ * `10.1S 163.4W`.
+ *
+ * @param {number[]} point - [lon, lat]
+ * @returns {string}
+ */
+function formatCoordPair([lon, lat]) {
+  return `${Math.abs(lat)}${lat < 0 ? "S" : "N"} ${Math.abs(lon)}${lon < 0 ? "W" : "E"}`;
+}
+
+/**
+ * Rewrites chain endpoints that reference a collected feature into
+ * that feature's coordinates: `TROUGH T2 FM TD01F TO 15S 166W` reads
+ * as if the TD's analysed position were written out. Unresolvable
+ * names are left verbatim (they parse as prose and are ignored).
+ *
+ * @param {string} text - Block text
+ * @param {Map<string, number[][]>} features - `collectFeatures` map
+ * @returns {string} Text with resolved references spliced in
+ */
+function resolveNamedEndpoints(text, features) {
+  if (
+    !features ||
+    features.size === 0 ||
+    !/\b(?:FM|TO|AND)\s+[A-Z0-9]/i.test(text)
+  ) {
+    return text;
+  }
+  return text.replace(
+    new RegExp(`\\b(FM|TO|AND)\\s+(${FEATURE_REFERENCE})`, "gi"),
+    (match, keyword, name) => {
+      const points = lookupFeature(name, features);
+      // Multi-point features anchor at their first point: the chain
+      // endpoint convention of NFFN-style troughs
+      return points ? `${keyword} ${formatCoordPair(points[0])}` : match;
+    },
+  );
+}
+
+/**
+ * The analysed position of a declared tropical system, from its
+ * declaring block: `TROPICAL DEPRESSION 01F CENTER [1000HPA] WAS
+ * ANALYSED NEAR 10.1S 163.4W` → `[-163.4, -10.1]`. Falls back to the
+ * block's first coordinate pair. Null when the block declares a
+ * system but carries no position.
+ *
+ * @param {string} text - Block text
+ * @returns {number[]|null} [lon, lat]
+ */
+function stormDeclarationPoint(text) {
+  if (!STORM_DECLARATION.test(String(text ?? "").trim())) {
+    return null;
+  }
+  const near = text.match(
+    /NEAR\s+(\d+(?:\.\d+)?)\s*([NS])\s+(\d+(?:\.\d+)?)\s*([EW])/i,
+  );
+  if (near) {
+    return [
+      hemisphereDegrees(near[3], near[4].toUpperCase()),
+      hemisphereDegrees(near[1], near[2].toUpperCase()),
+    ];
+  }
+  const points = parseCoordinatePoints(text);
+  return points.length > 0 ? points[0] : null;
+}
+
+/**
+ * Geometry for a block that distances itself from a collected
+ * feature: `WITHIN 180 NAUTICAL MILES OF TD01F`. A single-point
+ * feature (a storm centre) becomes a padded bbox; a chain feature
+ * (a trough referenced from its own block) keeps its line with the
+ * stated band. Null when no buffer is stated or no feature resolves.
+ *
+ * @param {string} text - Block text
+ * @param {Map<string, number[][]>} features - `collectFeatures` map
+ * @param {number|null} bufferNm - Stated band width
+ * @returns {object|null} `extractGeometry`-compatible shape
+ */
+function stormReferenceGeometry(text, features, bufferNm) {
+  if (bufferNm == null) {
+    return null;
+  }
+  const match = text.match(
+    new RegExp(`\\b(?:OF|AROUND)\\s+(${FEATURE_REFERENCE})\\b`, "i"),
+  );
+  if (!match) {
+    return null;
+  }
+  const points = lookupFeature(match[1], features);
+  if (!points) {
+    return null;
+  }
+  if (points.length === 1) {
+    const [lon, lat] = points[0];
+    const latPad = bufferNm / 60;
+    const lonPad = latPad / Math.max(0.2, Math.cos((lat * Math.PI) / 180));
+    return {
+      type: "bbox",
+      coordinates: [lon - lonPad, lat - latPad, lon + lonPad, lat + latPad],
+    };
+  }
+  return { type: "line", coordinates: points, bufferNm };
+}
+
+/**
  * Collects named synoptic features from a full bulletin: blocks that
  * declare a feature and carry its defining coordinate chain —
  * `COLD FRONT CF 16S 150W 20S 140W 25S 132W` — mapped name →
- * chain. Later blocks reference these by name in their bounds
- * ("WEST OF CF", "BETWEEN 150W AND CF").
+ * chain. Tropical systems (`TROPICAL DEPRESSION 01F … NEAR 10.1S
+ * 163.4W`) are collected as single points under both the bare name
+ * and the `TD`/`TC`/`TS` prefixed shorthands other blocks reference.
+ * Later blocks reference these by name in their bounds ("WEST OF
+ * CF", "BETWEEN 150W AND CF", "WITHIN 180 NM OF TD01F").
  *
  * @param {string} text - Cleaned bulletin text
  * @returns {Map<string, number[][]>} name → [[lon, lat], …]
@@ -427,7 +581,20 @@ const FEATURE_NAME = "(CF|L|H|[A-Z]\\d+)";
 function collectFeatures(text) {
   const features = new Map();
   for (const block of segmentBlocks(text)) {
-    const match = block.trim().match(FEATURE_DECLARATION);
+    const trimmed = block.trim();
+    const storm = trimmed.match(STORM_DECLARATION);
+    if (storm) {
+      const point = stormDeclarationPoint(block);
+      if (point) {
+        const key = storm[1].toUpperCase();
+        features.set(key, [point]);
+        for (const prefix of ["TD", "TC", "TS"]) {
+          features.set(`${prefix}${key}`, [point]);
+        }
+      }
+      continue;
+    }
+    const match = trimmed.match(FEATURE_DECLARATION);
     if (!match || features.has(match[1].toUpperCase())) {
       continue;
     }
@@ -620,11 +787,23 @@ function composeFeatureBounds(text, features) {
  *   {type: "bbox", coordinates: number[]}|null}
  */
 function extractGeometry(blockText, features = new Map()) {
+  // A storm declaration block is its own geometry: the analysed
+  // position of the named system, typed "point"
+  if (STORM_DECLARATION.test(blockText.trim())) {
+    const point = stormDeclarationPoint(blockText);
+    if (point) {
+      return { type: "point", coordinates: point };
+    }
+  }
   const bandMatch = blockText.match(
     /WITHIN\s+(\d+(?:\.\d+)?)\s*(?:NM|NAUTICAL\s+MILES?)\b/i,
   );
   const bufferNm = bandMatch ? Number.parseFloat(bandMatch[1]) : null;
-  const polygon = parseCoordinateChain(blockText);
+  // Chain endpoints may name a collected feature ("… TO TD01F",
+  // "FM TD01F TO 15S 166W"): splice its position into the chain
+  const polygon = parseCoordinateChain(
+    resolveNamedEndpoints(blockText, features),
+  );
   if (polygon) {
     return {
       // Two coordinate pairs are a trough/front axis line, three or
@@ -633,6 +812,12 @@ function extractGeometry(blockText, features = new Map()) {
       coordinates: polygon,
       ...(bufferNm != null ? { bufferNm } : {}),
     };
+  }
+  // "WITHIN 180 NAUTICAL MILES OF TD01F": the block distances itself
+  // from a collected feature instead of carrying coordinates
+  const reference = stormReferenceGeometry(blockText, features, bufferNm);
+  if (reference) {
+    return reference;
   }
   const featurePolygon = composeFeatureBounds(blockText, features);
   if (featurePolygon) {
@@ -776,6 +961,11 @@ function intersectsTrack(geometry, track) {
     return true;
   }
   if (track.length === 0) {
+    return true;
+  }
+  // Named-system declarations plot as a point and are kept wherever
+  // the track is: a depression may develop or head toward the route
+  if (geometry.type === "point") {
     return true;
   }
   if (geometry.type === "polygon" || geometry.type === "line") {
@@ -1443,11 +1633,16 @@ module.exports = {
   RETAINED_SUBJECTS,
   SEVERE_KEYWORDS,
   SECTION_ANCHORS,
+  STORM_DECLARATION,
   stripBoilerplate,
   hasSevereKeyword,
   navtexSubject,
   shouldRetainSubject,
   segmentBlocks,
+  lookupFeature,
+  resolveNamedEndpoints,
+  stormDeclarationPoint,
+  stormReferenceGeometry,
   ukhoBlocksFromWarnings,
   hemisphereDegrees,
   parseCoordinatePoints,

@@ -44,7 +44,8 @@ function noteTitle(text) {
  * safe: longitudes are unfolded relative to the first coordinate
  * before averaging, then normalized back.
  *
- * @param {object} geometry - block geometry (bbox or polygon/line)
+ * @param {object} geometry - block geometry (bbox, point, or
+ *   polygon/line)
  * @returns {{latitude: number, longitude: number}|null}
  */
 function geometryPosition(geometry, ref) {
@@ -53,6 +54,16 @@ function geometryPosition(geometry, ref) {
   }
   /** Normalizes a longitude to (-180, 180]. */
   const normalizeLon = (lon) => ((((lon + 180) % 360) + 360) % 360) - 180;
+
+  // A named-system declaration plots at the analysed position itself:
+  // the note belongs on the storm centre, not an averaged ring
+  if (geometry.type === "point") {
+    const [lon, lat] = geometry.coordinates;
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) {
+      return null;
+    }
+    return { latitude: lat, longitude: normalizeLon(lon) };
+  }
 
   if (geometry.type === "bbox") {
     const [minLon, minLat, maxLon, maxLat] = geometry.coordinates;

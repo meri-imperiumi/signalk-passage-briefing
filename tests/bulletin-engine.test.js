@@ -244,6 +244,92 @@ test("unknown feature names fall back to the hemisphere bbox", () => {
   });
 });
 
+test("tropical systems are collected as named points under bare and prefixed names", () => {
+  const features = collectFeatures(
+    [
+      "TROPICAL DEPRESSION 01F CENTER [1000HPA] WAS ANALYSED NEAR 10.1S",
+      "163.4W AT 151800UTC. POSITION POOR. TD01F SLOW MOVING.",
+    ].join("\n"),
+  );
+  const point = [[-163.4, -10.1]];
+  assert.deepEqual(features.get("01F"), point);
+  assert.deepEqual(features.get("TD01F"), point); // Reference shorthand
+  assert.deepEqual(features.get("TC01F"), point);
+});
+
+test("a declared tropical system is its own point geometry", () => {
+  const geometry = extractGeometry(
+    "TROPICAL DEPRESSION 01F CENTER [1000HPA] WAS ANALYSED NEAR 10.1S\n163.4W AT 151800UTC. POSITION POOR. TD01F SLOW MOVING.",
+  );
+  assert.equal(geometry.type, "point");
+  assert.deepEqual(geometry.coordinates, [-163.4, -10.1]);
+});
+
+test("WITHIN nm of a named storm resolves to a padded bbox", () => {
+  const features = collectFeatures(
+    "TROPICAL DEPRESSION 01F CENTER [1000HPA] WAS ANALYSED NEAR 10.1S\n163.4W AT 151800UTC.",
+  );
+  const geometry = extractGeometry(
+    "WITHIN 180 NAUTICAL MILES OF TD01F, EXPECT CLOCKWISE WINDS 20 TO 25\nKNOTS. ROUGH SEAS.",
+    features,
+  );
+  assert.equal(geometry.type, "bbox");
+  // 180nm ≈ 3° of latitude around the TD centre
+  approx(geometry.coordinates[1], -13.1);
+  approx(geometry.coordinates[3], -7.1);
+  // A Neiafu vessel (18.6S) is outside the TD's wind field
+  assert.equal(
+    bboxIntersectsTrack(geometry.coordinates, [[-173.98, -18.65]]),
+    false,
+  );
+  // A vessel inside the field is caught
+  assert.equal(bboxIntersectsTrack(geometry.coordinates, [[-163, -11]]), true);
+});
+
+test("chain endpoints referencing named systems splice their positions", () => {
+  const features = collectFeatures(
+    "TROPICAL DEPRESSION 01F CENTER [1000HPA] WAS ANALYSED NEAR 10.1S\n163.4W AT 151800UTC. TD01F SLOW MOVING.",
+  );
+  // NFFN convergence-zone style: chain ends at the depression
+  const cz = extractGeometry(
+    "CONVERGENCE ZONE CZ1 04S 179E 01S 170W 05S 161W TO TD01F SLOW MOVING.",
+    features,
+  );
+  assert.equal(cz.type, "polygon");
+  assert.ok(
+    cz.coordinates.some(([lon, lat]) => lon === -163.4 && lat === -10.1),
+    "TD endpoint spliced into the chain",
+  );
+
+  // Trough style: the chain starts at the depression
+  const trough = extractGeometry(
+    "TROUGH T2 FM TD01F TO 15S 166W 19S 160W 18S 150W SLOW MOVING.",
+    features,
+  );
+  assert.deepEqual(trough.coordinates[0], [-163.4, -10.1]);
+  assert.deepEqual(trough.coordinates[1], [-166, -15]);
+});
+
+test("OCR misread of zero as O still parses the latitude bound", () => {
+  // Real NFFN transmission artifact: "NORTH OF O5S" — without the
+  // normalization the latitude bound is lost and the area widens to
+  // pole-to-pole, keeping far-away waters on the console
+  const cleaned = stripBoilerplate(
+    "IN THE AREA NORTH OF O5S AND BETWEEN 175W AND 160W, EXPECT WEST WINDS.",
+  );
+  assert.match(cleaned, /NORTH OF 05S/);
+  const geometry = extractGeometry(cleaned);
+  assert.deepEqual(geometry, {
+    type: "bbox",
+    coordinates: [-175, -5, -160, 90],
+  });
+  // A Neiafu vessel (18.6S) is not north of 05S: outside
+  assert.equal(
+    bboxIntersectsTrack(geometry.coordinates, [[-173.98, -18.65]]),
+    false,
+  );
+});
+
 test("cardinal bounds translate to a bbox", () => {
   // SOUTH OF x means lat ≤ x: the box extends to the south pole
   assert.deepEqual(
@@ -601,6 +687,64 @@ const readFixture = (name) =>
     join(__dirname, "fixtures", "bulletins", name),
     "utf8",
   );
+
+test("FQPS01 NFFN 2026-10-15: TD01F tracked, Neiafu vessel sees the depression", () => {
+  const raw = readFixture("fqps01-nffn-2026-10-15.txt");
+  // Neiafu, Tonga at anchor
+  const neiafu = [[-173.98, -18.65]];
+  const result = filterBulletin({
+    rawText: raw,
+    source: "spool",
+    track: neiafu,
+  });
+  const texts = result.blocks.map((b) => b.text);
+
+  // The tropical depression is tracked even though its analysed
+  // position sits ~650nm east: it may develop or head toward the boat
+  const depression = result.blocks.find((b) =>
+    /TROPICAL DEPRESSION 01F/.test(b.text),
+  );
+  assert.ok(depression, "TD01F declaration kept");
+  assert.equal(depression.geometryType, "point");
+  assert.deepEqual(depression.geometry.coordinates, [-163.4, -10.1]);
+
+  // The TD wind-field block places itself around the TD centre: far
+  // from Neiafu, so it does not ride along as an unplaceable fragment
+  assert.ok(
+    !texts.some((t) => t.includes("WITHIN 180 NAUTICAL MILES OF TD01F")),
+    "TD wind band dropped for a vessel outside it",
+  );
+
+  // "NORTH OF O5S" (OCR zero) must not widen into a pole-to-pole band
+  assert.ok(
+    !texts.some((t) => t.includes("NORTH OF")),
+    "OCR'd latitude bound no longer false-keeps the area",
+  );
+
+  // The gale warning area polygon itself is far north-east: dropped
+  assert.ok(
+    !texts.some((t) => t.includes("AREA BOUNDED BY")),
+    "gale area dropped for Neiafu",
+  );
+});
+
+test("FQPS01 NFFN 2026-10-15: a track into the TD wind field keeps the band", () => {
+  const raw = readFixture("fqps01-nffn-2026-10-15.txt");
+  // Heading east toward the depression
+  const result = filterBulletin({
+    rawText: raw,
+    source: "spool",
+    track: [
+      [-173.98, -18.65],
+      [-163, -11],
+    ],
+  });
+  const texts = result.blocks.map((b) => b.text);
+  assert.ok(
+    texts.some((t) => t.includes("WITHIN 180 NAUTICAL MILES OF TD01F")),
+    "TD wind band kept once the track enters it",
+  );
+});
 
 test("NHC Atlantic HSF (HSFAT2): compact coordinates, Gulf naming, issue metadata", () => {
   const raw = readFixture("hsfat2-knhc-2026-10-03.txt");

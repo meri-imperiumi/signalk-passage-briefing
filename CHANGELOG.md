@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- Tropical-system tracking in the METAREA bulletin pipeline: RSMC Nadi-style declarations (`TROPICAL DEPRESSION 01F CENTER [1000HPA] WAS ANALYSED NEAR 10.1S 163.4W`) are collected as named features and kept on any track — a depression 650 nm east may still develop or head toward the boat, so the console shows the system wherever it is in the bulletin's waters. Its analysed position becomes the block's geometry (new `point` type, plotted as the note position by the notes publisher), blocks that distance themselves from it by name (`WITHIN 180 NAUTICAL MILES OF TD01F, EXPECT CLOCKWISE WINDS…`) now place themselves as a padded area around the centre instead of surviving as unplaceable fragments, and chain endpoints referencing it (`… 05S 161W TO TD01F`, `TROUGH T2 FM TD01F TO …`) splice the position into the chain. Named trough/front endpoints (`TO L2 TO L1`) resolve the same way. Fixture: the 2026-10-15 FQPS01 NFFN bulletin.
+
+### Fixed
+- OCR misread of the digit zero as a letter O (`NORTH OF O5S`) lost the latitude bound and widened the area to a pole-to-pole longitude band, keeping far-away waters on the console; an O opening a number run in these all-caps bulletins is always a zero.
+
 ### Fixed
 - Solar eclipses at the sunrise edge were silently dropped: the solar-eclipse visibility gate compared the refracted Sun's centre altitude against the horizon, so an eclipse whose peak lands while the Sun's centre is still below the horizon but its upper limb has risen (refracted centre −0.11° on the 2021-06-10 partial from the US east coast) never reached the briefing even though it passes the sunrise-based horizon check the rest of the module's rise/set semantics use. The gate now uses Almanac's `sunIsUp` helper (bumped `@openwaters/almanac` to ^0.10.0 for it); the cloud gate and failure fallbacks are unchanged, as are the nautical-night and lunar-eclipse twilight thresholds.
 
