@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Solar eclipses at the sunrise edge were silently dropped: the solar-eclipse visibility gate compared the refracted Sun's centre altitude against the horizon, so an eclipse whose peak lands while the Sun's centre is still below the horizon but its upper limb has risen (refracted centre −0.11° on the 2021-06-10 partial from the US east coast) never reached the briefing even though it passes the sunrise-based horizon check the rest of the module's rise/set semantics use. The gate now uses Almanac's `sunIsUp` helper (bumped `@openwaters/almanac` to ^0.10.0 for it); the cloud gate and failure fallbacks are unchanged, as are the nautical-night and lunar-eclipse twilight thresholds.
+
 ## [0.11.1] - 2026-10-15
 
 ### Added

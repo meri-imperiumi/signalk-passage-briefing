@@ -365,6 +365,28 @@ describe("almanac migration extras (work doc #35)", () => {
     assert.match(solar[0].description, /Total solar eclipse/);
   });
 
+  test("solar eclipse at the sunrise edge: 2021-06-10 partial from the US east coast", () => {
+    // The Sun's refracted centre is below the horizon (−0.11°) at the
+    // 09:32 UTC peak, but its upper limb has risen: the sunrise-based
+    // horizon check keeps the eclipse, the old centre-altitude check
+    // silently dropped it
+    const events = ce.eclipseEvents({
+      from: new Date("2021-06-10T00:00:00Z"),
+      hours: 24,
+      lat: 40,
+      lon: -75.25,
+      cloudCoverAt: () => 0,
+    });
+    const solar = events.filter((e) => e.kind === "solarEclipse");
+    assert.equal(solar.length, 1);
+    assert.ok(
+      solar[0].timestamp.startsWith("2021-06-10T09:32"),
+      `peak stamp ${solar[0].timestamp}`,
+    );
+    assert.match(solar[0].description, /Partial solar eclipse/);
+    assert.equal(solar[0].tactical, true);
+  });
+
   test("cloud gate applies to eclipses", () => {
     const overcast = ce.eclipseEvents({
       from: new Date("2026-03-01T00:00:00Z"),

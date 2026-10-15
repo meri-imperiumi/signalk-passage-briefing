@@ -50,6 +50,7 @@ const {
   solarEclipses,
   sunAltAz,
   sunEvents,
+  sunIsUp,
 } = require("@openwaters/almanac");
 
 // The meteor-shower calendar and its night-anchored evaluation are
@@ -739,7 +740,10 @@ function moonPhaseEvents({ from, hours }) {
  * eclipse is a bright event — visible through twilight, not the
  * nautical gate the faint events use) and the cloud gate. Solar:
  * almanac returns only eclipses the observer can see, gated on the
- * Sun above the horizon at peak and the cloud gate.
+ * Sun above the horizon at peak and the cloud gate — `sunIsUp`, the
+ * sunrise horizon (upper limb risen) rather than the Sun's centre,
+ * so a centre-below-horizon sunrise-edge eclipse is not silently
+ * dropped.
  *
  * @param {object} params
  * @param {Date} params.from - Window start
@@ -791,7 +795,7 @@ function eclipseEvents({ from, hours, lat, lon, cloudCoverAt }) {
     for (const eclipse of solarEclipses(from, end, observer)) {
       const peak = eclipse.peak;
       try {
-        if (sunAltAz(peak, observer).altDeg <= 0) {
+        if (!sunIsUp(peak, observer)) {
           continue;
         }
       } catch (_error) {

@@ -44,7 +44,7 @@
     "node": ">=22.12.0"
   },
   "dependencies": {
-    "@openwaters/almanac": "^0.8.0",
+    "@openwaters/almanac": "^0.10.0",
     "@openwaters/maritime-zones": "^0.2.1",
     "satellite.js": "^7.1.0"
   },
