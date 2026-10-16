@@ -99,9 +99,21 @@ strong.sev {
           text-overflow: ellipsis;
         }
         .sky span { margin-right: 10px; }
+        .card-head {
+          display: flex; align-items: center; justify-content: space-between;
+          gap: 8px;
+        }
+        .card-head h2 { margin: 0; }
+        .refresh {
+          min-height: 36px; padding: 6px 12px; flex: none;
+        }
+        .refresh:disabled { opacity: 0.5; }
       </style>
       <section class="sk-card theme-teal">
-        <h2>Next 24 Hours</h2>
+        <div class="card-head">
+          <h2>Next 24 Hours</h2>
+          <button id="refresh" class="refresh">Update now</button>
+        </div>
         <div class="now">
           <span class="label">AWS</span>
           <span class="value" id="aws">—</span>
@@ -128,6 +140,9 @@ strong.sev {
     this._awsEl = this.shadowRoot.getElementById("aws");
     this._tierEl = this.shadowRoot.getElementById("tier");
     this._cinfo = this.shadowRoot.getElementById("cinfo");
+    this._refreshEl = this.shadowRoot.getElementById("refresh");
+    this._refreshEl.disabled = !this._online;
+    this._refreshEl.addEventListener("click", () => this.onRefresh?.());
     this._spark = this.shadowRoot.getElementById("spark");
     this._departureControl =
       this.shadowRoot.getElementById("departure-control");
@@ -229,6 +244,27 @@ strong.sev {
    * The root owns the departure state; the control reports changes.
    */
   onDepartureChange = null;
+
+  /**
+   * Online state: the refresh button only fires while the link is up
+   * (the server refuses offline refreshes).
+   *
+   * @param {boolean} online
+   */
+  setOnline(online) {
+    this._online = online === true;
+    if (this._refreshEl) {
+      this._refreshEl.disabled = !this._online;
+    }
+  }
+
+  /**
+   * Refresh callback (set by the root component): posts the route
+   * refresh and reloads — the tactical view otherwise has no way to
+   * recompile between scheduled windows, and a cached payload
+   * predating a new payload field would render stale forever.
+   */
+  onRefresh = null;
 
   /**
    * Briefing payload (work docs #3, #17): carries the space events
