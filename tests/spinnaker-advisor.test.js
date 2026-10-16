@@ -68,12 +68,33 @@ test("the gates fire in order with honest reasons", () => {
 });
 
 test("the crew's own numbers shape the constants", () => {
-  // The crew's deployments fold down to ~60 deg TWA and they fly in
-  // a third of the hours after dark — the gates must not be stricter
-  // than the practice they were calibrated from
-  assert.equal(DOWNWIND_MIN_TWA_DEG, 60);
+  // Downwind sails are deep: the default floor sits at 90 and the
+  // per-class floors carry the crew's stated 130 (Parasailor); they
+  // fly a third of their hours after dark
+  assert.equal(DOWNWIND_MIN_TWA_DEG, 90);
   assert.equal(DOWNWIND_FILL_MIN_AWS_KNOTS, 2);
   assert.equal(DOWNWIND_MIN_WINDOW_HOURS, 3);
+});
+
+test("the per-class TWA floor overrides the default", () => {
+  // The Parasailor floor is 130: a 110 deg hour is reaching water
+  // no sail aboard covers
+  assert.equal(
+    evaluateDownwindSail({
+      ...base,
+      twaDeg: 110,
+      envelope: { minTwaDeg: 130 },
+    }),
+    "point of sail",
+  );
+  assert.equal(
+    evaluateDownwindSail({
+      ...base,
+      twaDeg: 135,
+      envelope: { minTwaDeg: 130 },
+    }),
+    null,
+  );
 });
 
 test("night hours continue an open window but never open one", () => {

@@ -21,12 +21,14 @@
  */
 
 /**
- * TWA (deg, folded 0-180) from which a downwind sail is the reaching
- * canvas: the trigger is the slatting regime on a reach or run, not a
- * beat. The crew's own deployments fold down to ~60° (a Parasailor
- * broad-reaches happily), so the gate sits there, not at 90.
+ * TWA (deg, folded 0-180) default floor for a downwind sail, when
+ * the class carries none of its own. Downwind sails are deep: the
+ * crew's Parasailor deployments fold at p10 142°, poled-out 133°,
+ * and bergie states 130° as the Parasailor floor — a reaching sail
+ * (code zero / asymmetric) would cover the 60-130° band and carries
+ * its own floor when the inventory grows one.
  */
-export const DOWNWIND_MIN_TWA_DEG = 60;
+export const DOWNWIND_MIN_TWA_DEG = 90;
 
 /**
  * Apparent wind (kn) below which a downwind sail will not fill even
@@ -96,7 +98,7 @@ export function evaluateDownwindSail({
   if (!Number.isFinite(twsKnots) || !Number.isFinite(twaDeg)) {
     return "unknown";
   }
-  if (Math.abs(twaDeg) < DOWNWIND_MIN_TWA_DEG) {
+  if (Math.abs(twaDeg) < (envelope.minTwaDeg ?? DOWNWIND_MIN_TWA_DEG)) {
     return "point of sail";
   }
   const minTws = envelope.minTwsKnots;
@@ -115,10 +117,7 @@ export function evaluateDownwindSail({
   if (!Number.isFinite(awsKnots) || awsKnots < DOWNWIND_FILL_MIN_AWS_KNOTS) {
     return "below fill floor";
   }
-  if (
-    Number.isFinite(hsMeters) &&
-    hsMeters > DOWNWIND_HS_CEILING_M
-  ) {
+  if (Number.isFinite(hsMeters) && hsMeters > DOWNWIND_HS_CEILING_M) {
     return "sea state";
   }
   if (night && !nightOk) {

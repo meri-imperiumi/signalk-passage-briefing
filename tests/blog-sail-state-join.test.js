@@ -3,7 +3,7 @@ const assert = require("node:assert");
 const { sailEvents, joinSailState } = require("../bin/blog-sail-state-join.js");
 
 test("parses the observed logbook event styles", () => {
-  const events = sailEvents([
+  const { events } = sailEvents([
     {
       datetime: "2024-04-09T00:28:00Z",
       text: "Motor stopped, sailing with Main, Genoa 1",
@@ -22,7 +22,7 @@ test("parses the observed logbook event styles", () => {
 });
 
 test("narrative prose mentioning sails does not create events", () => {
-  const events = sailEvents([
+  const { events } = sailEvents([
     {
       datetime: "2024-04-09T12:51:00Z",
       text: "Between 2 fronts. As the wind started dropping from the easterly we took the sails down before it got too hairy.",
@@ -58,7 +58,7 @@ test("carries the latest event forward to underway hours", () => {
 });
 
 test("recognizes canvas-adjustment and poling phrasing", () => {
-  const events = sailEvents([
+  const { events } = sailEvents([
     {
       datetime: "2022-07-10T23:05:00Z",
       text: "Sail(main) to 1st reef to arrive later.",
@@ -76,7 +76,7 @@ test("recognizes canvas-adjustment and poling phrasing", () => {
 });
 
 test("recognizes the structured Sails set: phrasing", () => {
-  const events = sailEvents([
+  const { events } = sailEvents([
     {
       datetime: "2026-04-03T08:03:00Z",
       text: "Sails set: Staysail, Genoa 1 (10% furled). Main was slatting too much",
@@ -92,4 +92,26 @@ test("recognizes the structured Sails set: phrasing", () => {
     "sailing with Staysail, Genoa 1 (10% furled). Main was slatting too much",
   );
   assert.equal(events[1].text, "sailing with Parasailor");
+});
+
+test("extracts the crew's watch handovers for deployment anchoring", () => {
+  const { watchEvents } = sailEvents([
+    { datetime: "2024-04-09T20:00:00Z", text: "Bergie on watch" },
+    {
+      datetime: "2024-04-10T00:02:00Z",
+      text: "Suski on watch. Dolphins at sunset!",
+    },
+    {
+      datetime: "2024-04-10T04:21:00Z",
+      text: "Suski on duty, poled out jib. Swapped flags",
+    },
+  ]);
+  assert.deepEqual(
+    watchEvents.map((w) => [w.iso.slice(11, 16), w.who]),
+    [
+      ["20:00", "Bergie"],
+      ["00:02", "Suski"],
+      ["04:21", "Suski"],
+    ],
+  );
 });

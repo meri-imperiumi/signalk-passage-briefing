@@ -81,6 +81,15 @@ async function main() {
     }
     days.push(JSON.parse(line));
   }
+  // Watch handovers per day ("X on watch" log lines): deployments
+  // anchor to the crew's actual watch schedule the way production
+  // anchors to signalk-watch-schedule. Day sails have no watch
+  // events and fall through to unanchored — the rule is
+  // self-classifying, no day-sail special case needed.
+  const watchEventsByDate = new Map();
+  for (const day of days) {
+    watchEventsByDate.set(day.date, day.watchEvents ?? []);
+  }
 
   // Two downwind behavior classes from the crew's own logbook: the
   // dedicated downwind sail (Parasailor) and the poled-out working
@@ -113,6 +122,11 @@ async function main() {
     values[
       Math.min(values.length - 1, Math.max(0, Math.floor(p * values.length)))
     ];
+  // Per-class TWA floors (bergie: the Parasailor is a downwind sail,
+  // not flown below ~130°; the logged distributions agree — the
+  // reaching band 60-130° has no sail aboard, so no recommendation
+  // lives there until the inventory grows one)
+  const STATED_MIN_TWA = { parasailor: 130, "poled-out": 120 };
   // Ownership eras (bergie session): the Parasailor came aboard in
   // spring 2022 — earlier than every logged deployment, which is the
   // lazy-crew asymmetry in its purest form (two years of unlogged
@@ -121,9 +135,18 @@ async function main() {
   const OWNED_FROM = { parasailor: "2022-04-01", "poled-out": null };
   const envelopes = {};
   const classEras = {};
+  const twaPercentiles = {};
   for (const [className, hours] of Object.entries(flownByClass)) {
     const tws = hours
       .map((h) => h.twsKnots)
+      .filter((v) => Number.isFinite(v))
+      .sort((a, b) => a - b);
+    const twas = hours
+      .map((h) =>
+        h.twaRad == null
+          ? null
+          : Math.abs(((h.twaRad * 180) / Math.PI + 540) % 360) - 180,
+      )
       .filter((v) => Number.isFinite(v))
       .sort((a, b) => a - b);
     envelopes[className] = {
@@ -134,6 +157,11 @@ async function main() {
       // stretches upward, not downward
       minTwsKnots: Math.round(percentile(tws, 0.1) * 10) / 10,
       maxTwsKnots: Math.round(tws.at(-1) * 10) / 10,
+      // The stated TWA floor wins over the logged distribution
+      minTwaDeg: Math.max(
+        STATED_MIN_TWA[className] ?? 0,
+        Math.round(percentile(twas, 0.1)),
+      ),
     };
     const ownedFrom = OWNED_FROM[className];
     classEras[className] = {
@@ -268,9 +296,22 @@ async function main() {
     })),
   );
   const recommendedHours = new Set();
+  const anchoredDeploys = [];
   for (const window of windows) {
+    // The deploy moment anchors to the next watch handover within
+    // the window when the crew keeps one (multi-day passages);
+    // without one the deployment is immediate (day sails, no watch
+    // rotation — full crew, sail changes whenever)
+    const date = new Date(window.startMs).toISOString().slice(0, 10);
+    const watches = (watchEventsByDate.get(date) ?? [])
+      .map((w) => Date.parse(w.iso))
+      .filter((t) => t >= window.startMs && t <= window.endMs);
+    const deployMs = watches.length > 0 ? Math.min(...watches) : window.startMs;
+    anchoredDeploys.push(deployMs);
     for (const hour of window.hours_) {
-      recommendedHours.add(hour.hourIso);
+      if (hour.hourMs >= deployMs) {
+        recommendedHours.add(hour.hourIso);
+      }
     }
   }
 

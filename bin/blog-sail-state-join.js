@@ -68,6 +68,14 @@ const MOTORING_RE = /^(?:motor(?:ing)?\s+on|motoring)\b/i;
 const SAILS_UP_RE = /^sails?\s+up\b/i;
 
 /**
+ * Watch handovers: "Bergie on watch", "Suski on duty, poled out
+ * jib." — the crew's actual watch schedule for the backtest's
+ * deployment anchoring (production anchors to signalk-watch-schedule
+ * instead).
+ */
+const WATCH_RE = /\b([A-Z][a-zA-Z]+)\s+on\s+(?:watch|duty)\b/i;
+
+/**
  * Parses the sail-state events from a day's log entries.
  *
  * @param {Array<object>} entries - Log entries ascending by datetime
@@ -75,6 +83,7 @@ const SAILS_UP_RE = /^sails?\s+up\b/i;
  */
 function sailEvents(entries) {
   const events = [];
+  const watchEvents = [];
   for (const entry of entries) {
     for (const rawLine of String(entry.text ?? "").split(/\r?\n/)) {
       const line = rawLine.trim();
@@ -117,8 +126,15 @@ function sailEvents(entries) {
         events.push({ iso: entry.datetime, state: "sailing", text: line });
       }
     }
+    const watch = WATCH_RE.exec(entry.text ?? "");
+    if (watch) {
+      watchEvents.push({ iso: entry.datetime, who: watch[1] });
+    }
   }
-  return events.sort((a, b) => a.iso.localeCompare(b.iso));
+  return {
+    events: events.sort((a, b) => a.iso.localeCompare(b.iso)),
+    watchEvents: watchEvents.sort((a, b) => a.iso.localeCompare(b.iso)),
+  };
 }
 
 /**
@@ -160,7 +176,8 @@ async function fetchLogEntries(fromIso, toIso) {
  * @returns {object} The mutated day record
  */
 function joinSailState(day, entries) {
-  const events = sailEvents(entries);
+  const { events, watchEvents } = sailEvents(entries);
+  day.watchEvents = watchEvents;
   for (const hour of day.hours ?? []) {
     if (hour.sailState !== undefined) {
       continue; // already joined
