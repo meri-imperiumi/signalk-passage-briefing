@@ -71,7 +71,7 @@ const RETAINED_SUBJECTS = "ABE";
  * leading-dot NWS style (`.WARNINGS.`, `.SYNOPSIS AND FORECAST.`)
  * is tolerated alongside the GMDSS `PART 1` headings. */
 const SECTION_ANCHORS =
-  /^\.?\s*(PARTS?\s+\d+\b.*(?:WARNING|SYNOPSIS|FORECAST)|WARNINGS?|SYNOPSIS(?:\s+AND\s+FORECAST)?|FORECAST)\b/i;
+  /^(?:\.?\s*PARTS?\s+\d+\b.*(?:WARNING|SYNOPSIS|FORECAST)\b|\.?\s*(?:WARNINGS?|SYNOPSIS(?:\s+AND\s+FORECAST)?|FORECAST)\s*\.?\s*$)/i;
 
 /**
  * Strips transmission routing boilerplate: NAVTEX `ZCZC`/`NNNN`
@@ -134,6 +134,16 @@ function stripBoilerplate(text) {
       // all-caps bulletins, and an unparsed latitude bound widens the
       // area to pole-to-pole
       .replace(/\bO(?=\d)/g, "0")
+      // NFFN spells the hemispheres out in cyclone positions ("NEAR
+      // 12.1 SOUTH 163.0 WEST", line-wrapped anywhere): contracted to
+      // the letter form the coordinate and NEAR parsers expect. Only
+      // the paired lat+lon form is rewritten, so prose like "5 SOUTH
+      // OF T1" is left alone.
+      .replace(
+        /\b(\d+(?:\.\d+)?)\s+(NORTH|SOUTH)\s+(\d+(?:\.\d+)?)\s+(EAST|WEST)\b/gi,
+        (_text, lat, latWord, lon, lonWord) =>
+          `${lat}${latWord[0].toUpperCase()} ${lon}${lonWord[0].toUpperCase()}`,
+      )
       .replace(/\n{3,}/g, "\n\n")
       .trim()
   );
@@ -267,9 +277,14 @@ function isWarningSection(sectionBlocks) {
  */
 function coalesceWarningBlocks(sectionBlocks, features = new Map()) {
   const anchored = [];
+  const pointAnchors = [];
   sectionBlocks.forEach((block, i) => {
-    if (extractGeometry(block, features) != null) {
+    const geometry = extractGeometry(block, features);
+    if (geometry != null) {
       anchored.push(i);
+      if (geometry.type === "point") {
+        pointAnchors.push(i);
+      }
     }
   });
   if (anchored.length === 0) {
@@ -280,6 +295,10 @@ function coalesceWarningBlocks(sectionBlocks, features = new Map()) {
   // nearest anchor, ties to the earlier one — a trailer describes the
   // area above it. Coordinate-bearing blocks that place to null stay
   // unowned: they emit as their own blocks, never merged.
+  // Quadrant wind-radii lines ("WITHIN 95 NAUTICAL MILES IN SE
+  // QUADRANT") describe the storm, not the nearest area: they prefer
+  // a declared storm's point anchor so they keep or drop with the
+  // warning they belong to.
   const owner = new Map();
   for (const i of anchored) {
     owner.set(i, i);
@@ -288,7 +307,11 @@ function coalesceWarningBlocks(sectionBlocks, features = new Map()) {
     if (owner.has(i) || parseCoordinatePoints(sectionBlocks[i]).length > 0) {
       continue;
     }
-    const target = anchored.reduce((best, candidate) =>
+    const candidates =
+      /QUADRANT/i.test(sectionBlocks[i]) && pointAnchors.length > 0
+        ? pointAnchors
+        : anchored;
+    const target = candidates.reduce((best, candidate) =>
       Math.abs(candidate - i) < Math.abs(best - i) ? candidate : best,
     );
     owner.set(i, target);
@@ -431,14 +454,27 @@ function parseCardinalBounds(text) {
   // full word is matched first so the abbreviation cannot swallow it
   // (an unmatched N OF left the band pole-to-pole and a North Pacific
   // synopsis intersected every water on its longitude band).
-  const southOf = text.match(/(?:SOUTH|S)\s+OF\s+(\d+(?:\.\d+)?)\s*([NS])/i);
+  const southOf = text.match(/\b(?:SOUTH|S)\s+OF\s+(\d+(?:\.\d+)?)\s*([NS])/i);
   if (southOf) {
     maxLat = hemisphereDegrees(southOf[1], southOf[2].toUpperCase());
     found = true;
   }
-  const northOf = text.match(/(?:NORTH|N)\s+OF\s+(\d+(?:\.\d+)?)\s*([NS])/i);
+  const northOf = text.match(/\b(?:NORTH|N)\s+OF\s+(\d+(?:\.\d+)?)\s*([NS])/i);
   if (northOf) {
     minLat = hemisphereDegrees(northOf[1], northOf[2].toUpperCase());
+    found = true;
+  }
+  // NFFN states the latitude band as a pair — with the occasional
+  // stray "OF" ("IN THE AREA BETWEEN OF 16S AND 22S"). Longitude
+  // BETWEEN pairs (EW) are matched separately below.
+  const latBand = text.match(
+    /BETWEEN\s+(?:OF\s+)?(\d+(?:\.\d+)?)\s*([NS])\s+AND\s+(\d+(?:\.\d+)?)\s*([NS])/i,
+  );
+  if (latBand) {
+    const a = hemisphereDegrees(latBand[1], latBand[2].toUpperCase());
+    const b = hemisphereDegrees(latBand[3], latBand[4].toUpperCase());
+    minLat = Math.max(minLat, Math.min(a, b));
+    maxLat = Math.min(maxLat, Math.max(a, b));
     found = true;
   }
   // The equator is a real bound in NWS area headers ("NORTH PACIFIC
@@ -606,14 +642,23 @@ function resolveNamedEndpoints(text, features) {
  * block's first coordinate pair. Null when the block declares a
  * system but carries no position.
  *
+ * The anchored-per-paragraph test (not the whole-block test) keeps
+ * coalesced warning blocks working: they lead with the "PART 1 :
+ * WARNING STORM WARNING 012" header, and a whole-block anchored test
+ * would type the merged block geometry-less — dropping the whole
+ * storm warning for any vessel outside the forecast line.
+ *
  * @param {string} text - Block text
  * @returns {number[]|null} [lon, lat]
  */
 function stormDeclarationPoint(text) {
-  if (!STORM_DECLARATION.test(String(text ?? "").trim())) {
+  const declaring = String(text ?? "")
+    .split(/\n\n/)
+    .find((paragraph) => STORM_DECLARATION.test(paragraph.trim()));
+  if (!declaring) {
     return null;
   }
-  const near = text.match(
+  const near = declaring.match(
     /NEAR\s+(\d+(?:\.\d+)?)\s*([NS])\s+(\d+(?:\.\d+)?)\s*([EW])/i,
   );
   if (near) {
@@ -622,7 +667,7 @@ function stormDeclarationPoint(text) {
       hemisphereDegrees(near[1], near[2].toUpperCase()),
     ];
   }
-  const points = parseCoordinatePoints(text);
+  const points = parseCoordinatePoints(declaring);
   return points.length > 0 ? points[0] : null;
 }
 
@@ -643,7 +688,10 @@ function stormReferenceGeometry(text, features, bufferNm) {
     return null;
   }
   const match = text.match(
-    new RegExp(`\\b(?:OF|AROUND)\\s+(${FEATURE_REFERENCE})\\b`, "i"),
+    new RegExp(
+      `\\b(?:OF|AROUND)\\s+(?:(?:SEVERE\\s+)?TROPICAL\\s+(?:CYCLONE|STORM|DEPRESSION|HURRICANE|TYPHOON)\\s+)?(${FEATURE_REFERENCE})\\b`,
+      "i",
+    ),
   );
   if (!match) {
     return null;
@@ -887,12 +935,13 @@ function composeFeatureBounds(text, features) {
  */
 function extractGeometry(blockText, features = new Map()) {
   // A storm declaration block is its own geometry: the analysed
-  // position of the named system, typed "point"
-  if (STORM_DECLARATION.test(blockText.trim())) {
-    const point = stormDeclarationPoint(blockText);
-    if (point) {
-      return { type: "point", coordinates: point };
-    }
+  // position of the named system, typed "point". Declarations are
+  // found per paragraph, so a coalesced block leading with the
+  // "PART 1 : WARNING STORM WARNING 012" header still types as its
+  // storm's point.
+  const stormPoint = stormDeclarationPoint(blockText);
+  if (stormPoint) {
+    return { type: "point", coordinates: stormPoint };
   }
   const bandMatch = blockText.match(
     /WITHIN\s+(\d+(?:\.\d+)?)\s*(?:NM|NAUTICAL\s+MILES?)\b/i,

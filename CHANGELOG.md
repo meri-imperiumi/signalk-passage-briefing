@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- A TC Wati storm warning (FQPS01 NFFN 2026-10-16 fixture) parsed geometry-less and was dropped whole by the track filter — the one bulletin the console must never miss. Four parsing gaps fixed: the GMDSS section anchor matched any line starting with "FORECAST" (the warning's own "FORECAST POSITION NEAR…" line split the warning section in half, leaving gale headers and cancel notices floating unanchored), so the bare `FORECAST`/`WARNINGS`/`SYNOPSIS` anchors now require heading-only lines; NFFN spells the hemispheres out in cyclone positions ("NEAR 12.1 SOUTH 163.0 WEST", line-wrapped anywhere), which defeated both the NEAR extraction and the coordinate parser — the paired lat+lon form is now contracted to the letter form in boilerplate stripping, leaving prose ("5 SOUTH OF T1") untouched; storm-declaration detection runs per paragraph inside the block, so a coalesced block leading with the "PART 1 : WARNING STORM WARNING 012" header still types as its storm's point (kept on any track) instead of merging into a geometry-less discard; and quadrant wind-radii lines ("WITHIN 95 NAUTICAL MILES IN SE QUADRANT") coalesce onto the storm's point anchor rather than the nearest area, so the full wind field rides with the warning. The result: a vessel far outside the warning areas still reads the complete storm warning, a vessel inside the gale polygon reads it whole (header, area, cancel notice), and "WITHIN 300 NAUTICAL MILES OF TROPICAL CYCLONE WATI CENTER" resolves through the collected feature instead of stopping at "OF TROPICAL".
+- The `S OF`/`N OF` latitude abbreviations matched mid-word — "BETWEEN OF 16S" read as "…BETWEEn OF 16S" and clamped the band to 16S — so NFFN's stray-"OF" latitude-band phrasing ("IN THE AREA BETWEEN OF 16S AND 22S AND BETWEEN 156W AND 169W") widened to a pole-to-pole band. The abbreviations now require a word boundary, and the BETWEEN latitude pair parses as the band it states (16S–22S).
+
 ## [0.12.3] - 2026-10-16
 
 ## [0.12.2] - 2026-10-16

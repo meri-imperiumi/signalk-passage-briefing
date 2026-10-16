@@ -26,6 +26,7 @@ const {
   resolveBulletinSource,
   segmentBlocks,
   shouldRetainSubject,
+  stormDeclarationPoint,
   stripBoilerplate,
   bboxIntersectsTrack,
   ringContains,
@@ -826,6 +827,107 @@ test("FQPS01 NFFN 2026-10-15: a track into the TD wind field keeps the band", ()
   assert.ok(
     texts.some((t) => t.includes("WITHIN 180 NAUTICAL MILES OF TD01F")),
     "TD wind band kept once the track enters it",
+  );
+});
+
+/** TC Wati storm warning (2026-10-16): the bulletin that must never
+ * be missed — spelled-out hemispheres ("NEAR 12.1 SOUTH 163.0 WEST"),
+ * a GMDSS header merged onto the declaration by coalescing, and the
+ * NFFN quadrant wind lines. */
+test("FQPS01 NFFN 2026-10-16: TC Wati storm warning reaches a distant vessel", () => {
+  const raw = readFixture("fqps01-nffn-2026-10-16.txt");
+  const neiafu = [[-173.98, -18.65]];
+  const result = filterBulletin({
+    rawText: raw,
+    source: "spool",
+    track: neiafu,
+  });
+
+  // "ISSUED BY FIJI METEOROLOGICAL SERVICE Oct 162000 UTC." parses
+  assert.equal(result.issuedAt, "2026-10-16T20:00:00.000Z");
+  assert.match(result.issuer, /FIJI METEOROLOGICAL SERVICE/);
+
+  // The whole storm warning coalesces into one point-typed block:
+  // the declared position must survive the spelled-out hemispheres
+  const storm = result.blocks.find((b) => /TROPICAL CYCLONE WATI/.test(b.text));
+  assert.ok(storm, "storm warning block kept");
+  assert.equal(storm.geometryType, "point");
+  assert.deepEqual(storm.geometry.coordinates, [-163, -12.1]);
+  // Header, movement, wind field and quadrant lines ride along
+  assert.match(storm.text, /STORM WARNING 012/);
+  assert.match(storm.text, /REPEAT POSITION 12\.1S 163\.0W/);
+  assert.match(storm.text, /INCREASING TO\n60 KNOTS/);
+  assert.match(storm.text, /WITHIN 95 NAUTICAL MILES IN SE QUADRANT/);
+
+  // The gale warning polygon is far from Neiafu: it dies whole, no
+  // floating header or cancel notice left behind
+  const texts = result.blocks.map((b) => b.text);
+  assert.ok(
+    !texts.some((t) => t.includes("GALE WARNING 011")),
+    "gale warning coalesced into its area and dropped with it",
+  );
+  assert.ok(
+    !texts.some((t) => t.includes("AREA OF GALES")),
+    "gale trailer dropped with its area",
+  );
+  assert.ok(
+    !texts.some((t) => t.includes("FORECAST POSITION NEAR 13.2S")),
+    "forecast line dropped for a vessel outside it",
+  );
+});
+
+test("FQPS01 NFFN 2026-10-16: named wind field and gale area place for vessels inside them", () => {
+  const raw = readFixture("fqps01-nffn-2026-10-16.txt");
+
+  // A vessel within 300 nm of the Wati centre reads the wind-field
+  // paragraph: the named reference ("OF TROPICAL CYCLONE WATI
+  // CENTER") resolves through the collected feature
+  const inBand = filterBulletin({
+    rawText: raw,
+    source: "spool",
+    track: [[-163, -15]],
+  });
+  const band = inBand.blocks.find((b) =>
+    /WITHIN 300 NAUTICAL MILES OF TROPICAL CYCLONE WATI CENTER/.test(b.text),
+  );
+  assert.ok(band, "Wati wind-field band kept for a vessel inside it");
+  assert.equal(band.geometryType, "bbox");
+
+  // A vessel inside the gale polygon reads the complete warning
+  const inGale = filterBulletin({
+    rawText: raw,
+    source: "spool",
+    track: [[-160, -15]],
+  });
+  const gale = inGale.blocks.find((b) => /GALE WARNING 011/.test(b.text));
+  assert.ok(gale, "complete gale warning kept for a vessel inside it");
+  assert.equal(gale.geometryType, "polygon");
+  assert.match(gale.text, /AREA BOUNDED BY 13S 159W/);
+  assert.match(gale.text, /AREA OF GALES/);
+  assert.match(gale.text, /CANCELS AND REPLACES/);
+});
+
+test("spelled-out hemispheres contract to the letter form", () => {
+  // The NFFN cyclone-position phrasing, line-wrapped as received
+  const cleaned = stripBoilerplate(
+    "TROPICAL CYCLONE WATI CENTRE 994HPA CATEGORY 1 WAS LOCATED NEAR 12.1\nSOUTH 163.0 WEST AT 161800 UTC.",
+  );
+  assert.match(cleaned, /NEAR 12\.1S 163\.0W AT 161800 UTC\./);
+
+  // Prose numbers with a spelled direction stay prose: only the
+  // paired lat+lon form is rewritten
+  assert.doesNotMatch(stripBoilerplate("VISIBILITY 5 SOUTH OF T1."), /5SOUTH/);
+
+  // The contracted form parses through the NEAR extraction
+  assert.deepEqual(stormDeclarationPoint(cleaned), [-163, -12.1]);
+});
+
+test("NFFN latitude band pair parses with the stray-OF typo", () => {
+  assert.deepEqual(
+    parseCardinalBounds(
+      "IN THE AREA BETWEEN OF 16S AND 22S AND BETWEEN 156W AND 169W, EXPECT",
+    ),
+    [-169, -22, -156, -16],
   );
 });
 
