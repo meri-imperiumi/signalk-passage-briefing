@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- Briefing payloads stopped carrying every forecast hour at every waypoint: the waypoints now ride an ETA-window throttle (a 15-waypoint / 7-day route went from ~1 MB to ~340 KB of JSON with no rendering change). The window opens 12 h before the arrival a fast boat (10 kn) would make and closes 48 h after the arrival a slow boat (2.5 kn) would make — steps outside are dropped, since the boat reads its neighbouring waypoints' data then — and inside the window the hourly steps beyond the first 24 h collapse to every third hour, the wave models' own native resolution (`weatherAt` interpolates). The horizon's last step always rides along (the simulator clamps to it), a guaranteed minimum span keeps coverage when the speed estimate is badly wrong, and the throttle applies to both source paths (Open-Meteo and the Weather API provider).
+
 ## [0.12.1] - 2026-10-16
 
 ### Fixed

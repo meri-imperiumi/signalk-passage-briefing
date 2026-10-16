@@ -59,6 +59,39 @@ const DEFAULT_FORECAST_DAYS = 7;
  */
 const KEEP_SNAPSHOTS = 8;
 
+/**
+ * One hour in milliseconds.
+ */
+const HOUR_MS = 3600000;
+
+/**
+ * Throttle speed bracket: the fastest arrival the window must cover
+ * (window opens before it).
+ */
+const THROTTLE_FAST_KN = 10;
+
+/**
+ * Throttle speed bracket: the slowest arrival the window must cover
+ * (window closes after it, plus the tail margin).
+ */
+const THROTTLE_SLOW_KN = 2.5;
+
+/**
+ * Throttle window: opens this long before the fastest arrival.
+ */
+const THROTTLE_LEAD_HOURS = 12;
+
+/**
+ * Throttle window: closes this long after the slowest arrival.
+ */
+const THROTTLE_TAIL_HOURS = 48;
+
+/**
+ * Throttle resolution: hourly steps inside the first span of the
+ * window, every third hour after.
+ */
+const THROTTLE_HOURLY_HOURS = 24;
+
 const FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
 const MARINE_URL = "https://marine-api.open-meteo.com/v1/marine";
 
@@ -614,6 +647,7 @@ async function fetchWeatherAlongTrack({
     models.push("marine:smoc_currents");
   }
   const fetchedAt = new Date().toISOString();
+  throttleWaypointForecasts(payloadWaypoints, fetchedAt);
   return {
     metadata: {
       fetchedAt,
@@ -631,6 +665,83 @@ async function fetchWeatherAlongTrack({
     },
     waypoints: payloadWaypoints,
   };
+}
+
+/**
+ * ETA-window throttle for waypoint forecasts (briefing size, bergie
+ * session: a 15-waypoint / 7-day route carried every hour of the full
+ * horizon at every waypoint — over a megabyte of JSON to render a few
+ * KB of page). The boat is at waypoint i only around its arrival, and
+ * the arrival time depends on boat speed — so the window opens
+ * `THROTTLE_LEAD_HOURS` before the arrival a fast boat would make and
+ * closes `THROTTLE_TAIL_HOURS` after the arrival a slow boat would
+ * make; steps outside are dropped. Inside the window the hourly steps
+ * beyond the first `THROTTLE_HOURLY_HOURS` collapse to every third
+ * hour: the wave models underneath are 3-hourly anyway, and
+ * `weatherAt` interpolates between steps. A guaranteed minimum span
+ * keeps coverage even when the estimate is badly wrong, and the
+ * horizon's last step always rides along (the sim clamps to it).
+ *
+ * @param {Array<{distanceFromStartNm: number, forecasts: Array<object>}>}
+ *   payloadWaypoints - Mutated in place
+ * @param {string|number|Date} fetchedAt - The fetch instant the
+ *   estimates anchor to (the payload's `fetchedAt`)
+ * @returns {Array} The same waypoints, forecasts throttled
+ */
+function throttleWaypointForecasts(payloadWaypoints, fetchedAt) {
+  const startMs = new Date(fetchedAt).getTime();
+  if (!Array.isArray(payloadWaypoints) || !Number.isFinite(startMs)) {
+    return payloadWaypoints ?? [];
+  }
+  for (const waypoint of payloadWaypoints) {
+    const steps = waypoint?.forecasts;
+    if (!Array.isArray(steps) || steps.length === 0) {
+      continue;
+    }
+    const times = steps.map((step) => new Date(step.timestamp).getTime());
+    const firstMs = times[0];
+    const lastMs = times[times.length - 1];
+    const distNm = Number.isFinite(waypoint.distanceFromStartNm)
+      ? Math.max(0, waypoint.distanceFromStartNm)
+      : 0;
+    let windowStart = Math.max(
+      firstMs,
+      startMs +
+        (distNm / THROTTLE_FAST_KN) * HOUR_MS -
+        THROTTLE_LEAD_HOURS * HOUR_MS,
+    );
+    const windowEnd = Math.min(
+      lastMs,
+      startMs +
+        (distNm / THROTTLE_SLOW_KN) * HOUR_MS +
+        THROTTLE_TAIL_HOURS * HOUR_MS,
+    );
+    // Guaranteed minimum span: a wildly wrong speed estimate must not
+    // strip a waypoint bare
+    if (windowEnd - windowStart < 48 * HOUR_MS) {
+      windowStart = Math.max(firstMs, windowEnd - 48 * HOUR_MS);
+    }
+    const inWindow = steps.filter(
+      (_step, i) => times[i] >= windowStart && times[i] <= windowEnd,
+    );
+    if (inWindow.length === 0) {
+      continue;
+    }
+    const baseMs = new Date(inWindow[0].timestamp).getTime();
+    const lastInWindow = inWindow.length - 1;
+    waypoint.forecasts = inWindow.filter((step, i) => {
+      // The horizon's last step always rides along: weatherAt clamps
+      // to it, so a dropped tail would freeze the sim on stale values
+      if (i === lastInWindow) {
+        return true;
+      }
+      const hours = Math.round(
+        (new Date(step.timestamp).getTime() - baseMs) / HOUR_MS,
+      );
+      return hours < THROTTLE_HOURLY_HOURS || hours % 3 === 0;
+    });
+  }
+  return payloadWaypoints;
 }
 
 /**
@@ -774,6 +885,7 @@ module.exports = {
   normalizeLocations,
   buildTimeSteps,
   fetchWeatherAlongTrack,
+  throttleWaypointForecasts,
   savePayload,
   loadPayload,
   listCachedRoutes,

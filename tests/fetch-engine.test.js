@@ -18,6 +18,7 @@ const {
   kIndex,
   normalizeLocations,
   fetchWeatherAlongTrack,
+  throttleWaypointForecasts,
   savePayload,
   loadPayload,
   listCachedRoutes,
@@ -132,6 +133,101 @@ const WAYPOINTS = sampleRoutePoints([
   [0, 0],
   [0, 1.5],
 ]);
+
+describe("throttleWaypointForecasts", () => {
+  const HOUR = 3600000;
+  const FETCH = "2026-10-16T00:00:00.000Z";
+
+  /** Builds one hourly step. */
+  const step = (h) => ({
+    timestamp: new Date(Date.parse(FETCH) + h * HOUR).toISOString(),
+    surface: { tws: h },
+  });
+
+  test("windows bracket the arrival across the speed range", () => {
+    const waypoints = [
+      {
+        distanceFromStartNm: 0,
+        forecasts: Array.from({ length: 168 }, (_, h) => step(h)),
+      },
+      {
+        distanceFromStartNm: 210,
+        forecasts: Array.from({ length: 168 }, (_, h) => step(h)),
+      },
+    ];
+    throttleWaypointForecasts(waypoints, FETCH);
+    const second = waypoints[1].forecasts.map((f) =>
+      Math.round((Date.parse(f.timestamp) - Date.parse(FETCH)) / HOUR),
+    );
+    // Fast boat: 210 nm at 10 kn arrives at 21 h, window opens 12 h
+    // before — the early hours the boat cannot be there yet are gone
+    assert.equal(second[0], 9);
+    // Slow boat: 210 nm at 2.5 kn arrives at 84 h, window closes 48 h
+    // after — beyond that the boat is reading the next waypoint's data
+    assert.equal(second[second.length - 1], 132);
+  });
+
+  test("hourly steps collapse to 3-hourly past the first day of the window", () => {
+    const waypoints = [
+      {
+        distanceFromStartNm: 0,
+        forecasts: Array.from({ length: 168 }, (_, h) => step(h)),
+      },
+    ];
+    throttleWaypointForecasts(waypoints, FETCH);
+    const stamps = waypoints[0].forecasts.map((f) =>
+      Math.round((Date.parse(f.timestamp) - Date.parse(FETCH)) / HOUR),
+    );
+    // The departure waypoint's window closes 48 h after its
+    // (immediate) arrival: 24 hourly steps, then every third hour
+    assert.equal(stamps.length, 24 + (48 - 24) / 3 + 1);
+    assert.equal(stamps[stamps.length - 1], 48);
+    for (let i = 24; i < stamps.length - 1; i++) {
+      assert.equal(stamps[i] % 3, 0);
+    }
+  });
+
+  test("a guaranteed minimum span survives a wildly slow boat", () => {
+    // 420 nm: the slow-bracket arrival (2.5 kn) sits past the 168 h
+    // horizon, so the window rides the whole horizon's tail — plenty
+    // of coverage either way, and the last step must survive decimation
+    const waypoints = [
+      {
+        distanceFromStartNm: 420,
+        forecasts: Array.from({ length: 168 }, (_, h) => step(h)),
+      },
+    ];
+    throttleWaypointForecasts(waypoints, FETCH);
+    const stamps = waypoints[0].forecasts.map((f) =>
+      Math.round((Date.parse(f.timestamp) - Date.parse(FETCH)) / HOUR),
+    );
+    assert.ok(stamps.length >= 16, "at least two days' 3-hourly coverage");
+    assert.equal(stamps[stamps.length - 1], 167);
+  });
+
+  test("short fixtures pass through unchanged", () => {
+    const forecasts = [step(0), step(1)];
+    const waypoints = [{ distanceFromStartNm: 0, forecasts }];
+    throttleWaypointForecasts(waypoints, FETCH);
+    assert.equal(waypoints[0].forecasts.length, 2);
+  });
+
+  test("roughly a quarter of the original payload remains on a week-long route", () => {
+    // 15 waypoints, 30 nm apart, 7-day horizon: the shape behind the
+    // 1.3 MB briefing
+    const waypoints = Array.from({ length: 15 }, (_, i) => ({
+      distanceFromStartNm: i * 30,
+      forecasts: Array.from({ length: 168 }, (_, h) => step(h)),
+    }));
+    const before = waypoints.reduce((sum, wp) => sum + wp.forecasts.length, 0);
+    throttleWaypointForecasts(waypoints, FETCH);
+    const after = waypoints.reduce((sum, wp) => sum + wp.forecasts.length, 0);
+    assert.ok(after <= before * 0.35, `${after} of ${before} steps remain`);
+    for (const wp of waypoints) {
+      assert.ok(wp.forecasts.length > 0, "no waypoint stripped bare");
+    }
+  });
+});
 
 describe("fetchWeatherAlongTrack", () => {
   test("builds the SPEC §3.1 payload with unit conversions", async () => {

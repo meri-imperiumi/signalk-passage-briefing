@@ -31,7 +31,10 @@
  * @file weather-source.js
  */
 
-const { fetchWeatherAlongTrack } = require("./fetch-engine.js");
+const {
+  fetchWeatherAlongTrack,
+  throttleWaypointForecasts,
+} = require("./fetch-engine.js");
 
 /**
  * Meters per second to knots.
@@ -177,6 +180,7 @@ function buildApiPayload(waypoints, forecastsByWaypoint) {
     };
   });
   const fetchedAt = new Date().toISOString();
+  throttleWaypointForecasts(payloadWaypoints, fetchedAt);
   return {
     metadata: {
       fetchedAt,
