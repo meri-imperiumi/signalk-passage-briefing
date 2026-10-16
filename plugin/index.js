@@ -2873,6 +2873,25 @@ module.exports = (app) => {
       // the notification returns to nominal for every connected
       // client, and the escalation does not re-raise the event until
       // it leaves the matrix and returns
+      // Active critical-hazard notifications (work doc #30): the
+      // same list the escalation publishes over the Signal K stream,
+      // served here so the webapp banner doesn't have to poll the
+      // REST notifications subtree (absent path = noisy 404)
+      router.get("/api/hazards/active", (_req, res) => {
+        const notifications = [];
+        for (const [id, notification] of activeHazardNotifications) {
+          if (acknowledgedHazards.has(id)) {
+            continue; // Acked: suppressed until the event returns
+          }
+          notifications.push({
+            id,
+            state: notification.state,
+            message: notification.message,
+          });
+        }
+        res.json({ notifications });
+      });
+
       router.post("/api/hazards/ack", async (req, res) => {
         const id = typeof req.body?.id === "string" ? req.body.id : null;
         if (!id) {

@@ -5,6 +5,9 @@
 ### Changed
 - Briefing payloads stopped carrying every forecast hour at every waypoint: the waypoints now ride an ETA-window throttle (a 15-waypoint / 7-day route went from ~1 MB to ~340 KB of JSON with no rendering change). The window opens 12 h before the arrival a fast boat (10 kn) would make and closes 48 h after the arrival a slow boat (2.5 kn) would make — steps outside are dropped, since the boat reads its neighbouring waypoints' data then — and inside the window the hourly steps beyond the first 24 h collapse to every third hour, the wave models' own native resolution (`weatherAt` interpolates). The horizon's last step always rides along (the simulator clamps to it), a guaranteed minimum span keeps coverage when the speed estimate is badly wrong, and the throttle applies to both source paths (Open-Meteo and the Weather API provider).
 
+### Fixed
+- The webapp console logged three requests that could never succeed (work doc #40/#30 session report): the "Next" compile pill and the sea-legs day checkpoints called `/api/api/status` and `/api/api/sea-legs` — a stray `api/` segment doubled into the plugin base ever since those two UI pieces shipped, 404ing on every load and silently hiding both features. The URLs now match the registered routes. The critical-hazard banner polled the Signal K REST notifications subtree (`vessels/self/notifications/navigation/briefing/hazards`), which 404s whenever no notification was ever raised on the server; the escalation's active list now also serves from the plugin's own `GET /api/hazards/active` (same data the delta stream carries, empty list when nominal) and the banner polls that.
+
 ## [0.12.1] - 2026-10-16
 
 ### Fixed

@@ -2687,3 +2687,31 @@ test("routes listing: cached with stale-while-revalidate, distances active-only"
   assert.equal(listCalls, 1);
   plugin.stop();
 });
+
+test("active hazard notifications serve from the plugin's own endpoint", async () => {
+  // Work doc #30 webapp transport: the escalation's active list rides
+  // GET /api/hazards/active (200 with an empty list when nothing is
+  // active) — polling the Signal K REST notifications subtree instead
+  // 404'd whenever no notification had ever been raised
+  const app = createMockApp();
+  const plugin = pluginFactory(app);
+  plugin.start({});
+  plugin.registerWithRouter(app.router);
+  const route = app.getRoutes().find((r) => r.path === "/api/hazards/active");
+  assert.ok(route, "hazards/active route registered");
+  const res = {
+    code: null,
+    payload: null,
+    status(code) {
+      this.code = code;
+      return this;
+    },
+    json(payload) {
+      this.payload = payload;
+    },
+  };
+  await route.handler({}, res);
+  assert.equal(res.code, null);
+  assert.deepEqual(res.payload, { notifications: [] });
+  plugin.stop();
+});

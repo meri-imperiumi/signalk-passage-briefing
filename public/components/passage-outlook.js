@@ -515,13 +515,13 @@ class PassageOutlook extends HTMLElement {
       // The next scheduled compile window rides /api/status (the same
       // state-machine field the checklist reads); its absence degrades
       // the Next pill to hidden, never to an invented stamp
-      this._nextCron = await fetchJson(`${PLUGIN_API}/api/status`, 8000)
+      this._nextCron = await fetchJson(`${PLUGIN_API}/status`, 8000)
         .then((status) => status?.nextCronRun ?? null)
         .catch(() => null);
       // Sea legs (work doc #40): the passage day context. Absent or
       // failed lookups degrade to null — the timeline checkpoints
       // simply don't render, never invented
-      this._seaLegs = await fetchJson(`${PLUGIN_API}/api/sea-legs`, 8000)
+      this._seaLegs = await fetchJson(`${PLUGIN_API}/sea-legs`, 8000)
         .then((s) => s?.passageStartedAt ?? null)
         .catch(() => null);
       this._briefing = await fetchJson(`${PLUGIN_API}/briefing${query}`, 20000);
@@ -830,6 +830,14 @@ class PassageOutlook extends HTMLElement {
       ? "<strategic-outlook></strategic-outlook>"
       : "<tactical-dashboard></tactical-dashboard>";
     this._applyModeToView();
+    // The tactical card head carries the route's Update now — the
+    // same affordance conditions-here has in its card head; disabled
+    // offline like the here button (the server refuses the refresh)
+    const tactical = this._view.querySelector("tactical-dashboard");
+    tactical?.setOnline(this._status?.online === true);
+    if (tactical) {
+      tactical.onRefresh = () => this.refreshBriefing();
+    }
     if (this._exceptions) {
       this.renderData();
     }
