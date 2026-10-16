@@ -361,39 +361,53 @@ function filterHazards({
     if (rank == null || rank < minRank) {
       continue;
     }
-    // Distance and bearing from the vessel, then from the nearest
-    // route sample — the better (closer) reference admits the event
-    let best = null;
-    if (vessel && Number.isFinite(vessel.lat) && Number.isFinite(vessel.lon)) {
-      best = {
-        distanceNm: distanceNm(vessel.lat, vessel.lon, event.lat, event.lon),
-        bearingDeg: bearingDeg(vessel.lat, vessel.lon, event.lat, event.lon),
-        from: "vessel",
-      };
-    }
+    // Either envelope admits: the vessel's ahead-radius or the route
+    // corridor. The old best-reference-wins rule let the closer
+    // reference tighten the envelope — a compile switching the
+    // exposure reference (here mode admits at 1000 nm from the
+    // vessel, route mode at 500 nm off the nearest sample) tipped a
+    // stationary cyclone out of the matrix and back, flapping the
+    // notification without the storm moving an inch.
+    const vesselRef =
+      vessel && Number.isFinite(vessel.lat) && Number.isFinite(vessel.lon)
+        ? {
+            distanceNm: distanceNm(
+              vessel.lat,
+              vessel.lon,
+              event.lat,
+              event.lon,
+            ),
+            bearingDeg: bearingDeg(
+              vessel.lat,
+              vessel.lon,
+              event.lat,
+              event.lon,
+            ),
+          }
+        : null;
+    let routeRef = null;
     for (const point of route) {
       const d = distanceNm(point.lat, point.lon, event.lat, event.lon);
-      if (!best || d < best.distanceNm) {
-        best = {
+      if (routeRef === null || d < routeRef.distanceNm) {
+        routeRef = {
           distanceNm: d,
           bearingDeg: bearingDeg(point.lat, point.lon, event.lat, event.lon),
-          from: "route",
         };
       }
     }
-    if (!best) {
-      continue;
-    }
     const within =
-      (best.from === "vessel" && best.distanceNm <= aheadRadiusNm) ||
-      (best.from === "route" && best.distanceNm <= offRouteRadiusNm);
+      (vesselRef !== null && vesselRef.distanceNm <= aheadRadiusNm) ||
+      (routeRef !== null && routeRef.distanceNm <= offRouteRadiusNm);
     if (!within) {
       continue;
     }
+    // Report vessel-centric distance and bearing when the vessel is
+    // known — the crew thinks in distance from the boat
+    const ref = vesselRef ?? routeRef;
     surviving.push({
       ...event,
-      distanceNm: Math.round(best.distanceNm * 10) / 10,
-      bearingDeg: Math.round(best.bearingDeg),
+      distanceNm: Math.round(ref.distanceNm * 10) / 10,
+      bearingDeg: Math.round(ref.bearingDeg),
     });
   }
   return surviving.sort((a, b) =>

@@ -66,6 +66,7 @@ const {
 } = require("./notes-publisher.js");
 const hazardSource = require("./hazard-source.js");
 const hazardAlerts = require("./hazard-alerts.js");
+const { loadHazardAcks, saveHazardAcks } = require("./hazard-state.js");
 const maritimeZones = require("./maritime-zones-source.js");
 const capSource = require("./cap-source.js");
 const {
@@ -1554,12 +1555,21 @@ module.exports = (app) => {
   let lastFetchRun = Promise.resolve();
 
   /** Active critical-hazard notifications by id (work doc #30) plus
-   * per-id miss counters for the two-cycle clear hysteresis, and the
-   * acknowledged set (ack suppresses re-raise until the event leaves
-   * and returns). */
+   * per-id miss counters for the clear hysteresis. Acknowledgements
+   * persist on disk (hazard-state.js): a crew ack must survive plugin
+   * and server restarts — every restart re-alarming for a cyclone
+   * already acknowledged is exactly the alarm fatigue the escalation
+   * exists to avoid. Records carry the silenced alert level and the
+   * distance at ack time, so a later red or a storm closed to half
+   * the acked distance re-alarms. */
   const activeHazardNotifications = new Map();
   const hazardMissCounts = new Map();
-  const acknowledgedHazards = new Set();
+  const acknowledgedHazards = loadHazardAcks(app.getDataDirPath());
+  /** Last published notification value per id (state, message,
+   * level): the publish gate compares against it so identical values
+   * never re-ride and message amendments stay silent to the alarm
+   * layer. */
+  const publishedHazardValues = new Map();
   /** Waypoints of the most recent compile (route or here): the
    * escalation's track reference between refreshes. */
   let lastCompiledWaypoints = null;
@@ -1682,14 +1692,40 @@ module.exports = (app) => {
    * (work doc #30): every connected client — node dashboards, Vessel
    * Systems, mobile apps — sees it, not just this plugin's webapp.
    *
+   * The publish gate is three-tier: a raise (first publish or state
+   * change) carries visual+sound; an amendment (same state, new
+   * message — GDACS refreshed the distance and impact figures)
+   * carries visual only, updating the text without re-triggering
+   * sounders; an identical value publishes nothing — re-sending the
+   * same state with a fresh timestamp every tick re-alarms boards
+   * that treat each value as news. A strictly higher GDACS level
+   * (orange → red) publishes as a raise again.
+   *
    * @param {string} id - Content-addressed event id
-   * @param {{state: string, message: string}|null} notification - The
-   *   notification to raise, or null to clear (nominal)
+   * @param {{state: string, message: string, level?: string|null}|null}
+   *   notification - The notification to raise, or null to clear
+   *   (nominal)
    */
   function publishHazardNotification(id, notification) {
     if (typeof app.handleMessage !== "function") {
       return;
     }
+    const state = notification ? notification.state : "normal";
+    const message = notification ? notification.message : "";
+    const level = notification?.level ?? null;
+    const before = publishedHazardValues.get(id);
+    if (before && before.state === state && before.message === message) {
+      return; // Identical value: silence, not churn
+    }
+    const rank = (value) =>
+      hazardAlerts.ALERT_RANK[String(value ?? "").toLowerCase()] ?? -1;
+    const escalated =
+      before != null &&
+      level != null &&
+      before.level != null &&
+      rank(level) > rank(before.level);
+    const amended = before != null && before.state === state && !escalated;
+    publishedHazardValues.set(id, { state, message, level });
     app.handleMessage(PLUGIN_ID, {
       context: "vessels.self",
       updates: [
@@ -1700,9 +1736,11 @@ module.exports = (app) => {
               path: `notifications.navigation.briefing.hazards.${id}`,
               value: notification
                 ? {
-                    state: notification.state,
-                    method: ["visual", "sound"],
-                    message: notification.message,
+                    state,
+                    // Amendments stay visual: the text moved on,
+                    // the sounders must not
+                    method: amended ? ["visual"] : ["visual", "sound"],
+                    message,
                     timestamp: new Date().toISOString(),
                   }
                 : { state: "normal", method: [], message: "" },
@@ -1719,10 +1757,19 @@ module.exports = (app) => {
    * against the vessel's exposure and publishes Signal K
    * notifications for the qualifying subset. Runs on the ticker —
    * NOT internet-gated: a cached tsunami warning must still raise
-   * its notification with the boat offline. Hysteresis: an event
-   * needs to fall out of the matrix for two consecutive cycles
-   * before its notification clears; acknowledged events are not
-   * re-raised until they leave and return.
+   * its notification with the boat offline.
+   *
+   * Anti-flap (work doc #30): GDACS is fetched 12-hourly, but its
+   * alert levels and titles flap between runs, and a compile can
+   * switch the exposure reference — so once raised, a tropical
+   * cyclone notification LATCHES: it stays warnable while the
+   * cyclone still exists in the envelope at any GDACS level (the
+   * wide green filter feeds `retainLatched`), clears only after an
+   * hour out of the matrix, and GDACS refreshes amend the
+   * notification text without re-raising it. Acknowledgements are
+   * level- and distance-aware and persist on disk: only a strictly
+   * higher level or a storm closed to half the acked distance
+   * re-alarms.
    *
    * @param {Date} [now]
    * @returns {Promise<void>}
@@ -1738,12 +1785,21 @@ module.exports = (app) => {
     const track = lastCompiledWaypoints?.length
       ? lastCompiledWaypoints.map((w) => [w.lon, w.lat])
       : [[vessel.lon, vessel.lat]];
-    const gdacsEvents = hazardSource.filterHazards({
+    const gdacsWide = hazardSource.filterHazards({
       events: await hazardSource.loadHazards(app.getDataDirPath()),
       vessel,
       waypoints: lastCompiledWaypoints ?? [],
-      minAlertLevel: "orange",
+      // Wide pass: green and up. retainLatched keeps only the
+      // fresh-escalation floor (orange) plus the cyclones this
+      // vessel is already warned about, whose dips below orange
+      // must not clear the notification
+      minAlertLevel: "green",
       now,
+    });
+    const gdacsEvents = hazardAlerts.retainLatched({
+      events: gdacsWide,
+      previous: activeHazardNotifications,
+      minLevel: "orange",
     });
     const capAlerts = capSource.filterCapAlerts({
       events: await capSource.loadCapAlerts(app.getDataDirPath()),
@@ -1786,15 +1842,21 @@ module.exports = (app) => {
       missCounts: hazardMissCounts,
     });
     for (const [id, notification] of active) {
-      if (acknowledgedHazards.has(id)) {
-        continue; // Acked for this event instance: no re-raise
+      if (
+        !hazardAlerts.shouldRaise({
+          notification,
+          ack: acknowledgedHazards.get(id),
+        })
+      ) {
+        continue; // Acked at this level and distance: stay silent
       }
       publishHazardNotification(id, notification);
     }
     for (const id of cleared) {
       if (activeHazardNotifications.has(id)) {
         publishHazardNotification(id, null); // Back to nominal
-        acknowledgedHazards.delete(id);
+        // The ack survives the clear: a source dip that outlasts the
+        // grace must not resurrect the alarm when the event returns
       }
     }
     activeHazardNotifications.clear();
@@ -1805,22 +1867,44 @@ module.exports = (app) => {
 
   /**
    * Acknowledges one critical-hazard notification (work doc #30): the
-   * notification returns to nominal and the event id is remembered —
-   * the escalation does not re-raise it until the event leaves the
-   * matrix and returns.
+   * notification returns to nominal and the ack persists on disk
+   * with the silenced level and the distance at ack time — restarts
+   * stay quiet, a later red or a storm closed to half the acked
+   * distance re-alarms.
    *
    * @param {string} id - Event id (without the ack prefix)
    */
   function acknowledgeHazard(id) {
     const wanted = String(id);
+    let recorded = false;
     for (const key of [...activeHazardNotifications.keys()]) {
       // The notification id embeds the event id; a partial match is
       // enough (the webapp sends the event id from the message data)
       if (key.includes(wanted)) {
         publishHazardNotification(key, null);
+        const notification = activeHazardNotifications.get(key);
+        acknowledgedHazards.set(key, {
+          level: notification?.level ?? null,
+          distanceNm: notification?.distanceNm ?? null,
+          at: new Date().toISOString(),
+        });
+        recorded = true;
       }
     }
-    acknowledgedHazards.add(wanted);
+    if (!recorded) {
+      // No active match (the notification already cleared): record
+      // the ack as given so a prompt return stays silent
+      acknowledgedHazards.set(wanted, {
+        level: null,
+        distanceNm: null,
+        at: new Date().toISOString(),
+      });
+    }
+    try {
+      saveHazardAcks(app.getDataDirPath(), acknowledgedHazards);
+    } catch (error) {
+      app.debug?.(`Hazard ack save failed: ${error.message}`);
+    }
   }
 
   function publishBriefMeta() {
@@ -2894,8 +2978,13 @@ module.exports = (app) => {
       router.get("/api/hazards/active", (_req, res) => {
         const notifications = [];
         for (const [id, notification] of activeHazardNotifications) {
-          if (acknowledgedHazards.has(id)) {
-            continue; // Acked: suppressed until the event returns
+          if (
+            !hazardAlerts.shouldRaise({
+              notification,
+              ack: acknowledgedHazards.get(id),
+            })
+          ) {
+            continue; // Acked at this level and distance: not banner material
           }
           notifications.push({
             id,

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- The tropical-cyclone notification flapped on/off 27 times in ~45 min (logbook 2026-10-16, TC ONE-26): every ticker republish sent a fresh value (re-alarming boards), a GDACS dip outlasted the 2-minute clear grace and the return re-raised, and the exposure envelope tightened whenever a compile switched the reference. Four layers of anti-flap: notifications publish through a three-tier gate (raise = first publish or state change, visual+sound; amendment = same state, new GDACS figures, visual only so sounders stay quiet; identical = silence); once raised, a cyclone notification latches — it stays warnable while the storm exists in the GDACS envelope at any alert level (the wide green filter feeds a new `retainLatched` carry-over) and clears only after an hour out of the matrix; the hazard filter admits via either envelope (1000 nm from the vessel or 500 nm off the route) instead of letting the closer reference tighten the band; and acknowledgements are level- and distance-aware, persisted on disk (`hazards-state.json`, 7-day prune) so restarts stay quiet — only a strictly higher level (orange → red) or a storm closed to half the acked distance re-alarms. GDACS refreshes now amend the notification text in place rather than clearing and re-raising.
+
 ### Changed
 - The energy predictor and polar management moved from the Signal K metadata's `requires` to `recommends`: the plugin consumes them purely through Signal K paths and the resources API, and the degradation suite proves it briefs, serves and escalates without either (built-in fallback polar, empty energy outlook). `signalk-internet` stays required — the online window drives every fetch gate.
 
