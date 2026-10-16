@@ -31,11 +31,11 @@
       "doc/here-brief.png"
     ],
     "requires": [
-      "@meri-imperiumi/signalk-energy-predictor",
-      "@meri-imperiumi/signalk-internet",
-      "signalk-polar-management"
+      "@meri-imperiumi/signalk-internet"
     ],
     "recommends": [
+      "@meri-imperiumi/signalk-energy-predictor",
+      "signalk-polar-management",
       "signalk-watch-schedule",
       "@meri-imperiumi/signalk-ships-time"
     ]

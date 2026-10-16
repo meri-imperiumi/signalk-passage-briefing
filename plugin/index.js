@@ -2473,11 +2473,25 @@ module.exports = (app) => {
       launchWatchEnabled = config.launch_watch_enabled !== false;
       // Weather source (work doc #16): the server's Weather API when
       // present (signalk-weather-router-plus registers a provider over
-      // its decoded ECMWF run), Open-Meteo per config or fallback
-      trackWeatherFetcher = createWeatherFetcher({
-        weatherApi: app.weatherApi,
-        weatherSource: config.weather_source,
-      });
+      // its decoded ECMWF run), Open-Meteo per config or fallback.
+      // A weather-api request without the provider installed degrades
+      // to Open-Meteo for this session instead of killing start() —
+      // the console, bulletins and hazard escalation ride the same
+      // plugin, and none of them should die over a weather source.
+      try {
+        trackWeatherFetcher = createWeatherFetcher({
+          weatherApi: app.weatherApi,
+          weatherSource: config.weather_source,
+        });
+      } catch (error) {
+        app.error(
+          `Weather source misconfigured: ${error.message} — falling back to Open-Meteo`,
+        );
+        trackWeatherFetcher = createWeatherFetcher({
+          weatherApi: app.weatherApi,
+          weatherSource: "open-meteo",
+        });
+      }
       bulletinStations = Array.isArray(config.bulletin_stations)
         ? config.bulletin_stations.filter(
             (station) =>
