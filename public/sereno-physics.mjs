@@ -998,6 +998,9 @@ export function serenoComfort(sea, vessel, wind) {
   // applies to the base acceleration, before both the slatting
   // multiplier (which does not fire for a drawing downwind sail) and
   // the banding.
+  // The damping is physical — the sail actually damps the motion —
+  // so the returned acceleration value carries it too (the rows'
+  // azMs2 shows the measured reality), not just the tier.
   const motionValue = vessel.downwindStabilized
     ? acceleration.value * DOWNWIND_STABILIZER_DAMPING
     : acceleration.value;
@@ -1008,7 +1011,7 @@ export function serenoComfort(sea, vessel, wind) {
   return {
     awsKnots,
     awsComfort,
-    acceleration,
+    acceleration: { ...acceleration, value: motionValue },
     motionComfort,
     comfort: slatting ? worseComfort(comfort, "rough") : comfort,
     slatting,
