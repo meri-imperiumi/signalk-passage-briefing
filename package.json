@@ -37,7 +37,7 @@
     ],
     "recommends": [
       "signalk-watch-schedule",
-      "signalk-ships-time"
+      "@meri-imperiumi/signalk-ships-time"
     ]
   },
   "engines": {
