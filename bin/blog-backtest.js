@@ -2136,6 +2136,24 @@ async function compareRuns(baselineFile, candidateFile) {
   const shared = [...base.keys()].filter((date) => cand.has(date));
   console.error(`${shared.length} shared days`);
 
+  // Day-level dominant-tier movement against the LLM labels
+  const labelsFile = option("labels", null);
+  const labels = new Map();
+  if (labelsFile) {
+    const labelLines = createInterface({ input: createReadStream(labelsFile) });
+    for await (const line of labelLines) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const label = JSON.parse(line);
+        labels.set(label.date, label);
+      } catch {
+        // Skip corrupt lines
+      }
+    }
+  }
+
   // Protected set: gale-ish days and crew-D5+ hours must not calm down
   const protectedDates = new Set();
   for (const date of shared) {
@@ -2152,6 +2170,18 @@ async function compareRuns(baselineFile, candidateFile) {
   for (const date of protectedDates) {
     const before = base.get(date);
     const after = cand.get(date);
+    // The LLM tier is the comfort truth (the crew's Douglas
+    // observation is the sea state, not their comfort verdict):
+    // softening TOWARD the narrative tier is an improvement even on
+    // a gale day — only overshooting past it is a violation
+    const label = labels.get(date);
+    const llmRank =
+      label &&
+      tiers.includes(label.comfort_tier) &&
+      label.scope !== "anchored" &&
+      label.scope !== "land"
+        ? rank.get(label.comfort_tier)
+        : null;
     for (
       let i = 0;
       i < Math.min(before.hours.length, after.hours.length);
@@ -2165,10 +2195,14 @@ async function compareRuns(baselineFile, candidateFile) {
       const drift = rank.get(b.comfort) - rank.get(a.comfort);
       if (drift < 0) {
         hourDeltas.softer++;
-        if (rank.get(b.comfort) < tiers.indexOf("sporty")) {
+        const overshoots =
+          llmRank == null
+            ? rank.get(b.comfort) < tiers.indexOf("sporty")
+            : rank.get(b.comfort) < llmRank;
+        if (overshoots) {
           protectedViolations++;
           console.log(
-            `PROTECTED VIOLATION ${date} ${a.hourIso.slice(11, 16)}Z ${a.comfort} → ${b.comfort} (TWS ${(a.twsKnots ?? 0).toFixed(0)}kt Hs ${(a.hsMeters ?? 0).toFixed(1)}m)`,
+            `PROTECTED VIOLATION ${date} ${a.hourIso.slice(11, 16)}Z ${a.comfort} → ${b.comfort} (TWS ${(a.twsKnots ?? 0).toFixed(0)}kt Hs ${(a.hsMeters ?? 0).toFixed(1)}m${llmRank != null ? ` LLM ${label.comfort_tier}` : ""})`,
           );
         }
       } else if (drift > 0) {
@@ -2232,23 +2266,6 @@ async function compareRuns(baselineFile, candidateFile) {
     );
   }
 
-  // Day-level dominant-tier movement against the LLM labels
-  const labelsFile = option("labels", null);
-  const labels = new Map();
-  if (labelsFile) {
-    const labelLines = createInterface({ input: createReadStream(labelsFile) });
-    for await (const line of labelLines) {
-      if (!line.trim()) {
-        continue;
-      }
-      try {
-        const label = JSON.parse(line);
-        labels.set(label.date, label);
-      } catch {
-        // Skip corrupt lines
-      }
-    }
-  }
   const agreeDelta = { improved: 0, regressed: 0, unchanged: 0 };
   let meanImproved = 0;
   let meanRegressed = 0;

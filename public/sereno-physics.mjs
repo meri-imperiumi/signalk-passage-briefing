@@ -965,6 +965,18 @@ export function verticalAcceleration(sea, vessel, wind) {
  * @returns {{awsKnots: number, awsComfort: string, acceleration: object,
  *   motionComfort: string, comfort: string, slatting: boolean}}
  */
+/**
+ * Damping factor applied to the vertical acceleration when a
+ * downwind stabilizer sail (Parasailor-class) is set: the measured
+ * ratio of matched pairs (Parasailor hours vs working-rig hours at
+ * matched TWS/TWA/Hs/wave period, 116 pairs, 2023-2024) — median
+ * 0.78, the same in and out of the slatting regime. The slatting
+ * regime itself must not fire for a drawing downwind sail (the
+ * three-way rule suppresses it); this damping is the residual
+ * stabilizing effect on top.
+ */
+export const DOWNWIND_STABILIZER_DAMPING = 0.78;
+
 export function serenoComfort(sea, vessel, wind) {
   const awsKnots = apparentWindSpeedKnots({
     twsKnots: wind.twsKnots,
@@ -982,8 +994,15 @@ export function serenoComfort(sea, vessel, wind) {
     sailState: vessel.sailState,
   });
   const awsComfort = rateApparentWind(awsKnots);
+  // A downwind stabilizer damps the motion: the measured 0.78 ratio
+  // applies to the base acceleration, before both the slatting
+  // multiplier (which does not fire for a drawing downwind sail) and
+  // the banding.
+  const motionValue = vessel.downwindStabilized
+    ? acceleration.value * DOWNWIND_STABILIZER_DAMPING
+    : acceleration.value;
   const motionComfort = rateAcceleration(
-    slatting ? acceleration.value * SLATTING_MULTIPLIER : acceleration.value,
+    slatting ? motionValue * SLATTING_MULTIPLIER : motionValue,
   );
   const comfort = worseComfort(awsComfort, motionComfort);
   return {

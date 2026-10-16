@@ -718,3 +718,37 @@ test("regimeBandOf: the shared classifier with distance-only and sounding modes"
   );
   assert.equal(regimeBandOf({}), "unknown");
 });
+
+test("the downwind stabilizer damps the motion by the measured ratio", async () => {
+  const { serenoComfort, DOWNWIND_STABILIZER_DAMPING } = await physics();
+  assert.equal(DOWNWIND_STABILIZER_DAMPING, 0.78);
+  const sea = { tpSeconds: 9, hsMeters: 0.6, waveTravelDirectionRad: 0 };
+  const vessel = {
+    sogKnots: 5,
+    headingRad: 0,
+    waterlineLengthM: 9.4,
+    kHeel: 0.35,
+    kPitch: 0.4,
+  };
+  const wind = { twsKnots: 8, twaRad: 2.6 };
+  const plain = serenoComfort(sea, vessel, wind);
+  const damped = serenoComfort(
+    sea,
+    { ...vessel, downwindStabilized: true },
+    wind,
+  );
+  approx(damped.acceleration.value, plain.acceleration.value * 0.78, 1e-9);
+  // The tier can only ease, never harden, under the damping
+  assert.ok(
+    ["champagne", "easy", "sporty"].indexOf(damped.comfort) <=
+      ["champagne", "easy", "sporty"].indexOf(plain.comfort),
+    `${plain.comfort} -> ${damped.comfort}`,
+  );
+  // Omitted flag behaves exactly as before
+  assert.equal(
+    serenoComfort(sea, { ...vessel, downwindStabilized: false }, wind)
+      .acceleration.value,
+    plain.acceleration.value,
+    1e-9,
+  );
+});
