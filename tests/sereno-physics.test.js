@@ -729,6 +729,10 @@ test("the downwind stabilizer damps the motion by the measured ratio", async () 
     waterlineLengthM: 9.4,
     kHeel: 0.35,
     kPitch: 0.4,
+    // The real combination: the stabilizer sail is up and drawing,
+    // so the three-way rule has already suppressed slatting — the
+    // damping applies on its own, never stacked with the multiplier
+    sailState: "sailing",
   };
   const wind = { twsKnots: 8, twaRad: 2.6 };
   const plain = serenoComfort(sea, vessel, wind);
@@ -738,6 +742,8 @@ test("the downwind stabilizer damps the motion by the measured ratio", async () 
     wind,
   );
   approx(damped.acceleration.value, plain.acceleration.value * 0.78, 1e-9);
+  assert.equal(damped.slatting, false);
+  assert.equal(plain.slatting, false);
   // The tier can only ease, never harden, under the damping
   assert.ok(
     ["champagne", "easy", "sporty"].indexOf(damped.comfort) <=
