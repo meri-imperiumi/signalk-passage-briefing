@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-10-17
+
 ### Fixed
 - The hazard acknowledgement state loaded at plugin-factory time, but Signal K exposes `app.getDataDirPath` only by `start()` — the plugin failed to start outright ("app.getDataDirPath is not a function"). The ack file now loads where the data dir is known to exist, with a regression test reproducing the server's factory-before-start ordering.
 

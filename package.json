@@ -1,6 +1,6 @@
 {
   "name": "@meri-imperiumi/signalk-passage-briefing",
-  "version": "0.12.4",
+  "version": "0.12.5",
   "description": "Offshore passage daily briefing webapp for Signal K",
   "main": "plugin/index.js",
   "scripts": {
