@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-10-16
+
 ### Fixed
 - Comfort tiers read "No data" on the Open-Meteo source path: the pinned GFS wave model (`ncep_gfswave025`) does not publish Open-Meteo's `wave_peak_period` variable at all (verified live: all-null at every hour while `wave_height`, `swell_wave_period` and `wind_wave_period` answer), so the Sereno resonance gate (`hsMeters != null && tpSeconds != null`) never passed. The fetch now also requests the mean `wave_period` series and falls back to it when peak is absent — a slightly different statistic, but the comfort model gets its period on every source path again. (The Weather API provider path, which maps `water.wavePeriod`, was never affected; briefings served by it kept their tiers.)
 
