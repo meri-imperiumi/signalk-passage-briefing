@@ -289,3 +289,17 @@ test("no active route, no delta-fed position: hazard escalation stays quiet", as
   assert.deepEqual(res.payload, { notifications: [] });
   plugin.stop();
 });
+
+test("factory tolerates a server that exposes getDataDirPath only at start", () => {
+  // Signal K calls the plugin factory before the data dir is wired:
+  // the hazard ack state used to load at factory time and crashed
+  // every start ("app.getDataDirPath is not a function")
+  const app = createBareApp();
+  const dataDir = app.dataDir;
+  delete app.getDataDirPath;
+  const plugin = pluginFactory(app); // Factory call must not throw
+  app.getDataDirPath = () => dataDir;
+  plugin.start({});
+  plugin.registerWithRouter(app.router);
+  plugin.stop();
+});

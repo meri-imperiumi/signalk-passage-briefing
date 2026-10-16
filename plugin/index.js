@@ -1564,7 +1564,9 @@ module.exports = (app) => {
    * the acked distance re-alarms. */
   const activeHazardNotifications = new Map();
   const hazardMissCounts = new Map();
-  const acknowledgedHazards = loadHazardAcks(app.getDataDirPath());
+  /** Loaded in start(): the plugin factory runs before the server
+   * exposes getDataDirPath, and the ack file needs the data dir. */
+  let acknowledgedHazards = new Map();
   /** Last published notification value per id (state, message,
    * level): the publish gate compares against it so identical values
    * never re-ride and message amendments stay silent to the alarm
@@ -2606,6 +2608,9 @@ module.exports = (app) => {
       // get their checklist entries immediately, even before the
       // first cycle runs
       sourceStatus = createSourceStatus({ dataDir: app.getDataDirPath() });
+      // Acknowledgement state survives restarts (work doc #30): the
+      // factory runs before getDataDirPath exists, so this loads here
+      acknowledgedHazards = loadHazardAcks(app.getDataDirPath());
       sourceStatus.define(WEATHER_SOURCE);
       sourceStatus.define(HAZARD_SOURCE);
       sourceStatus.define(EPHEMERIS_SOURCE);
