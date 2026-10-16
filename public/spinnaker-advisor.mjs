@@ -176,3 +176,163 @@ export function collectDownwindWindows(hours, options = {}) {
   close();
   return windows;
 }
+
+/**
+ * The forward-looking deployment plan (work doc #41): for each hour
+ * of a simulated passage, how long the forecast would let the sail
+ * stay up — the horizon — and which stretches justify the rigging
+ * work. A recommendation needs:
+ *
+ * - a horizon of qualifying hours at or over the minimum window
+ *   (the hassle threshold), starting in daylight (the night gate:
+ *   night hours continue a horizon, never start one),
+ * - a watch-anchored deploy moment that still leaves the minimum
+ *   window of payoff (the anchoring composes with the night rule:
+ *   a horizon opening at night waits for the dawn anchor),
+ * - and it ends where the forecast breaks — the squall window, the
+ *   envelope exit, the sea-state ceiling — which supplies the
+ *   take-down stamp for free.
+ *
+ * Pure: the caller feeds per-hour forecast facts and the downwind
+ * sail inventory; the return is the timeline's deploy/take-down
+ * entries.
+ *
+ * @param {Array<{hourMs: number, twsKnots: number, twaDeg: number,
+ *   awsKnots: number, hsMeters?: number, gustFactor?: number,
+ *   night?: boolean, underCanvas?: boolean}>} hours - Chronological
+ *   forecast hours
+ * @param {object} [options]
+ * @param {Array<{name: string, claim: "comfort"|"drive",
+ *   minTwsKnots?: number|null, maxTwsKnots?: number|null,
+ *   minTwaDeg?: number|null}>} [options.downwindSails] - The
+ *   inventory's downwind sails (Parasailor-class claims comfort,
+ *   poled-out claims drive)
+ * @param {number[]} [options.watchAnchorsMs] - Watch-change instants
+ *   (chronological); deployments anchor to the next one inside the
+ *   window when it still leaves the minimum payoff. Empty = day-sail
+ *   mode: deployments are immediate.
+ * @param {number} [options.minWindowHours] - Hassle threshold
+ * @param {boolean} [options.nightOk] - Whether night hours may start
+ *   a horizon (default false)
+ * @returns {Array<{startMs: number, untilMs: number, sailName: string,
+ *   claim: string, anchoredMs: number|null, breakReason: string|null,
+ *   hours: number}>} Deployments, chronological
+ */
+export function deploymentPlan(hours, options = {}) {
+  const sails = Array.isArray(options.downwindSails)
+    ? options.downwindSails
+    : [];
+  if (sails.length === 0) {
+    return [];
+  }
+  const minWindowHours = options.minWindowHours ?? DOWNWIND_MIN_WINDOW_HOURS;
+  const nightOk = options.nightOk ?? false;
+  const anchors = (options.watchAnchorsMs ?? [])
+    .filter((t) => Number.isFinite(t))
+    .sort((a, b) => a - b);
+
+  // Per-hour, per-sail hard-gate failures (night handled separately
+  // in the horizon scan — it continues, never starts)
+  const perSail = hours.map((hour) =>
+    sails.map((sail) => ({
+      sail,
+      reason: evaluateDownwindSail({
+        twsKnots: hour.twsKnots,
+        twaDeg: hour.twaDeg,
+        awsKnots: hour.awsKnots,
+        hsMeters: hour.hsMeters,
+        gustFactor: hour.gustFactor,
+        envelope: sail,
+      }),
+    })),
+  );
+
+  const deployments = [];
+  /** First hour index not consumed by a returned deployment. */
+  let cursor = 0;
+  for (let start = cursor; start < hours.length; start++) {
+    if (start < cursor) {
+      continue;
+    }
+    const hour = hours[start];
+    const night = hour.night === true;
+    // Night hours cannot start a horizon unless explicitly allowed
+    const startable = !night || nightOk;
+    if (!startable) {
+      continue;
+    }
+    // The best sail for this start: one whose horizon reaches the
+    // minimum window, comfort claim preferred over drive
+    let chosen = null;
+    for (const { sail, reason } of perSail[start]) {
+      if (reason != null) {
+        continue;
+      }
+      // Forward horizon: consecutive hours the hard gates hold;
+      // night hours continue (they cannot start, but they do not
+      // break an already-started horizon)
+      let horizon = 0;
+      let breakReason = null;
+      for (let i = start; i < hours.length; i++) {
+        const entry = perSail[i].find((p) => p.sail === sail);
+        const hourNight = hours[i].night === true;
+        if (entry.reason == null || (hourNight && entry.reason === "night")) {
+          horizon++;
+        } else {
+          breakReason = entry.reason;
+          break;
+        }
+      }
+      if (horizon >= minWindowHours) {
+        const candidate = {
+          sail,
+          horizon,
+          breakReason,
+          // Comfort claims outrank drive claims on the same conditions
+          preferred: sail.claim === "comfort",
+        };
+        if (
+          chosen == null ||
+          (candidate.preferred && !chosen.preferred) ||
+          (candidate.preferred === chosen.preferred &&
+            candidate.horizon > chosen.horizon)
+        ) {
+          chosen = candidate;
+        }
+      }
+    }
+    if (chosen == null) {
+      continue;
+    }
+    const endMs = hours[start + chosen.horizon - 1].hourMs;
+    // The deploy moment anchors to the next watch change inside the
+    // window — but only while the anchored remainder still pays the
+    // minimum window. Day sails (no anchors) deploy immediately.
+    let anchoredMs = null;
+    for (const anchor of anchors) {
+      if (anchor >= hour.hourMs && anchor <= endMs) {
+        const anchoredHours =
+          Math.round(((endMs - anchor) / 3600000 + 1) * 10) / 10;
+        if (anchoredHours >= minWindowHours) {
+          anchoredMs = anchor;
+        }
+        break;
+      }
+    }
+    const startMs = anchoredMs ?? hour.hourMs;
+    deployments.push({
+      startMs,
+      untilMs: endMs,
+      sailName: chosen.sail.name,
+      claim: chosen.sail.claim,
+      anchoredMs,
+      breakReason: chosen.breakReason,
+      hours: chosen.horizon,
+    });
+    // The cursor skips the consumed hours: hours inside a deployment
+    // window do not start overlapping ones
+    cursor = start + chosen.horizon;
+    start = cursor - 1;
+  }
+  return deployments;
+}

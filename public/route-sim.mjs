@@ -42,6 +42,10 @@ import {
   sunDayKind,
   travelDirection,
 } from "./sereno-physics.mjs";
+import {
+  DOWNWIND_MIN_WINDOW_HOURS,
+  deploymentPlan,
+} from "./spinnaker-advisor.mjs";
 import { detectManeuvers, wrap180 } from "./tack-gybe.js";
 import tzLookup from "./vendor/tz-lookup/tz-lookup.mjs";
 
@@ -894,6 +898,8 @@ export function simulateRun({
   twsFactor = 1.0,
   maxHours = 14 * 24,
   passageStartedAt = null,
+  downwindSails = null,
+  watch = null,
 }) {
   const cfg = { ...SIMULATION_DEFAULTS, ...config };
   const pf = parsePerformanceFactor(performanceFactor);
@@ -1039,38 +1045,17 @@ export function simulateRun({
       fuelLiters += fuelRate * STEP_HOURS;
     }
 
-    // Comfort of the hour (SPEC §5.2). The simulated rig state rides
-    // in the vessel so the three-way slatting rule (work doc #38,
-    // validated on the 470-day backtest) applies: canvas up keeps
-    // flow attached even under motor (motor-sailing loads the sails),
-    // canvas down is the no-draw motoring case, and an unset state
-    // keeps the legacy conservative behavior.
+    // Sea state of the hour (the comfort evaluation itself runs in
+    // the post-pass once the downwind-sail windows are known — work
+    // doc #41: the recommendation precedes the comfort it relieves)
     const hs = weather?.marine?.hsCombined;
     const tp = weather?.marine?.tpCombined;
     const waveFrom = weather?.marine?.dirCombined;
-    const vessel = {
-      sogKnots: sog,
-      headingRad: heading,
-      waterlineLengthM: cfg.waterline_length_m,
-      kHeel: cfg.k_heel,
-      kPitch: cfg.k_pitch,
-      sailState:
-        sailState == null
-          ? null
-          : sailState === "NO_SAILS"
-            ? "motoring"
-            : "sailing",
-    };
-    const comfort = serenoComfort(
-      {
-        hsMeters: hs ?? 0,
-        tpSeconds: tp ?? 0,
-        waveTravelDirectionRad: travelDirection((waveFrom ?? 0) * DEG),
-      },
-      vessel,
-      { twsKnots: tws ?? 0, twaRad },
-    );
 
+    // The rig the hour actually sailed with: the suggestion block
+    // below may change the rig for the following hours, but this
+    // hour's comfort was evaluated on the canvas that was up
+    const rigAtEvaluation = sailState;
     // Learned sail preference for these conditions. A suggestion must
     // hold through a full step before it becomes an event (work doc
     // #5): bin-edge chatter must not flap the sail-work queue. The
@@ -1186,10 +1171,15 @@ export function simulateRun({
       distanceFromStartNm: Math.round(distanceMadeGoodNm * 10) / 10,
       headingDeg: Math.round(((heading / DEG) % 360) * 10) / 10,
       twdDeg: weather?.surface?.twd ?? null,
-      awsKnots: comfort.awsKnots,
-      azMs2: comfort.acceleration.value,
-      comfortLevel: comfort.comfort,
-      slatting: comfort.slatting,
+      twaRad,
+      awsKnots: apparentWindSpeedKnots({
+        twsKnots: tws ?? 0,
+        stwKnots: stw,
+        twaRad,
+      }),
+      azMs2: null,
+      comfortLevel: null,
+      slatting: null,
       twsKnots: tws,
       gustKnots,
       dayAtSea,
@@ -1200,9 +1190,11 @@ export function simulateRun({
           : null,
       hsMeters: hs ?? null,
       tpSeconds: tp ?? null,
+      waveTravelRad: travelDirection((waveFrom ?? 0) * DEG),
       stwKnots: stw,
       sogKnots: sog,
       sailState,
+      sailStateAtComfort: rigAtEvaluation,
       motoring,
       night,
       // Cloud cover at the boat's position (work doc #32): rides the
@@ -1378,6 +1370,208 @@ export function simulateRun({
     arrivedHours = hours; // Never arrived: report the max horizon
   }
 
+  // ── Downwind-sail deployment pass (work doc #41) ─────────────
+  // The advisor runs BEFORE the comfort evaluation: its forward
+  // horizons need the whole simulated timeline, and an established
+  // window changes the comfort the hours read — the recommendation
+  // precedes and supersedes the slatting penalty it relieves.
+  const deploymentEvents = [];
+  const poleNotes = [];
+  let comfortWindows = [];
+  // The param wins; the plugin's served config (the vessel's own
+  // inventory) fills in when the caller passes none
+  const advisorSails = Array.isArray(downwindSails)
+    ? downwindSails
+    : Array.isArray(cfg.downwindSails)
+      ? cfg.downwindSails
+      : null;
+  if (advisorSails != null && advisorSails.length > 0) {
+    const t0Ms = Date.parse(startTime.toISOString());
+    const tEndMs = t0Ms + maxHours * 3600000;
+    const advisorHours = hourly.map((row) => ({
+      hourMs: Date.parse(row.timestamp),
+      twsKnots: row.twsKnots ?? 0,
+      twaDeg:
+        row.twaRad == null
+          ? NaN
+          : Math.abs(((row.twaRad / DEG + 540) % 360) - 180),
+      awsKnots: row.awsKnots ?? 0,
+      hsMeters: row.hsMeters ?? undefined,
+      gustFactor:
+        row.gustKnots != null && row.twsKnots > 1
+          ? row.gustKnots / row.twsKnots
+          : undefined,
+      night: row.night === true,
+      underCanvas: row.sailState !== "NO_SAILS",
+    }));
+    const plan = deploymentPlan(advisorHours, {
+      downwindSails: advisorSails,
+      watchAnchorsMs: watchBoundaries(watch, t0Ms, tEndMs),
+      minWindowHours: DOWNWIND_MIN_WINDOW_HOURS,
+    });
+    // The covering comfort window per row: the Parasailor-class
+    // (comfort claim) deployment changes what the hours read — the
+    // downwind sail is up, drawing, damping the motion. Stamped in
+    // the comfort pass below, which always runs.
+    comfortWindows = plan.filter((d) => d.claim === "comfort");
+    // Timeline entries: deploy (anchored when the watch schedule put
+    // a handover inside the window), and the take-down where the
+    // forecast broke.
+    for (const d of plan) {
+      const startRow = hourly.find(
+        (row) => Date.parse(row.timestamp) === d.startMs,
+      );
+      const anchorText =
+        d.anchoredMs != null && d.anchoredMs !== d.startMs
+          ? "at the watch change"
+          : null;
+      deploymentEvents.push({
+        hoursFromNow: Math.round(((d.startMs - t0Ms) / 3600000) * 10) / 10,
+        timestamp: new Date(d.startMs).toISOString(),
+        sailName: d.sailName,
+        claim: d.claim,
+        anchored: anchorText,
+        hours: d.hours,
+      });
+      const breakLabel =
+        d.breakReason === "squall gusts"
+          ? "squall window"
+          : d.breakReason === "sea state"
+            ? "sea state"
+            : d.breakReason === "night"
+              ? "night"
+              : d.breakReason === "wind above envelope"
+                ? "wind building past the envelope"
+                : d.breakReason === "point of sail"
+                  ? "wind angle leaving the reach"
+                  : d.breakReason === "below fill floor"
+                    ? "wind dying"
+                    : d.breakReason === "wind below envelope"
+                      ? "wind dying"
+                      : null;
+      if (breakLabel != null) {
+        const untilRow = hourly.find(
+          (row) => Date.parse(row.timestamp) === d.untilMs,
+        );
+        deploymentEvents.push({
+          hoursFromNow: Math.round(((d.untilMs - t0Ms) / 3600000) * 10) / 10,
+          timestamp: new Date(d.untilMs).toISOString(),
+          sailName: d.sailName,
+          claim: d.claim,
+          takeDown: true,
+          breakReason: d.breakReason ?? null,
+          breakLabel,
+          anchored: null,
+          hours: d.hours,
+          // For the conditions tab: the row the take-down lands on
+          untilTimestamp: untilRow?.timestamp ?? null,
+        });
+      }
+    }
+  }
+
+  // The comfort evaluation per row (SPEC §5.2): inside a Parasailor
+  // deployment window the downwind sail is up, drawing, damping the
+  // motion — the recommendation precedes and supersedes the slatting
+  // penalty it relieves. Outside, the plan's own rig applies (canvas
+  // down reads motoring; unknown stays legacy).
+  const covering = (rowMs) =>
+    comfortWindows.find((d) => rowMs >= d.startMs && rowMs <= d.untilMs);
+  for (const row of hourly) {
+    const rowMs = Date.parse(row.timestamp);
+    const covered = covering(rowMs);
+    const vessel = {
+      sogKnots: row.sogKnots ?? 0,
+      headingRad: row.headingRad ?? 0,
+      waterlineLengthM: cfg.waterline_length_m,
+      kHeel: cfg.k_heel,
+      kPitch: cfg.k_pitch,
+      sailState: covered
+        ? "sailing"
+        : // null is a meaningful state (unknown rig: legacy slatting
+          // behavior) — only an absent field falls back to the row's
+          // post-suggestion rig
+          (row.sailStateAtComfort !== undefined
+              ? row.sailStateAtComfort
+              : row.sailState) == null
+          ? null
+          : (row.sailStateAtComfort !== undefined
+                ? row.sailStateAtComfort
+                : row.sailState) === "NO_SAILS"
+            ? "motoring"
+            : "sailing",
+      downwindStabilized: covered != null,
+    };
+    if (row.hsMeters != null && row.tpSeconds != null) {
+      const comfort = serenoComfort(
+        {
+          hsMeters: row.hsMeters,
+          tpSeconds: row.tpSeconds,
+          waveTravelDirectionRad: row.waveTravelRad ?? null,
+        },
+        vessel,
+        { twsKnots: row.twsKnots ?? 0, twaRad: row.twaRad ?? Math.PI },
+      );
+      row.azMs2 = comfort.acceleration.value;
+      row.comfortLevel = comfort.comfort;
+      row.slatting = comfort.slatting;
+      row.parasailorRecommended = covered != null;
+    }
+  }
+
+  // Poled-out drive advisories (bergie: the pole keeps the sails
+  // pulling past 150 deg TWA — below that it sails poorly): a deep
+  // run under canvas worth rigging the pole for, one entry per
+  // stretch. When the plan's TWA oscillates across the pole floor,
+  // the note names the oscillation instead — the crew would be in
+  // and out of the pole (bergie: the pole-toggle regime signal).
+  {
+    const POLE_FLOOR_DEG = 150;
+    const MIN_POLE_HOURS = 3;
+    let run = null;
+    let crossings = 0;
+    const flush = () => {
+      if (run && run.rows.length >= MIN_POLE_HOURS) {
+        const first = run.rows[0];
+        const last = run.rows.at(-1);
+        poleNotes.push({
+          hoursFromNow: first.hoursFromNow,
+          timestamp: first.timestamp,
+          untilTimestamp: last.timestamp,
+          hours: run.rows.length,
+          oscillating: crossings >= 2,
+        });
+      }
+      run = null;
+      crossings = 0;
+    };
+    for (const row of hourly) {
+      const folded =
+        row.twaRad == null
+          ? null
+          : Math.abs(((row.twaRad / DEG + 540) % 360) - 180);
+      if (
+        row.sailState !== "NO_SAILS" &&
+        row.sailState != null &&
+        folded != null &&
+        folded > POLE_FLOOR_DEG &&
+        (row.twsKnots ?? 0) >= 6
+      ) {
+        if (run) {
+          run.rows.push(row);
+        } else {
+          run = { rows: [row] };
+        }
+      } else {
+        if (run && folded != null && folded > POLE_FLOOR_DEG - 25) {
+          crossings++;
+        }
+        flush();
+      }
+    }
+    flush();
+  }
+
   return {
     etaHours: arrivedHours,
     eta: new Date(startTime.getTime() + arrivedHours * 3600000).toISOString(),
@@ -1393,6 +1587,8 @@ export function simulateRun({
     dayCheckpoints,
     sunDayTransitions,
     regimeTransitions,
+    deploymentEvents,
+    poleNotes,
     timeEvents,
     hazardAlerts: hazardAlerts(notes, positions),
   };
@@ -1608,6 +1804,7 @@ export function simulatePassage({
       startTime,
       twsFactor,
       passageStartedAt,
+      watch,
     }),
   );
   const base = runs.find((r) => r !== null);
@@ -1761,6 +1958,8 @@ export function simulatePassage({
     dayCheckpoints: nominal.dayCheckpoints,
     sunDayTransitions: nominal.sunDayTransitions,
     regimeTransitions: nominal.regimeTransitions,
+    deploymentEvents: nominal.deploymentEvents ?? [],
+    poleNotes: nominal.poleNotes ?? [],
     energy: energySummary(energyHourly, startTime),
     runs: runs.map((run, i) => ({
       twsFactor: ETA_FACTORS[i],
@@ -2002,6 +2201,8 @@ export function filterExceptions(simulationResult, simParams = {}) {
       regimeSummary,
       sunDayTransitions: simulationResult.sunDayTransitions ?? [],
       regimeTransitions: simulationResult.regimeTransitions ?? [],
+      deploymentEvents: simulationResult.deploymentEvents ?? [],
+      poleNotes: simulationResult.poleNotes ?? [],
       // Squall-risk episodes (work doc #38 session feedback): hours
       // where the forecasted gusts dwarf the base wind merge into one
       // entry carrying the peak gust factor — the timeline's "advise

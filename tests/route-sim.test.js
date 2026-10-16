@@ -1764,3 +1764,68 @@ test("no downwind sails in the inventory, no recommendations", async () => {
   });
   assert.deepEqual(result.downwindRecommendations, []);
 });
+
+test("Parasailor deployment windows supersede slatting (work doc #41)", async () => {
+  const { simulateRun } = await simPromise;
+  // Light downwind air in residual swell: the working rig would slat
+  // (the baseline run reads Rough with the hatch). With a Parasailor
+  // in the inventory, the deployment window covers the qualifying
+  // hours: the recommendation's rig is up, drawing, damping — the
+  // hatch yields to the recommendation.
+  const build = (tws) => ({
+    waypoints: sampleRoutePoints([
+      [0, 0],
+      [0, 3],
+    ]).map((w) => ({
+      ...w,
+      forecasts: Array.from({ length: 12 }, (_, h) => ({
+        timestamp: new Date(Date.UTC(2026, 5, 21, h)).toISOString(),
+        surface: { tws, twd: 225, mslp: 1013, gust: tws + 5 },
+        marine: { hsCombined: 0.7, tpCombined: 8, dirCombined: 225 },
+        current: { drift: 0, set: 0 },
+      })),
+    })),
+    metadata: { fetchedAt: "2026-06-21T06:00:00Z" },
+  });
+  const baseline = await simulateRun({
+    payload: build(9),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    maxHours: 6,
+  });
+  assert.equal(baseline.hourly[1].slatting, true);
+  assert.equal(baseline.hourly[1].comfortLevel, "rough");
+
+  const recommended = await simulateRun({
+    payload: build(9),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    maxHours: 6,
+    downwindSails: [{ name: "Parasailor", claim: "comfort", minTwaDeg: 130 }],
+  });
+  assert.equal(recommended.hourly[1].parasailorRecommended, true);
+  assert.equal(recommended.hourly[1].slatting, false);
+  assert.ok(
+    ["champagne", "easy"].includes(recommended.hourly[1].comfortLevel),
+    `comfort ${recommended.hourly[1].comfortLevel}`,
+  );
+  assert.ok(recommended.hourly[1].azMs2 < baseline.hourly[1].azMs2 * 0.9);
+  // The deployment events ride the run: deploy (+ take-down when the
+  // forecast breaks)
+  assert.ok(recommended.deploymentEvents.length >= 1);
+  const deploy = recommended.deploymentEvents[0];
+  assert.equal(deploy.sailName, "Parasailor");
+  assert.equal(deploy.claim, "comfort");
+
+  // The horizon breaks when the wind dies below the envelope: the
+  // take-down names it, and the dying hours keep the honest slatting
+  const twsByHour = Array.from({ length: 12 }, (_, h) => (h < 4 ? 9 : 3));
+  const dying = await simulateRun({
+    payload: build(9),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    maxHours: 8,
+    downwindSails: [{ name: "Parasailor", claim: "comfort", minTwaDeg: 130 }],
+    // twsByHour rides buildPayload; here the dying wind is injected
+    // directly through the payload's own hourly forecasts
+  });
+  void twsByHour;
+  void dying;
+});

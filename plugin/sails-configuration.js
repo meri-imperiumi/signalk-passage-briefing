@@ -155,3 +155,54 @@ module.exports = {
   sailsMatchingStateKey,
   classifySail,
 };
+
+/**
+ * The downwind sail inventory shaped for the deployment advisor (work
+ * doc #41): family, the measured-vs-drive claim, the configured wind
+ * limits in knots, and the class's TWA floor. The Parasailor-class
+ * carries the comfort claim — its stabilizing effect is the measured
+ * 0.78 a_z ratio (work doc #38/#41 session) — the reaching families
+ * claim drive. TWA floors: the Parasailor 130° (bergie, and the
+ * logged deployments agree at p10 142°), gennaker/spinnaker 110°, the
+ * code zero's reaching band from 60°.
+ *
+ * @param {Array} sails - From {@link readSailsConfiguration}
+ * @returns {Array<{name: string, family: string, claim: string,
+ *   minTwsKnots?: number, maxTwsKnots?: number, minTwaDeg: number}>}
+ */
+function downwindAdvisorSails(sails) {
+  const TWA_FLOORS = {
+    parasailor: 130,
+    gennaker: 110,
+    spinnaker: 110,
+    "code zero": 60,
+  };
+  const CLAIMS = { parasailor: "comfort" };
+  return (Array.isArray(sails) ? sails : [])
+    .filter((sail) => sail.downwind)
+    .map((sail) => {
+      const advisor = {
+        name: sail.name,
+        family: sail.sailFamily,
+        claim: CLAIMS[sail.sailFamily] ?? "drive",
+        minTwaDeg: TWA_FLOORS[sail.sailFamily] ?? 110,
+      };
+      if (sail.minimumWindKnots != null) {
+        advisor.minTwsKnots = sail.minimumWindKnots;
+      }
+      if (sail.maximumWindKnots != null) {
+        advisor.maxTwsKnots = sail.maximumWindKnots;
+      }
+      return advisor;
+    });
+}
+
+module.exports = {
+  MS_TO_KNOTS,
+  DOWNWIND_FAMILIES,
+  normalizeSailName,
+  readSailsConfiguration,
+  sailsMatchingStateKey,
+  classifySail,
+  downwindAdvisorSails,
+};

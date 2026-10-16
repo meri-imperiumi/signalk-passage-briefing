@@ -28,7 +28,10 @@ const {
   readLogbookEntries,
   readLogbookSailEvents,
 } = require("./logbook-source.js");
-const { readSailsConfiguration } = require("./sails-configuration.js");
+const {
+  downwindAdvisorSails,
+  readSailsConfiguration,
+} = require("./sails-configuration.js");
 const {
   filterBulletin,
   resolveBulletinSource,
@@ -297,6 +300,9 @@ module.exports = (app) => {
   const briefMeta = { generatedAt: null, route: null };
   /** Last acknowledged `generatedAt` (tile NEW badge reset point). */
   let lastAckAt = null;
+  /** The downwind sail inventory for the deployment advisor (work
+   * doc #41), read once at start and refreshed with the config. */
+  let downwindSailCache = [];
   /** Plotter-extension provider teardown (registered at start). */
   let teardownPlotterExt = null;
   let teardownStatusTiles = null;
@@ -2401,6 +2407,24 @@ module.exports = (app) => {
      */
     start: (options) => {
       const config = { ...DEFAULTS, ...(options || {}) };
+      // The downwind sail inventory for the deployment advisor (work
+      // doc #41): read once, async — the advisor stays silent until
+      // it lands rather than recommending canvas the boat may not
+      // carry.
+      readSailsConfiguration(
+        join(
+          app.config?.configPath ?? app.getDataDirPath(),
+          "plugin-config-data",
+          "sailsconfiguration.json",
+        ),
+      )
+        .then((sails) => {
+          downwindSailCache = downwindAdvisorSails(sails);
+          simulationConfig.downwindSails = downwindSailCache;
+        })
+        .catch(() => {
+          // Absent inventory: no downwind recommendations
+        });
       bulletinUrls = Array.isArray(config.bulletin_urls)
         ? config.bulletin_urls
         : [];
@@ -2471,6 +2495,11 @@ module.exports = (app) => {
         k_heel: config.k_heel,
         k_pitch: config.k_pitch,
         lines_of_interest_enabled: config.lines_of_interest_enabled,
+        // Downwind sail inventory for the deployment advisor (work
+        // doc #41): empty until the start-time read lands — the
+        // advisor stays silent rather than recommending canvas the
+        // boat may not carry.
+        downwindSails: downwindSailCache,
       };
       stateMachine = new PassageStateMachine();
       db = new PassageDatabase(app.getDataDirPath());

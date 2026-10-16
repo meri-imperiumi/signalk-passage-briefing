@@ -1561,6 +1561,53 @@ export function mergeTimeline(exceptions, payload = null) {
     });
   }
 
+  // Downwind-sail deployment recommendations (work doc #41): the
+  // advisor's deploy and take-down entries ride the same timeline —
+  // the comfort claim carries the measured Parasailor damping, the
+  // drive claim (poled-out) keeps the sails pulling with no comfort
+  // promise. The take-down names why the forecast broke the window.
+  for (const d of summary.deploymentEvents ?? []) {
+    const label = d.takeDown ? `${d.sailName} down` : `Deploy ${d.sailName}`;
+    const claimText =
+      d.claim === "comfort"
+        ? "smoother ride (measured)"
+        : "keeps the sails pulling";
+    push({
+      hoursFromNow: d.hoursFromNow ?? null,
+      timestamp: d.timestamp ?? null,
+      kind: "sail",
+      severity: d.takeDown ? "info" : "info",
+      label,
+      detail: [
+        d.takeDown ? (d.breakLabel ?? null) : claimText,
+        d.anchored,
+        d.takeDown ? null : d.hours != null ? `${d.hours} h window` : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      night: false,
+    });
+  }
+
+  // Pole advisories (bergie: the pole keeps the sails pulling past
+  // 150 deg TWA; below that it sails poorly). An oscillating stretch
+  // says so — the crew would be in and out of the pole.
+  for (const p of summary.poleNotes ?? []) {
+    push({
+      hoursFromNow: p.hoursFromNow ?? null,
+      timestamp: p.timestamp ?? null,
+      kind: "sail",
+      severity: "info",
+      label: p.oscillating
+        ? "Wind fluctuating around dead downwind"
+        : "Rig the pole",
+      detail: p.oscillating
+        ? `pole in and out · ${p.hours} h`
+        : `keeps the sails pulling on the deep run · ${p.hours} h`,
+      night: false,
+    });
+  }
+
   // Hazard notes along the track (whole passage; the tactical slice
   // picks up its share by hoursFromNow). Provenance (work doc #31):
   // the note's url is the GDACS event page the note was built from
