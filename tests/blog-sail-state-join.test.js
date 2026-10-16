@@ -74,3 +74,22 @@ test("recognizes canvas-adjustment and poling phrasing", () => {
   );
   assert.equal(events[1].text, "sailing with main (canvas adjusted)");
 });
+
+test("recognizes the structured Sails set: phrasing", () => {
+  const events = sailEvents([
+    {
+      datetime: "2026-04-03T08:03:00Z",
+      text: "Sails set: Staysail, Genoa 1 (10% furled). Main was slatting too much",
+    },
+    { datetime: "2026-04-03T14:31:00Z", text: "Sails set: Parasailor" },
+  ]);
+  assert.deepEqual(
+    events.map((e) => e.state),
+    ["sailing", "sailing"],
+  );
+  assert.equal(
+    events[0].text,
+    "sailing with Staysail, Genoa 1 (10% furled). Main was slatting too much",
+  );
+  assert.equal(events[1].text, "sailing with Parasailor");
+});

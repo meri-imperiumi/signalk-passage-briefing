@@ -52,6 +52,14 @@ const SAIL_ADJUST_RE = /^sail\s*\(([^)]+)\)/i;
 const POLED_OUT_RE = /\bpoled out\b/i;
 
 /**
+ * Structured sail-set lines: "Sails set: Parasailor" — the phrasing
+ * the logbook app writes for explicit sail changes (distinct from
+ * the narrative "sailing with X" watch lines). Same sailing state,
+ * captured sail list and all.
+ */
+const SAILS_SET_RE = /^sails?\s+set:?\s+(.+)$/i;
+
+/**
  * Motoring events: sails down (with or without the trailing
  * "motoring"), or an explicit motoring statement.
  */
@@ -90,6 +98,15 @@ function sailEvents(entries) {
       }
       if (POLED_OUT_RE.test(line)) {
         events.push({ iso: entry.datetime, state: "sailing", text: line });
+        continue;
+      }
+      const sailsSet = SAILS_SET_RE.exec(line);
+      if (sailsSet) {
+        events.push({
+          iso: entry.datetime,
+          state: "sailing",
+          text: `sailing with ${sailsSet[1]}`,
+        });
         continue;
       }
       if (SAILS_DOWN_RE.test(line) || MOTORING_RE.test(line)) {
