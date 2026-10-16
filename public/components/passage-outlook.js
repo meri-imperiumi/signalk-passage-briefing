@@ -32,6 +32,15 @@ import {
   fetchShipTime,
 } from "./sk-api.js";
 import { SK_BASE_CSS } from "./sk-base-css.js";
+// The root instantiates these in its templates and calls methods on
+// them synchronously from connectedCallback — which runs during
+// customElements.define, so the definitions must already be in place
+// (a page importing only this module otherwise upgrades the root
+// before its children are defined, and every child call is undefined)
+import "./tactical-dashboard.js";
+import "./strategic-outlook.js";
+import "./conditions-here.js";
+import "./backfill-controls.js";
 
 /**
  * Plugin API base. SK v2 serves the webapp itself under
