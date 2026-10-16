@@ -4,7 +4,11 @@ const { mkdtempSync, existsSync, readdirSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 
-const { forecastFixture, mockOpenMeteo } = require("./openmeteo-mock.js");
+const {
+  forecastFixture,
+  mockOpenMeteo,
+  TIMES,
+} = require("./openmeteo-mock.js");
 
 const {
   KEEP_SNAPSHOTS,
@@ -200,6 +204,37 @@ describe("fetchWeatherAlongTrack", () => {
         [0, 1.5],
       ]),
     );
+  });
+
+  test("falls back to mean wave period when the model publishes no peak", async () => {
+    // GFS-Wave on Open-Meteo returns wave_peak_period as all-null
+    // (verified October 2026) — the comfort model needs a period, so
+    // the mean-period series steps in
+    const noPeak = {
+      waves: {
+        hourly: {
+          time: TIMES,
+          wave_height: [1.2, 1.4],
+          wave_direction: [160, 165],
+          wave_peak_period: [null, null],
+          wave_period: [6.9, 7.2],
+          wind_wave_height: [0.5, 0.6],
+          wind_wave_period: [4, 4.2],
+          wind_wave_direction: [170, 172],
+          swell_wave_height: [0.9, 1.0],
+          swell_wave_period: [9, 9.1],
+          swell_wave_direction: [150, 152],
+        },
+      },
+    };
+    const payload = await fetchWeatherAlongTrack({
+      waypoints: WAYPOINTS,
+      fetchImpl: mockOpenMeteo(noPeak),
+    });
+    assert.equal(payload.waypoints[0].forecasts[0].marine.tpCombined, 6.9);
+    assert.equal(payload.waypoints[0].forecasts[1].marine.tpCombined, 7.2);
+    // hsCombined unaffected
+    assert.equal(payload.waypoints[0].forecasts[0].marine.hsCombined, 1.2);
   });
 
   test("aligns multi-location responses in request order", async () => {

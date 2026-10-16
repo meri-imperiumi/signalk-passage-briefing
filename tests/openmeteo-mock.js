@@ -45,6 +45,7 @@ function wavesFixture() {
       wave_height: [1.2, 1.4],
       wave_direction: [160, 165],
       wave_peak_period: [7, 7.5],
+      wave_period: [6.9, 7.2],
       wind_wave_height: [0.5, 0.6],
       wind_wave_period: [4, 4.2],
       wind_wave_direction: [170, 172],
@@ -96,6 +97,7 @@ function mockOpenMeteo(overrides = {}) {
 }
 
 module.exports = {
+  TIMES,
   forecastFixture,
   wavesFixture,
   currentsFixture,

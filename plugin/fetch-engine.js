@@ -83,6 +83,10 @@ const WAVE_HOURLY = [
   "wave_height",
   "wave_direction",
   "wave_peak_period",
+  // Mean period: the GFS wave model on Open-Meteo published peak
+  // period as all-null during October 2026, so the comfort model's
+  // resonance engine falls back to this when peak is absent
+  "wave_period",
   "wind_wave_height",
   "wind_wave_period",
   "wind_wave_direction",
@@ -453,7 +457,9 @@ function buildTimeSteps(surfaceMap, marineMap, currentMap) {
       },
       marine: {
         hsCombined: num(marine.wave_height),
-        tpCombined: num(marine.wave_peak_period),
+        // Peak period when the model publishes it, else the mean
+        // period (see WAVE_HOURLY)
+        tpCombined: num(marine.wave_peak_period) ?? num(marine.wave_period),
         dirCombined: num(marine.wave_direction),
         hsSwell: num(marine.swell_wave_height),
         tpSwell: num(marine.swell_wave_period),
@@ -579,6 +585,7 @@ async function fetchWeatherAlongTrack({
       "wave_height",
       "wave_direction",
       "wave_peak_period",
+      "wave_period",
       "wind_wave_height",
       "wind_wave_period",
       "wind_wave_direction",
