@@ -1553,3 +1553,88 @@ test("severe blocks with far-away coordinates are discarded, not rescued", async
   });
   assert.ok(kept?.blocks?.length >= 1, "unplaceable severe block kept");
 });
+
+test("FQPS01 NFFN 2026-10-17: the PART 2 continuation parses whole", () => {
+  // A multi-part NFFN bulletin whose part boundary splits the
+  // reports-request paragraph mid-address: the "AT MET DOT GOV DOT
+  // FJ" fragment lands fused onto the cancels notice ("…DOT
+  // FJTHIS WARNING CANCELS…") and the gale warning that follows
+  // carries no `PART n :` GMDSS prefix (work doc #47 session parse
+  // report)
+  const raw = readFixture("fqps01-nffn-2026-10-17.txt");
+  const cleaned = stripBoilerplate(raw);
+
+  // The fused admin fragment is gone; the cancels notice survives as
+  // its own line; the asterisk separator rule is dropped
+  assert.ok(!cleaned.includes("FJTHIS"), "fused address fragment de-glued");
+  assert.match(cleaned, /^PART 2 OF 3\nTHIS WARNING CANCELS AND REPLACES/m);
+  assert.ok(!/\*\*\*\*/.test(cleaned), "asterisk separator rule dropped");
+
+  // The warning section is typed by the bare RSMC header: the gale
+  // warning coalesces into one complete block — header, area
+  // polygon, trailer and both cancel notices
+  const result = filterBulletin({
+    rawText: raw,
+    source: "spool",
+    track: [[-161.2, -14.5]],
+  });
+  const gale = result.blocks.find((b) => /GALE WARNING 020/.test(b.text));
+  assert.ok(gale, "gale warning kept for a vessel inside its area");
+  assert.equal(gale.geometryType, "polygon");
+  assert.match(gale.text, /CANCELS AND REPLACES WARNING 018/);
+  assert.match(gale.text, /IN THE AREA BOUNDED BY 13S 162W/);
+  assert.match(gale.text, /AREA OF GALES SLOW MOVING/);
+  assert.match(gale.text, /CANCELS AND REPLACES WARNING 017/);
+  assert.deepEqual(gale.geometry.coordinates[0], [-162, -13]);
+  assert.deepEqual(
+    gale.geometry.coordinates[gale.geometry.coordinates.length - 1],
+    [-162, -13],
+    "the area ring closes",
+  );
+});
+
+test("FQPS01 NFFN 2026-10-17: synopsis features and radius bands", () => {
+  const raw = readFixture("fqps01-nffn-2026-10-17.txt");
+  const cleaned = stripBoilerplate(raw);
+  const features = collectFeatures(cleaned);
+
+  // The cyclone moved: spelled hemispheres line-wrapped across the
+  // part boundary
+  assert.deepEqual(features.get("WATI"), [[-163, -14.7]]);
+  assert.deepEqual(features.get("TCWATI"), [[-163, -14.7]]);
+  // The shallow low is a declared letter feature
+  assert.deepEqual(features.get("L"), [[-130, -22.1]]);
+
+  // The convergence zone chains through the cyclone mid-chain ("TO
+  // TC WATI TO") — the splice lands Wati's position in the ring
+  const cz1 = extractGeometry(
+    "CONVERGENCE ZONE CZ1 04S 166E 02S 180E 01S 170W 05S 164W 12S\n159W TO TC WATI TO 16S 165W 18S 160W 15S 152W. CZ1 SLOW MOVING. POOR\nVISIBILITY IN PERIODS OF RAIN, HEAVY AT TIMES AND SQUALLY\nTHUNDERSTORMS WITHIN 180 NAUTICAL MILES OF CZ1.",
+    features,
+  );
+  assert.equal(cz1.type, "polygon");
+  assert.ok(
+    cz1.coordinates.some(([lon, lat]) => lon === -163 && lat === -14.7),
+    "TC WATI position spliced into the chain",
+  );
+  assert.equal(cz1.bufferNm, 180);
+
+  // The trough chains through the low ("TO L TO")
+  const t1 = extractGeometry(
+    "TROUGH T1 18S 124W 22S 125W 23S 128W TO L TO 25S 130W 24S 120W.",
+    features,
+  );
+  assert.ok(
+    t1.coordinates.some(([lon, lat]) => lon === -130 && lat === -22.1),
+    "L position spliced into the trough chain",
+  );
+
+  // The wind-field band: a radius reads as a circle around Wati's
+  // new position
+  const band = extractGeometry(
+    "WITHIN 300 NAUTICAL MILES OF TROPICAL CYCLONE WATI CENTRE AND OUTSIDE\nHURRICANE WARNING 019 AND GALE WARNING 020 AREAS, EXPECT CLOCKWISE\nWINDS UP TO 30 KNOTS.",
+    features,
+  );
+  assert.equal(band.type, "polygon");
+  const lats = band.coordinates.map(([, lat]) => lat);
+  approx(Math.max(...lats), -9.7);
+});

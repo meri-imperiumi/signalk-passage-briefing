@@ -113,6 +113,9 @@ function stripBoilerplate(text) {
     if (/^\d{3,4}$/.test(trimmed)) {
       continue; // NWS product frame line ("000")
     }
+    if (/^\*+$/.test(trimmed)) {
+      continue; // NFFN asterisk separator rule (framing, not content)
+    }
     if (/^[A-Z]{4}\d{2}\s+[A-Z]{4}\s+\d{6}Z?/.test(trimmed)) {
       continue; // Routing header (FQPS01 NFFN 011200Z AUG 26,
       // or the NWS API's bare "FZPN03 KNHC 030838")
@@ -129,6 +132,14 @@ function stripBoilerplate(text) {
     kept
       .join("\n")
       .replace(/\bGULF OF AMERICA\b/gi, "GULF OF MEXICO")
+      // The reports-request email address ("EMAIL NADITCC AT MET DOT
+      // GOV DOT FJ") is administrative framing; when a multi-part
+      // bulletin splits the paragraph at the part boundary the
+      // fragment lands fused onto the next line ("…DOT FJTHIS WARNING
+      // CANCELS…"), breaking the section anchor it precedes. Dropped
+      // only in the fused form — the standalone address line stays
+      // put (it rides its own block and is dropped by the filter)
+      .replace(/[ \t]*AT MET DOT GOV DOT FJ(?=[A-Z])/gi, "")
       // OCR misread of the digit zero as a letter O ("NORTH OF O5S"):
       // an O directly opening a number run is always a zero in these
       // all-caps bulletins, and an unparsed latitude bound widens the
@@ -246,9 +257,32 @@ function segmentBlocks(text) {
  * @param {string[]} sectionBlocks - One section's blocks
  * @returns {boolean}
  */
+/**
+ * Whether a section is a warning section: its anchor line (the
+ * section's first block's first line) is a GMDSS anchor naming
+ * WARNING — `PART 1 : WARNING`, `.WARNINGS.` — or the section opens
+ * with a bare RSMC warning header. The part-continuation bulletins
+ * (NFFN splits a gale warning across PART 2) carry no `PART n :`
+ * GMDSS prefix: the header is the plain `GALE WARNING 020 ISSUED
+ * FROM RSMC NADI…` line, possibly preceded by a fused admin
+ * fragment, and the section must still coalesce.
+ *
+ * @param {string[]} sectionBlocks - One section's blocks
+ * @returns {boolean}
+ */
+const WARNING_HEADER_ANCHOR = /\bWARNING\s+\d+\s+ISSUED\s+FROM\b/i;
+
 function isWarningSection(sectionBlocks) {
   const anchor = sectionBlocks[0]?.split(/\r?\n/, 1)[0]?.trim() ?? "";
-  return SECTION_ANCHORS.test(anchor) && /WARNING/i.test(anchor);
+  if (SECTION_ANCHORS.test(anchor) && /WARNING/i.test(anchor)) {
+    return true;
+  }
+  // No GMDSS prefix: a bare RSMC warning header inside the section's
+  // first blocks types it anyway (the synopsis never carries one —
+  // it references warning *numbers*, never their ISSUED FROM line)
+  return sectionBlocks
+    .slice(0, 3)
+    .some((block) => WARNING_HEADER_ANCHOR.test(block.split(/\r?\n/, 1)[0]));
 }
 
 /**
@@ -546,12 +580,14 @@ function parseCardinalBounds(text) {
 
 /**
  * Synoptic feature declarations the named-bound resolution
- * recognizes: `TROUGH T1`, `COLD FRONT CF`, `LOW PRESSURE L`, … The
- * name must carry a digit or be one of the conventional CF, L, H so
- * prose ("TROUGH AXIS") is not mistaken for a name.
+ * recognizes: `TROUGH T1`, `COLD FRONT CF`, `LOW PRESSURE L`,
+ * `CONVERGENCE ZONE CZ1`, … The name must carry a digit or be one of
+ * the conventional CF, L, H so prose ("TROUGH AXIS") is not mistaken
+ * for a name. Intensity modifiers ("SHALLOW LOW PRESSURE L") ride
+ * ahead of the feature word — NFFN spells them out.
  */
 const FEATURE_DECLARATION =
-  /^(?:TROUGH|COLD FRONT|WARM FRONT|SHEAR LINE|RIDGE|LOW(?:\s+PRESSURE)?|HIGH)\s+([A-Z]\d+|CF|L|H)\b/i;
+  /^(?:(?:SHALLOW|DEEP|INTENSE|WEAK)\s+)?(?:TROUGH|COLD FRONT|WARM FRONT|SHEAR LINE|RIDGE|CONVERGENCE ZONE|LOW(?:\s+PRESSURE)?|HIGH)\s+([A-Z]\d+|CF|L|H)\b/i;
 
 /** Name-shaped token referenced by cardinal bounds. */
 const FEATURE_NAME = "(CF|L|H|[A-Z]\\d+)";
