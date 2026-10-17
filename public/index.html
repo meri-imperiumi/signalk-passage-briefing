@@ -11,6 +11,14 @@
        tooling, loads as a classic script that sets window.L -->
   <script src="vendor/leaflet/leaflet.js"
     onerror="console.error('failed to load leaflet.js')"></script>
+  <!-- MapLibre GL + the Leaflet bridge (BSD-3/ISC, work doc #47
+       session): vector chart rendering for the offline corridor
+       mirror. Optional — the map degrades to raster charts without
+       it, same as signalk-dead-reckoning's chart path -->
+  <script src="vendor/maplibre-gl/maplibre-gl.js"
+    onerror="console.error('failed to load maplibre-gl.js')"></script>
+  <script src="vendor/maplibre-gl/leaflet-maplibre-gl.js"
+    onerror="console.error('failed to load leaflet-maplibre-gl.js')"></script>
   <script type="module" src="app.js"></script>
 </head>
 <body>

@@ -31,60 +31,24 @@
 import {
   blockShapes,
   capShape,
+  chartAssetsFromManifest,
   eventPins,
+  fitPoints,
   frameBounds,
   hazardPin,
+  isVectorChart,
+  maplibreStyleFor,
+  OSM_LAYER,
+  parseChartLayers,
   ribbonSegments,
   routeRibbon,
   stormGraphic,
   stormMarker,
   stormRingColor,
+  vesselFitBounds,
 } from "./map-model.mjs";
 import { comfortColor } from "./models.mjs";
 import { SK_BASE_CSS } from "./sk-base-css.js";
-
-/** The default fallback basemap (online only): OSM tiles. */
-const OSM_LAYER = {
-  name: "OpenStreetMap (online)",
-  url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-  attribution: "© OpenStreetMap contributors",
-  maxZoom: 19,
-};
-
-/**
- * Parses the server's configured chart resources into raster tile
- * layers (offline MBTiles and tile proxies serve the standard
- * `{z}/{x}/{y}` scheme). Field names follow the Signal K chart
- * resource convention — `minzoom`/`maxzoom`, lowercase — with
- * numeric guards so a malformed value degrades to Leaflet's
- * defaults, never into the tile layer's zoom arithmetic. Entries
- * without a tile URL are skipped — vector charts would need
- * MapLibre and are phase-3 material.
- *
- * @param {object|null} resource - `/signalk/v1/api/resources/charts`
- * @returns {Array<{name: string, url: string, attribution?: string,
- *   minZoom?: number, maxZoom?: number}>}
- */
-export function parseChartLayers(resource) {
-  const layers = [];
-  for (const [id, chart] of Object.entries(resource ?? {})) {
-    const url =
-      typeof chart?.tilemapUrl === "string" && chart.tilemapUrl.includes("{z}")
-        ? chart.tilemapUrl
-        : null;
-    if (!url) {
-      continue;
-    }
-    layers.push({
-      name: chart.name ?? chart.identifier ?? id,
-      url,
-      attribution: chart.attribution ?? "",
-      minZoom: typeof chart.minzoom === "number" ? chart.minzoom : undefined,
-      maxZoom: typeof chart.maxzoom === "number" ? chart.maxzoom : undefined,
-    });
-  }
-  return layers.sort((a, b) => a.name.localeCompare(b.name));
-}
 
 /**
  * The custom element (browser only).
@@ -97,6 +61,7 @@ class PbMapView extends HTMLElement {
     this._blocks = [];
     this._wider = [];
     this._payload = null;
+    this._vessel = null;
     this._ribbonRows = [];
     this._events = [];
     this._shapes = [];
@@ -145,6 +110,7 @@ class PbMapView extends HTMLElement {
         .pb-pin:focus { outline: none; }
       </style>
       <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+      <link rel="stylesheet" href="vendor/maplibre-gl/maplibre-gl.css">
       <div class="map-wrap" part="map"></div>
     `;
     this.mapEl = this.shadowRoot.querySelector(".map-wrap");
@@ -193,21 +159,59 @@ class PbMapView extends HTMLElement {
       worldCopyJump: true,
     });
     L.control.zoom({ position: "bottomleft" }).addTo(this.map);
-    this._basemaps = L.control.layers(null, null, { position: "bottomleft" });
-    fetch("/signalk/v1/api/resources/charts")
+    // On touch the collapsed gear is one more tap between the crew and
+    // their charts — render the layer list expanded on coarse pointers
+    const coarse =
+      typeof matchMedia === "function" &&
+      matchMedia("(pointer: coarse)").matches;
+    this._basemaps = L.control.layers(null, null, {
+      position: "bottomleft",
+      collapsed: !coarse,
+    });
+    let osmFallbackLayer = null;
+    // The corridor tile downloader's offline mirror (work doc #47
+    // session): the manifest advertises the mirrored Open Waters GL
+    // style — absolute URLs, sprite and glyph endpoints rewritten —
+    // once the mirror is complete enough to render. Fetched alongside
+    // the charts; the mirror mounts as the first base layer.
+    const manifestReady = fetch(
+      "/plugins/signalk-corridor-tile-downloader/assets/manifest.json",
+    )
       .then((r) => (r.ok ? r.json() : null))
-      .then((resource) => {
+      .catch(() => null);
+    Promise.all([
+      fetch("/signalk/v1/api/resources/charts")
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+      manifestReady,
+    ])
+      .then(([resource, manifest]) => {
         const charts = parseChartLayers(resource);
         console.info(`pb-map-view: ${charts.length} configured chart layer(s)`);
-        const bases = charts.length > 0 ? charts : [OSM_LAYER];
+        const assets = chartAssetsFromManifest(manifest);
+        const vectorCharts = charts.filter((c) => isVectorChart(c));
+        // Raster-dem mirrors (webp elevation) are terrain data, not a
+        // visual basemap — excluded like dead-reckoning's chart path
+        const rasterCharts = charts.filter(
+          (c) => !isVectorChart(c) && c.format !== "webp",
+        );
+        // Basemap hierarchy (work doc #47 session): the offline
+        // corridor mirror leads when it mounts; then the configured
+        // charts; OSM online is the universal base and the
+        // always-switchable fallback
+        const bases = [];
+        const mounted = [];
         let first = null;
-        for (const chart of bases) {
-          const layer = L.tileLayer(chart.url, {
-            attribution: chart.attribution ?? "",
-            minZoom: chart.minZoom,
-            maxZoom: chart.maxZoom,
-          });
-          this._watchTileLayer(layer, chart.name);
+        const addBase = (label, layer) => {
+          let name = label;
+          // The control is keyed by display name — dedupe so two
+          // charts sharing a name don't clobber each other's radio
+          for (let n = 2; bases.includes(name); n++) name = `${label} (${n})`;
+          bases.push(name);
+          mounted.push(layer);
+          return name;
+        };
+        const tryAdd = (layer, name) => {
           if (!first) {
             first = layer;
             try {
@@ -220,27 +224,74 @@ class PbMapView extends HTMLElement {
               this._pendingBasemap = layer;
             }
           } else {
-            this._basemaps.addBaseLayer(layer, chart.name);
+            this._basemaps.addBaseLayer(layer, name);
           }
+        };
+        let vectorMounted = false;
+        if (assets) {
+          if (typeof L.maplibreGL === "function") {
+            const mirror = L.maplibreGL({ style: assets.style });
+            const name = addBase("Open Waters chart", mirror);
+            tryAdd(mirror, name);
+            vectorMounted = true;
+          } else {
+            console.warn(
+              "pb-map-view: mirrored chart style skipped — MapLibre bridge not loaded",
+            );
+          }
+        }
+        if (!vectorMounted) {
+          for (const chart of vectorCharts) {
+            if (typeof L.maplibreGL !== "function") {
+              console.warn(
+                `pb-map-view: vector chart "${chart.name}" skipped — MapLibre bridge not loaded`,
+              );
+              continue;
+            }
+            const layer = L.maplibreGL({
+              style: maplibreStyleFor(chart),
+            });
+            const name = addBase(chart.name, layer);
+            tryAdd(layer, name);
+          }
+        }
+        for (const chart of rasterCharts) {
+          const layer = L.tileLayer(chart.url, {
+            attribution: chart.attribution ?? "",
+            minZoom: chart.minZoom,
+            maxZoom: chart.maxZoom,
+            maxNativeZoom: chart.maxZoom,
+          });
+          this._watchTileLayer(layer, chart.name);
+          const name = addBase(chart.name, layer);
+          tryAdd(layer, name);
         }
         // The online fallback stays switchable even when configured
         // charts exist — a dead chart tile URL is one tap away from
         // a working map (dead-reckoning's "blank chart reads as
-        // broken" feedback, 2026-09)
-        if (charts.length > 0) {
-          this._basemaps.addBaseLayer(
-            L.tileLayer(OSM_LAYER.url, {
-              attribution: OSM_LAYER.attribution,
-              maxZoom: OSM_LAYER.maxZoom,
-            }),
-            OSM_LAYER.name,
-          );
+        // broken" feedback, 2026-09). The same layer instance is
+        // registered here and reused by the auto-recovery below, so
+        // switching back to a chart actually removes the fallback —
+        // an unregistered slip-underneath layer would be
+        // unswitchable, which is how a phone ends up parked on
+        // OpenStreetMap
+        if (mounted.length > 0) {
+          osmFallbackLayer = L.tileLayer(OSM_LAYER.url, {
+            attribution: OSM_LAYER.attribution,
+            maxZoom: OSM_LAYER.maxZoom,
+          });
+          this._basemaps.addBaseLayer(osmFallbackLayer, OSM_LAYER.name);
         }
-        // Auto-recovery: a configured chart whose tiles all fail
-        // (dead tile server, stale MBTiles) leaves a grey canvas
+        // Auto-recovery: a configured raster chart whose tiles all
+        // fail (dead tile server, stale MBTiles) leaves a grey canvas
         // beneath the overlays — slip the OSM fallback underneath
-        // so the crew sees a chart regardless
-        if (first) {
+        // so the crew sees a chart regardless. The fallback is the
+        // registered layer above: selecting a chart in the layer
+        // list removes it again. Only for raster charts — the
+        // offline mirror needs no recovery, and without any chart
+        // OSM already is the base (a second copy would be an
+        // unregistered, unswitchable duplicate)
+        if (first && first._pbTileErrors !== undefined && mounted.length > 0) {
           setTimeout(() => {
             if (
               first._pbTileErrors > 0 &&
@@ -250,15 +301,15 @@ class PbMapView extends HTMLElement {
               console.warn(
                 "pb-map-view: configured chart yields no tiles — OSM fallback slipped underneath",
               );
-              const fallback = L.tileLayer(OSM_LAYER.url, {
-                attribution: OSM_LAYER.attribution,
-                maxZoom: OSM_LAYER.maxZoom,
-              });
-              fallback.addTo(this.map).bringToBack();
+              (osmFallbackLayer ?? L.tileLayer(OSM_LAYER.url))
+                .addTo(this.map)
+                .bringToBack();
             }
           }, 6000);
         }
-        if (bases.length > 1) {
+        // Layer switching needs the control whenever more than the
+        // fallback exists
+        if (mounted.length > 0) {
           try {
             this._basemaps.addTo(this.map);
           } catch (_error) {
@@ -367,6 +418,15 @@ class PbMapView extends HTMLElement {
    */
   setPayload(payload) {
     this._payload = payload ?? null;
+    // The vessel anchors the map when no route does (here mode: the
+    // payload carries the vessel's position as its single waypoint)
+    const waypoints = this._payload?.waypoints ?? [];
+    this._vessel =
+      waypoints.length === 1 &&
+      Number.isFinite(waypoints[0]?.lat) &&
+      Number.isFinite(waypoints[0]?.lon)
+        ? waypoints[0]
+        : null;
     this._render();
     this._fit();
   }
@@ -545,8 +605,14 @@ class PbMapView extends HTMLElement {
                 fillOpacity: 0.04,
               },
             );
+      // The grey mute styling already says these are elsewhere — the
+      // tooltip just names the warning (work doc #47 session: the
+      // spatial relationship is visible on the map, the prefix read
+      // as noise)
       layer
-        .bindTooltip(`Off your waters — ${shape.label ?? ""}`)
+        .bindTooltip(shape.label ?? "", {
+          sticky: true,
+        })
         .addTo(this._overlayGroup);
     }
     // The colorized route first (work doc #47): underlies the warning
@@ -608,7 +674,11 @@ class PbMapView extends HTMLElement {
               style,
             );
       if (shape.label) {
-        layer.bindTooltip(shape.label);
+        // Sticky: the tooltip opens at the pointer (or the tap) — a
+        // hemisphere-sized warning area's own anchor sits far outside
+        // the viewport, and a centroid-anchored tooltip would open
+        // where nobody is looking
+        layer.bindTooltip(shape.label, { sticky: true });
       }
       layer
         .on("click", () => this._select(shape.index))
@@ -631,7 +701,7 @@ class PbMapView extends HTMLElement {
               cap.points.map(([lon, lat]) => [lat, lon]),
               style,
             );
-      layer.bindTooltip(cap.label).addTo(this._overlayGroup);
+      layer.bindTooltip(cap.label, { sticky: true }).addTo(this._overlayGroup);
     }
     for (const pin of this._pins) {
       L.circleMarker([pin.lat, pin.lon], {
@@ -748,26 +818,30 @@ class PbMapView extends HTMLElement {
     }
   }
 
-  /** Every coordinate the overlays would draw (fit bounds). */
+  /**
+   * Coordinates the initial fit frames (work doc #47 session: the fit
+   * is the route's, not the warnings'; without a route the vessel
+   * anchors it). Delegates to {@link fitPoints} — the map view itself
+   * only filters non-finite points.
+   *
+   * @returns {Array<[number, number]>} [lon, lat] points
+   */
   _drawablePoints() {
-    return [
-      ...(this._storms ?? []).flatMap((storm) => [
-        storm.center,
-        ...storm.rings.flatMap((ring) => ring.points),
-        ...storm.track,
-        ...storm.forecastPoints.map((point) => [point.lon, point.lat]),
-      ]),
-      ...(this._ribbon ?? []).flatMap((segment) => segment.points),
-      ...(this._eventPins ?? []).map((pin) => [pin.lon, pin.lat]),
-      ...this._shapes.flatMap((shape) =>
-        shape.kind === "point" ? [shape.points[0]] : shape.points,
-      ),
-      ...this._caps.flatMap((cap) => cap.points),
-      ...this._pins.map((pin) => [pin.lon, pin.lat]),
-    ].filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+    return fitPoints({
+      ribbon: this._ribbon ?? [],
+      eventPins: this._eventPins ?? [],
+      vessel: this._vessel,
+      storms: this._storms ?? [],
+      shapes: this._shapes ?? [],
+      caps: this._caps ?? [],
+      pins: this._pins ?? [],
+    }).filter(
+      (point) => Number.isFinite(point[0]) && Number.isFinite(point[1]),
+    );
   }
 
-  /** Fits the view to every drawn coordinate (track wins the centre). */
+  /** Fits the view: the route when one exists, the vessel's waters
+   * when not, the warnings only without either. */
   _fit() {
     if (!this.map) {
       return;
@@ -782,7 +856,12 @@ class PbMapView extends HTMLElement {
       return;
     }
     const all = this._drawablePoints();
-    const bounds = frameBounds(all);
+    // No route: the vessel anchors the view — a couple hundred miles
+    // of water around her, a fabricated square so the span holds
+    // across screen sizes instead of leaning on a zoom level
+    const vesselBounds =
+      all.length === 1 && this._vessel ? vesselFitBounds(this._vessel) : null;
+    const bounds = vesselBounds ?? frameBounds(all);
     if (!bounds) {
       return;
     }

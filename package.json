@@ -37,7 +37,8 @@
       "@meri-imperiumi/signalk-energy-predictor",
       "signalk-polar-management",
       "signalk-watch-schedule",
-      "@meri-imperiumi/signalk-ships-time"
+      "@meri-imperiumi/signalk-ships-time",
+      "@meri-imperiumi/signalk-corridor-tile-downloader"
     ]
   },
   "engines": {

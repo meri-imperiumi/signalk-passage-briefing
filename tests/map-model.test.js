@@ -22,12 +22,14 @@ test("map model", async (t) => {
     blockShapes,
     capShape,
     corridorRing,
+    fitPoints,
     frameBounds,
     hazardPin,
     isSevereText,
     stormMarker,
     trackLine,
     unwrapFrame,
+    vesselFitBounds,
   } = await import("../public/components/map-model.mjs");
 
   await t.test("unwrapFrame keeps dateline-crossing shapes contiguous", () => {
@@ -280,9 +282,8 @@ test("map model", async (t) => {
 });
 
 test("ribbon segments and event pins (work doc #47)", async (t) => {
-  const { eventPins, ribbonSegments, routeRibbon } = await import(
-    "../public/components/map-model.mjs"
-  );
+  const { eventPins, ribbonSegments, routeRibbon, fitPoints, vesselFitBounds } =
+    await import("../public/components/map-model.mjs");
 
   await t.test("ribbonSegments run-length groups the plan's regimes", () => {
     const track = [
@@ -477,6 +478,86 @@ test("ribbon segments and event pins (work doc #47)", async (t) => {
     assert.equal(routeRibbon(null, []), null);
     assert.equal(routeRibbon([{ lat: 1, lon: 2 }], []), null);
   });
+
+  await t.test(
+    "fitPoints frames the route, then the vessel, then the warnings",
+    () => {
+      const ribbon = [
+        {
+          points: [
+            [-174, -18.6],
+            [-174.4, -18.8],
+          ],
+        },
+        {
+          points: [
+            [-174.4, -18.8],
+            [-175.2, -19.2],
+          ],
+        },
+      ];
+      const shapes = [
+        {
+          kind: "bbox",
+          // A cardinal-bound box down to the pole: the old fit zoomed
+          // the whole map to 90°S for it
+          points: [
+            [175, -22],
+            [180, -22],
+            [180, -90],
+            [175, -90],
+          ],
+        },
+      ];
+      const eventPins = [{ lon: -174.2, lat: -18.7 }];
+      const vessel = { lat: -18.65, lon: -173.98 };
+      // Route exists: the fit is the route and its pins — never the
+      // hemisphere-sized warning box
+      assert.deepEqual(fitPoints({ ribbon, shapes }), [
+        [-174, -18.6],
+        [-174.4, -18.8],
+        [-174.4, -18.8],
+        [-175.2, -19.2],
+      ]);
+      assert.deepEqual(fitPoints({ ribbon, eventPins, shapes }), [
+        [-174, -18.6],
+        [-174.4, -18.8],
+        [-174.4, -18.8],
+        [-175.2, -19.2],
+        [-174.2, -18.7],
+      ]);
+      // No route: the vessel anchors the view as a single point (the
+      // map centers there with a fabricated span)
+      assert.deepEqual(fitPoints({ shapes, vessel }), [[-173.98, -18.65]]);
+      // No route, no vessel fix: the warnings drive the fit as before
+      assert.deepEqual(fitPoints({ shapes }), [
+        [175, -22],
+        [180, -22],
+        [180, -90],
+        [175, -90],
+      ]);
+    },
+  );
+
+  await t.test(
+    "vesselFitBounds spans a couple hundred miles around her",
+    () => {
+      const bounds = vesselFitBounds({ lat: -18.65, lon: -173.98 });
+      assert.ok(bounds, "a usable position yields a box");
+      const dLat = bounds[1][1] - bounds[0][1];
+      const dLon = bounds[1][0] - bounds[0][0];
+      // 240 nm of latitude across the box (±120 nm)
+      assert.ok(Math.abs(dLat - 4) < 1e-9, `lat span ${dLat}`);
+      // The longitude span widens by the latitude's cosine so the box
+      // stays square in nautical miles
+      assert.ok(
+        Math.abs(dLon - 4 / Math.cos((-18.65 * Math.PI) / 180)) < 1e-9,
+        `lon span ${dLon}`,
+      );
+      assert.equal(vesselFitBounds(null), null);
+      assert.equal(vesselFitBounds({ lat: NaN, lon: 0 }), null);
+    },
+  );
 
   await t.test(
     "eventPins carry the timeline's own emoji at the anchored position",

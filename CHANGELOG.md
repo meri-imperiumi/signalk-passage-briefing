@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+- The warnings map fought the phone. The layer switcher was a collapsed gear that left the map parked on whatever basemap the auto-recovery had slipped underneath — that fallback OSM layer was never registered in the switcher, so even a working switcher could not remove it and a phone that hit the dead-chart fallback stayed on OpenStreetMap for good. The fallback is now the same registered layer the switcher offers, so selecting a chart removes it again; the switcher renders expanded on touch devices (no gear tap in the way), and it appears whenever a configured chart exists — a single chart plus the OSM fallback is still two bases to choose from.
+- The configured chart layers parsed every XYZ-servable chart as a raster base, including the corridor tile downloader's Open Waters mirror — which is entirely vector (`pbf`) and raster-DEM (`webp`), formats Leaflet cannot decode. Those charts parsed, loaded broken tiles, and slid the map to the OSM fallback with nothing in the log saying why. The chart path now mirrors signalk-dead-reckoning's: MapLibre GL and its Leaflet bridge are vendored (`vendor/maplibre-gl/`, BSD-3/ISC, no CDN, no build tooling), the corridor tile downloader's offline mirror mounts as the first base layer through the manifest's GL style — the full designed Open Waters chart, offline — and vector charts without a mirror render through a client-built style (the same family paint: dark sea, land under water under seamarks, contour lines, sounding and light points). Raster charts keep the plain tile layer; raster-DEM terrain mirrors (webp) are excluded from the bases as terrain data, not a visual basemap; GL-style (`mapstyleJSON`) provider entries skip with a logged reason — they are redundant with the mirror the manifest advertises. Layer parsing moved to the DOM-free map model so it is unit-tested.
+- The initial zoom framed the loudest shape, not the plan: a cardinal-bound warning area ("IN THE AREA SOUTH OF 22S AND WEST OF 175E…") parses honestly down to 90°S, and the fit that included every warning shape zoomed the whole map to the pole for it. The fit now frames the colorized route and its event pins when a route exists; without a route the vessel anchors the view — a couple hundred miles of water around her, a fabricated fit box so the span holds across screen sizes instead of leaning on a zoom level; only without either do the warning shapes and storm graphics drive the fit.
+- Area shapes' tooltips could open where nobody was looking: Leaflet anchors a polygon tooltip at the shape's own centroid, and a hemisphere-sized warning area's centroid sits far outside the viewport. Shape tooltips are now sticky — they open at the pointer or the tap, on desktop and touch alike.
+
+### Changed
+- The "Off your waters —" tooltip prefix on the muted wider-area shapes is gone: the grey dashed styling already says the warning is elsewhere, and on the map the spatial relationship is visible without words.
+
 ## [0.12.8] - 2026-10-17
 
 ### Fixed

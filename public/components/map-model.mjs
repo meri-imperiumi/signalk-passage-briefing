@@ -26,6 +26,343 @@ const DEG = Math.PI / 180;
 /** The severities a bulletin block can carry, highest first. */
 export const SHAPE_SEVERITY = ["severe", "warn", "info"];
 
+/** The default fallback basemap (online only): OSM tiles. */
+export const OSM_LAYER = {
+  name: "OpenStreetMap (online)",
+  url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+  attribution: "© OpenStreetMap contributors",
+  maxZoom: 19,
+};
+
+/**
+ * Whether a parsed chart layer is a vector (Mapbox/MapLibre `.pbf`)
+ * tile set that Leaflet's raster engine can't draw — the cue for the
+ * map to mount it via `L.maplibreGL` instead (same chart path as
+ * signalk-dead-reckoning, work doc #47 session).
+ *
+ * @param {{format?: string}|null|undefined} chart - parsed chart layer
+ * @returns {boolean}
+ */
+export function isVectorChart(chart) {
+  return chart?.format === "pbf";
+}
+
+/**
+ * Makes a chart tilemapUrl absolute for MapLibre's style. MapLibre
+ * fetches tiles from a blob-URL worker where root-relative URLs
+ * (`/signalk/…`) can't resolve — every request fails with "URL is not
+ * valid or contains user credentials". Absolute http(s) URLs pass
+ * through; outside a browser (unit tests) there's no origin to
+ * prepend.
+ *
+ * @param {string} url - chart tilemapUrl, possibly root-relative
+ * @returns {string} absolute tile URL (or unchanged when no page origin)
+ */
+export function absoluteTileUrl(url) {
+  if (/^https?:\/\//i.test(url)) return url;
+  const origin = globalThis.location?.origin;
+  return origin ? `${origin}${url}` : url;
+}
+
+/**
+ * The mirror discovery contract the corridor tile downloader serves
+ * at `/plugins/signalk-corridor-tile-downloader/assets/manifest.json`:
+ * absolute style/sprite/glyph URLs, the style link appearing only
+ * once the mirror is complete enough to render. Null when the
+ * manifest is absent or the style link is missing/non-absolute —
+ * the map falls back to per-chart vector rendering.
+ *
+ * @param {object|null|undefined} value - fetched manifest JSON
+ * @returns {{style: string}|null}
+ */
+export function chartAssetsFromManifest(value) {
+  if (!value || typeof value !== "object") return null;
+  const style = value.style;
+  if (typeof style !== "string" || !/^https?:\/\//i.test(style)) {
+    return null;
+  }
+  return { style };
+}
+
+// ---------------------------------------------------------------------------
+// Generic vector chart styling (work doc #47 session): a hand-rolled
+// MapLibre style for charts served as raw `.pbf` XYZ without a GL
+// style of their own — the same families and paint dead-reckoning's
+// chart path uses (ported from its viewmodel; the two webapps should
+// read the same chart the same way).
+// ---------------------------------------------------------------------------
+
+/** Vector source-layer families and their paint, by id pattern. */
+const VECTOR_LAYER_FAMILIES = [
+  // Land masses and built-up areas → solid dark-olive fills.
+  {
+    kind: "land",
+    match: [/^land$/i, /^landcover$/i, /^landuse$/i, /^lndare$/i],
+    styles: {
+      fill: { "fill-color": "#2a3a2e", "fill-opacity": 0.9 },
+      line: { "line-color": "#3d4f40", "line-width": 0.6 },
+    },
+  },
+  // Depth / water areas → translucent deep-blue fills.
+  {
+    kind: "water",
+    match: [/^water$/i, /^depare$/i, /^sea$/i, /^ocean$/i, /^sea_area$/i],
+    styles: {
+      fill: { "fill-color": "#102a3d", "fill-opacity": 0.55 },
+      line: { "line-color": "#1c3c52", "line-width": 0.5 },
+    },
+  },
+  // Rivers / channels / canals → water-toned fills and lines.
+  {
+    kind: "waterway",
+    match: [/^waterway$/i, /^river$/i, /^canal$/i, /^stream$/i],
+    styles: {
+      fill: { "fill-color": "#14324a", "fill-opacity": 0.5 },
+      line: { "line-color": "#2f6a80", "line-width": 1 },
+    },
+  },
+  // Marsh / mangrove → muted green fills between land and water.
+  {
+    kind: "wetland",
+    match: [/^wetland$/i, /^marsh/i, /^mangrove$/i],
+    styles: {
+      fill: { "fill-color": "#233830", "fill-opacity": 0.6 },
+      line: { "line-color": "#35503f", "line-width": 0.6 },
+    },
+  },
+  // Buoys, beacons, restricted areas, moorings → visible teal marks.
+  {
+    kind: "seamark",
+    match: [/^seamark$/i, /^navigation/i],
+    styles: {
+      fill: { "fill-color": "#16394a", "fill-opacity": 0.45 },
+      line: { "line-color": "#4b8b99", "line-width": 0.9 },
+      circle: { "circle-color": "#9fd6d9", "circle-radius": 2 },
+    },
+  },
+  // Coastlines → the crisp reference edge over the fills.
+  {
+    kind: "coastline",
+    match: [/^coalne$/i, /^coastline$/i, /^shoreline$/i],
+    styles: {
+      line: { "line-color": "#7fa3b0", "line-width": 1.2 },
+    },
+  },
+  // Depth contours / bathymetry → thin mid-blue lines.
+  {
+    kind: "contour",
+    match: [/^depcnt$/i, /^contour/i, /^depth_contour$/i],
+    styles: {
+      line: { "line-color": "#2f5a70", "line-width": 0.8 },
+    },
+  },
+  // Soundings / spot points → tiny dots.
+  {
+    kind: "point",
+    match: [/^soundg$/i, /^sounding/i, /^soundings$/i],
+    styles: {
+      circle: { "circle-color": "#4b8b99", "circle-radius": 1.5 },
+    },
+  },
+  // Lights (lighthouses, beacons) → amber dots that read instantly.
+  {
+    kind: "light",
+    match: [/^lights?$/i],
+    styles: {
+      circle: { "circle-color": "#e0b458", "circle-radius": 2.5 },
+      line: { "line-color": "#e0b458", "line-width": 0.6 },
+    },
+  },
+];
+
+/** Fallback family for source layers no pattern matches. */
+const VECTOR_DEFAULT_FAMILY = {
+  kind: "default",
+  match: [],
+  styles: {
+    fill: { "fill-color": "#1c2830", "fill-opacity": 0.35 },
+    line: { "line-color": "#6a7a86", "line-width": 0.8 },
+    circle: { "circle-color": "#6a7a86", "circle-radius": 1.5 },
+  },
+};
+
+/**
+ * Classifies a vector source-layer id into its styling family.
+ *
+ * @param {string} layerId
+ * @returns {object} Family with `kind` and `styles`
+ */
+function vectorLayerFamily(layerId) {
+  for (const family of VECTOR_LAYER_FAMILIES) {
+    if (family.match.some((re) => re.test(layerId))) return family;
+  }
+  return VECTOR_DEFAULT_FAMILY;
+}
+
+/**
+ * Builds a complete MapLibre style for a vector chart layer, entirely
+ * client-side: one vector source on the chart's `tilemapUrl` (made
+ * absolute — MapLibre's tile workers can't resolve relative URLs), a
+ * dark sea background, and a fill/line/circle trio per source layer —
+ * a line layer only draws line features, fills only polygons, circles
+ * only points, so the trio covers any geometry without knowing the
+ * schema. The source's `maxzoom` is the *native* tile max, so MapLibre
+ * keeps overzooming vector data past it (the raster path's
+ * maxNativeZoom behaviour, but sharper). No symbol layers: without a
+ * glyphs endpoint they can't render.
+ *
+ * @param {{identifier: string, name: string, url: string, minZoom:
+ *   number, maxZoom: number, format?: string, chartLayers?:
+ *   string[]}} chart - parsed chart layer
+ * @returns {{version: number, name: string, sources: object,
+ *   layers: Array<object>}} MapLibre style spec object
+ */
+export function maplibreStyleFor(chart) {
+  const sourceId = chart.identifier.replace(/[^\w.-]/g, "_");
+  // Without the resource's vector_layers metadata, guess the
+  // conventional single-layer name (the chart identifier) —
+  // best-effort, documented. Duplicated ids in the metadata table
+  // would yield duplicate MapLibre layer ids (undefined rendering),
+  // so they're deduped first.
+  const sourceLayers = [
+    ...new Set(
+      chart.chartLayers && chart.chartLayers.length > 0
+        ? chart.chartLayers
+        : [chart.identifier],
+    ),
+  ];
+
+  const families = sourceLayers.map((id) => ({
+    id,
+    family: vectorLayerFamily(id),
+  }));
+
+  const layers = [
+    {
+      id: "background",
+      type: "background",
+      paint: { "background-color": "#0b1b26" },
+    },
+  ];
+  // Paint order matters: area fills under lines under points; land
+  // before water so islands don't drown (both translucent otherwise);
+  // seamark areas above the natural families so marks stay legible.
+  const byKind = (kind) => families.filter((f) => f.family.kind === kind);
+  for (const kind of [
+    "land",
+    "water",
+    "waterway",
+    "wetland",
+    "seamark",
+    "default",
+    "coastline",
+    "contour",
+  ]) {
+    for (const { id, family } of byKind(kind)) {
+      if (!family.styles.fill) continue;
+      layers.push({
+        id: `${sourceId}-${id}-fill`,
+        type: "fill",
+        source: sourceId,
+        "source-layer": id,
+        paint: family.styles.fill,
+      });
+    }
+  }
+  for (const { id, family } of families) {
+    if (!family.styles.line) continue;
+    layers.push({
+      id: `${sourceId}-${id}-line`,
+      type: "line",
+      source: sourceId,
+      "source-layer": id,
+      paint: family.styles.line,
+    });
+  }
+  for (const { id, family } of families) {
+    if (!family.styles.circle) continue;
+    layers.push({
+      id: `${sourceId}-${id}-circle`,
+      type: "circle",
+      source: sourceId,
+      "source-layer": id,
+      paint: family.styles.circle,
+    });
+  }
+
+  return {
+    version: 8,
+    name: chart.name,
+    sources: {
+      [sourceId]: {
+        type: "vector",
+        tiles: [absoluteTileUrl(chart.url)],
+        minzoom: chart.minZoom,
+        maxzoom: chart.maxZoom,
+      },
+    },
+    layers,
+  };
+}
+
+/**
+ * Parses the server's configured chart resources into chart layer
+ * specs (offline MBTiles and tile proxies serve the standard
+ * `{z}/{x}/{y}` scheme). Field names follow the Signal K chart
+ * resource convention — `minzoom`/`maxzoom`, lowercase — with
+ * numeric guards so a malformed value degrades to Leaflet's
+ * defaults, never into the tile layer's zoom arithmetic.
+ *
+ * Vector charts (`pbf`, carrying `chartLayers`) parse too: the map
+ * mounts them through MapLibre GL (see {@link maplibreStyleFor}), not
+ * Leaflet's raster engine. `mapstyleJSON` GL styles and other
+ * non-XYZ entries skip with a logged reason — the corridor
+ * downloader's own provider entry is redundant with the mirror the
+ * manifest advertises.
+ *
+ * @param {object|null} resource - `/signalk/v1/api/resources/charts`
+ * @returns {Array<{identifier: string, name: string, url: string,
+ *   attribution?: string, minZoom: number, maxZoom: number,
+ *   format?: string, chartLayers?: string[]}>}
+ */
+export function parseChartLayers(resource) {
+  const layers = [];
+  for (const [id, chart] of Object.entries(resource ?? {})) {
+    const url =
+      typeof chart?.tilemapUrl === "string" && chart.tilemapUrl.includes("{z}")
+        ? chart.tilemapUrl
+        : null;
+    if (!url) {
+      // GL styles and other non-XYZ entries — identifiable ones say
+      // why they are not here
+      if (chart?.type != null || chart?.url != null) {
+        console.info(
+          `pb-map-view: chart "${chart?.name ?? id}" is a ${chart?.type ?? "non-XYZ"} chart — renders via the chart mirror, skipped`,
+        );
+      }
+      continue;
+    }
+    const layer = {
+      identifier: chart.identifier || id,
+      name: chart.name ?? chart.identifier ?? id,
+      url,
+      attribution: chart.attribution ?? "",
+      minZoom: typeof chart.minzoom === "number" ? chart.minzoom : 0,
+      maxZoom: typeof chart.maxzoom === "number" ? chart.maxzoom : 19,
+    };
+    if (typeof chart.format === "string" && chart.format.length > 0) {
+      layer.format = chart.format.toLowerCase();
+    }
+    if (Array.isArray(chart.chartLayers)) {
+      layer.chartLayers = chart.chartLayers.filter(
+        (x) => typeof x === "string" && x.length > 0,
+      );
+    }
+    layers.push(layer);
+  }
+  return layers.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /**
  * Normalizes a coordinate list into a continuous longitude frame:
  * each point takes the representative within 180° of its predecessor
@@ -512,6 +849,85 @@ export function routeRibbon(waypoints, track, referenceLon = null) {
     }
   }
   return segments.map(({ key, ...segment }) => segment);
+}
+
+/**
+ * The coordinates the map's initial fit frames (work doc #47 session:
+ * the fit is the route's, not the warnings'). When route geometry
+ * exists the fit frames the colorized route and the events pinned to
+ * it — a warning area as large as a hemisphere (a cardinal-bound box
+ * down to 90°S) must not zoom the view to the pole. Without a route
+ * the vessel anchors the view (see {@link vesselFitBounds}); only
+ * without either do the warning shapes and storm graphics drive the
+ * fit.
+ *
+ * @param {object} specs - The map's draw specs
+ * @param {Array<{points: number[][]}>} [specs.ribbon] - Colorized
+ *   route segments
+ * @param {Array<{lon: number, lat: number}>} [specs.eventPins]
+ * @param {{lat: number, lon: number}|null} [specs.vessel] - The
+ *   vessel's position (here mode's single waypoint)
+ * @param {Array<object>} [specs.storms] - Cyclone graphics
+ * @param {Array<{kind: string, points: number[][]}>} [specs.shapes]
+ * @param {Array<{points: number[][]}>} [specs.caps]
+ * @param {Array<{lon: number, lat: number}>} [specs.pins] - Hazard
+ *   pins
+ * @returns {Array<[number, number]>} [lon, lat] points for the fit —
+ *   exactly one when the vessel anchors the view
+ */
+export function fitPoints(specs = {}) {
+  const ribbon = (specs.ribbon ?? []).flatMap((segment) => segment.points);
+  if (ribbon.length > 0) {
+    return [
+      ...ribbon,
+      ...(specs.eventPins ?? []).map((pin) => [pin.lon, pin.lat]),
+    ];
+  }
+  const vessel = specs.vessel;
+  if (vessel && Number.isFinite(vessel.lat) && Number.isFinite(vessel.lon)) {
+    return [[vessel.lon, vessel.lat]];
+  }
+  return [
+    ...(specs.storms ?? []).flatMap((storm) => [
+      storm.center,
+      ...storm.rings.flatMap((ring) => ring.points),
+      ...storm.track,
+      ...storm.forecastPoints.map((point) => [point.lon, point.lat]),
+    ]),
+    ...(specs.eventPins ?? []).map((pin) => [pin.lon, pin.lat]),
+    ...(specs.shapes ?? []).flatMap((shape) =>
+      shape.kind === "point" ? [shape.points[0]] : shape.points,
+    ),
+    ...(specs.caps ?? []).flatMap((cap) => cap.points),
+    ...(specs.pins ?? []).map((pin) => [pin.lon, pin.lat]),
+  ];
+}
+
+/**
+ * The view box around the vessel when no route anchors the map: a
+ * couple hundred miles of water in every direction, regardless of
+ * screen size — fitBounds on a fabricated square beats a fixed zoom
+ * level, which shows a different span on a phone than on a tablet.
+ *
+ * @param {{lat: number, lon: number}|null} position - The vessel
+ * @param {number} [radiusNm=120] - Water shown in every direction
+ * @returns {Array<[number, number]>|null} [lon, lat] box corners,
+ *   null without a usable position
+ */
+export function vesselFitBounds(position, radiusNm = 120) {
+  if (
+    !position ||
+    !Number.isFinite(position.lat) ||
+    !Number.isFinite(position.lon)
+  ) {
+    return null;
+  }
+  const dLat = radiusNm / 60;
+  const dLon = dLat / Math.max(0.2, Math.cos((position.lat * Math.PI) / 180));
+  return [
+    [position.lon - dLon, position.lat - dLat],
+    [position.lon + dLon, position.lat + dLat],
+  ];
 }
 
 /**
