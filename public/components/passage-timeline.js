@@ -14,28 +14,13 @@
  * @file components/passage-timeline.js
  */
 
-import { comfortColor } from "./models.mjs";
+import {
+  comfortColor,
+  // Glyph per timeline kind, shared with the map's event pins (work
+  // doc #47): one source so both views never drift apart
+  GLYPHS,
+} from "./models.mjs";
 import { SK_BASE_CSS } from "./sk-base-css.js";
-
-/**
- * Glyph per timeline kind. Monochrome marks that inherit the
- * severity colour; unknown kinds fall back to a plain bullet so new
- * sources render before their glyph is picked.
- */
-const GLYPHS = {
-  sail: "⛵",
-  maneuver: "⇄",
-  convective: "⚡",
-  rain: "🌧",
-  sea: "🌊",
-  zone: "⚑",
-  space: "✦",
-  hazard: "⚠",
-  line: "⌀",
-  energy: "🔋",
-  departure: "⚓",
-  time: "◷",
-};
 
 /**
  * The custom element (browser only).
@@ -149,9 +134,14 @@ class PassageTimeline extends HTMLElement {
       this._listEl.appendChild(el);
       return;
     }
-    for (const item of items) {
+    for (const [index, item] of items.entries()) {
       const row = document.createElement("div");
       row.className = `entry sev-${item.severity ?? "info"}`;
+      // The map's click-through key (work doc #47): the row's index
+      // in the merged list, and the reverse direction — a row click
+      // focuses the map pin
+      row.dataset.eventIndex = String(index);
+      row.classList.add("pb-event");
 
       const tab = document.createElement("span");
       tab.className = `tab${item.slatting ? " slatting" : ""}`;
@@ -221,8 +211,27 @@ class PassageTimeline extends HTMLElement {
       }
 
       row.append(tab, when, glyph, body);
+      row.addEventListener("click", () => this.onEventSelect?.(index));
       this._listEl.appendChild(row);
     }
+  }
+
+  /**
+   * Map → timeline direction (work doc #47): scroll to and flash one
+   * event's row.
+   *
+   * @param {number} index - Event index in the merged list
+   */
+  reveal(index) {
+    const row = this._listEl?.querySelector(`[data-event-index="${index}"]`);
+    if (!row) {
+      return;
+    }
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    row.style.background = "rgba(78, 201, 176, 0.15)";
+    setTimeout(() => {
+      row.style.background = "";
+    }, 1600);
   }
 }
 

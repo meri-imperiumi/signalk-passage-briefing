@@ -1,0 +1,481 @@
+/**
+ * Unit tests for the warnings map model (`public/components/
+ * map-model.mjs`, work doc #47): pure geometry — the same shapes the
+ * bulletin engine computes for filtering, normalized for drawing.
+ *
+ * The fixture is the TC Wati bulletin's parsed shapes
+ * (tests/fixtures/bulletins/fqps01-nffn-2026-10-16.txt through the
+ * engine): a point-typed storm warning, a gale polygon spanning the
+ * hemisphere, a corridor band, and an antimeridian-straddling bbox.
+ *
+ * @file map-model.test.js
+ */
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+
+const engine = require("../plugin/bulletin-engine.js");
+
+test("map model", async (t) => {
+  const {
+    blockShapes,
+    capShape,
+    corridorRing,
+    frameBounds,
+    hazardPin,
+    isSevereText,
+    stormMarker,
+    trackLine,
+    unwrapFrame,
+  } = await import("../public/components/map-model.mjs");
+
+  await t.test("unwrapFrame keeps dateline-crossing shapes contiguous", () => {
+    // A convergence zone from 170E across the seam to 165W
+    assert.deepEqual(
+      unwrapFrame([
+        [170, -5],
+        [-178, -7],
+        [-165, -9],
+      ]),
+      [
+        [170, -5],
+        [182, -7],
+        [195, -9],
+      ],
+    );
+    // Westward across the seam too
+    assert.deepEqual(
+      unwrapFrame([
+        [-170, 0],
+        [175, -1],
+      ]),
+      [
+        [-170, 0],
+        [-185, -1],
+      ],
+    );
+    // Input untouched
+    const raw = [
+      [178, -20],
+      [-178, -21],
+    ];
+    unwrapFrame(raw);
+    assert.deepEqual(raw, [
+      [178, -20],
+      [-178, -21],
+    ]);
+  });
+
+  await t.test("frameBounds spans the unwrapped frame", () => {
+    assert.deepEqual(
+      frameBounds([
+        [178, -20],
+        [182, -21],
+      ]),
+      [178, -21, 182, -20],
+    );
+    assert.equal(frameBounds([]), null);
+    assert.equal(frameBounds(null), null);
+  });
+
+  await t.test("isSevereText uses the console's own highlighter", () => {
+    assert.equal(isSevereText("EXPECT WINDS OVER 33 KNOTS"), false);
+    assert.equal(isSevereText("GALE WARNING 011 ISSUED FROM RSMC NADI"), true);
+    assert.equal(isSevereText("TROPICAL CYCLONE WATI CENTRE 994HPA"), true);
+    assert.equal(isSevereText(""), false);
+  });
+
+  await t.test("corridorRing expands an axis into the stated band", () => {
+    const ring = corridorRing(
+      [
+        [169, -7],
+        [182, -9],
+      ],
+      120,
+    );
+    // 120 nm ≈ 2° latitude pad; the ring is closed
+    assert.equal(ring.length, 5);
+    assert.deepEqual(ring[0], ring[ring.length - 1]);
+    const lats = ring.map(([, lat]) => lat);
+    const maxLat = Math.max(...lats);
+    assert.ok(maxLat > -7, `northern edge north of the axis (${maxLat})`);
+    assert.ok(
+      Math.abs(maxLat - (-7 + 2)) < 0.01,
+      "120 nm reads as 2 degrees of latitude",
+    );
+  });
+
+  await t.test("the Wati bulletin draws its warning shapes", () => {
+    const { readFileSync } = require("node:fs");
+    const raw = readFileSync(
+      require("node:path").join(
+        __dirname,
+        "fixtures",
+        "bulletins",
+        "fqps01-nffn-2026-10-16.txt",
+      ),
+      "utf8",
+    );
+    const result = engine.filterBulletin({
+      rawText: raw,
+      source: "spool",
+      track: [[-173.98, -18.65]],
+    });
+    const shapes = blockShapes(result.blocks);
+    // The storm warning: a point at the analysed position, severe
+    const storm = shapes.find((shape) => shape.kind === "point");
+    assert.ok(storm, "storm declaration draws as a point");
+    assert.deepEqual(storm.points, [[-163, -12.1]]);
+    assert.equal(storm.severe, true);
+
+    // A vessel inside the gale area sees the gale polygon too
+    const inside = engine.filterBulletin({
+      rawText: raw,
+      source: "spool",
+      track: [[-160, -15]],
+    });
+    const gale = blockShapes(inside.blocks).find(
+      (shape) => shape.kind === "polygon" && shape.severe,
+    );
+    assert.ok(gale, "gale area draws as a severe polygon");
+    assert.equal(
+      gale.index,
+      inside.blocks.indexOf(
+        inside.blocks.find((b) => /GALE WARNING 011/.test(b.text)),
+      ),
+      "shape index pairs with its console text card",
+    );
+    // The polygon ring is closed
+    assert.deepEqual(gale.points[0], gale.points[gale.points.length - 1]);
+  });
+
+  await t.test("trackLine unwraps and drops non-finite waypoints", () => {
+    // A Tonga→Opua style hop across the seam: the frame follows the
+    // predecessor shortest-arc, so 179E reads as -181 after -179W
+    assert.deepEqual(
+      trackLine([
+        { lat: -18.65, lon: -173.98 },
+        { lat: -19, lon: 178 },
+        { lat: NaN, lon: 170 },
+        { lat: -30, lon: 174.3 },
+      ]),
+      [
+        [-173.98, -18.65],
+        [-182, -19],
+        [-185.7, -30],
+      ],
+    );
+    assert.deepEqual(trackLine(null), []);
+  });
+
+  await t.test("capShape normalizes polygons and zero-radius boxes", () => {
+    // The frame anchors on the first point: 178E after -178W reads
+    // as -182, the short hop across the seam
+    assert.deepEqual(
+      capShape({
+        headline: "Gale for Fiji waters",
+        severity: "Severe",
+        geometry: {
+          type: "polygon",
+          coordinates: [
+            [-178, -17],
+            [178, -19],
+            [177, -22],
+          ],
+        },
+      }),
+      {
+        kind: "polygon",
+        points: [
+          [-178, -17],
+          [-182, -19],
+          [-183, -22],
+        ],
+        label: "Gale for Fiji waters",
+        severity: "severe",
+      },
+    );
+    assert.deepEqual(
+      capShape({
+        event: "Tsunami",
+        geometry: {
+          type: "bbox",
+          coordinates: [-179.01, -18.01, -178.99, -17.99],
+        },
+      })?.kind,
+      "bbox",
+    );
+    assert.equal(capShape({ headline: "no area" }), null);
+  });
+
+  await t.test("hazardPin keeps only placeable events", () => {
+    assert.deepEqual(
+      hazardPin({
+        lat: -12.1,
+        lon: -163,
+        alertLevel: "Orange",
+        title: "TC ONE-26",
+        link: "https://www.gdacs.org/x",
+      }),
+      {
+        lon: -163,
+        lat: -12.1,
+        level: "orange",
+        label: "TC ONE-26",
+        url: "https://www.gdacs.org/x",
+      },
+    );
+    assert.equal(hazardPin({ lat: NaN, lon: 170 }), null);
+  });
+
+  await t.test("stormMarker names the system at its analysed position", () => {
+    const marker = stormMarker({
+      text: "PART 1 : WARNING STORM WARNING 012 ISSUED FROM RSMC NADI Oct 161926\n\nTROPICAL CYCLONE WATI CENTRE 994HPA CATEGORY 1 WAS LOCATED NEAR 12.1S 163.0W",
+      geometry: { type: "point", coordinates: [-163, -12.1] },
+    });
+    assert.deepEqual(
+      { lon: marker.lon, lat: marker.lat },
+      { lon: -163, lat: -12.1 },
+    );
+    assert.match(marker.label, /Tropical cyclone WATI/i);
+    assert.equal(stormMarker({ geometry: null }), null);
+  });
+});
+
+test("ribbon segments and event pins (work doc #47)", async (t) => {
+  const { eventPins, ribbonSegments } = await import(
+    "../public/components/map-model.mjs"
+  );
+
+  await t.test("ribbonSegments run-length groups the plan's regimes", () => {
+    const track = [
+      {
+        hoursFromNow: 0,
+        lat: -18.6,
+        lon: -174,
+        comfortLevel: "pleasant",
+        slatting: false,
+        motoring: false,
+        night: false,
+      },
+      {
+        hoursFromNow: 1,
+        lat: -18.7,
+        lon: -174.2,
+        comfortLevel: "pleasant",
+        slatting: false,
+        motoring: false,
+        night: false,
+      },
+      {
+        hoursFromNow: 2,
+        lat: -18.8,
+        lon: -174.4,
+        comfortLevel: "rough",
+        slatting: true,
+        motoring: false,
+        night: true,
+      },
+      {
+        hoursFromNow: 3,
+        lat: -18.9,
+        lon: -174.6,
+        comfortLevel: "rough",
+        slatting: true,
+        motoring: false,
+        night: true,
+      },
+      {
+        hoursFromNow: 4,
+        lat: -19,
+        lon: -174.8,
+        comfortLevel: "rough",
+        slatting: false,
+        motoring: true,
+        night: false,
+      },
+    ];
+    const segments = ribbonSegments(track);
+    assert.equal(segments.length, 3, "three regime stretches");
+    assert.deepEqual(segments[0], {
+      points: [
+        [-174, -18.6],
+        [-174.2, -18.7],
+        [-174.4, -18.8],
+      ],
+      comfortLevel: "pleasant",
+      slatting: false,
+      motoring: false,
+      night: false,
+    });
+    assert.equal(segments[1].comfortLevel, "rough");
+    assert.equal(segments[1].night, true);
+    assert.equal(segments[2].motoring, true);
+    // Continuity: each segment starts where the previous ended
+    assert.deepEqual(
+      segments[1].points[0],
+      segments[0].points.at(-1),
+      "segments share their boundary point",
+    );
+  });
+
+  await t.test("ribbonSegments bridges rows without coordinates", () => {
+    const segments = ribbonSegments([
+      {
+        hoursFromNow: 0,
+        lat: -18.6,
+        lon: -174,
+        comfortLevel: "pleasant",
+        slatting: false,
+        motoring: false,
+        night: false,
+      },
+      {
+        hoursFromNow: 1,
+        lat: null,
+        lon: null,
+        comfortLevel: "pleasant",
+        slatting: false,
+        motoring: false,
+        night: false,
+      },
+      {
+        hoursFromNow: 2,
+        lat: -18.8,
+        lon: -174.4,
+        comfortLevel: "pleasant",
+        slatting: false,
+        motoring: false,
+        night: false,
+      },
+    ]);
+    // The same regime on both sides of the gap joins into one
+    // stretch — no visual gap where a row lacked coordinates
+    assert.equal(segments.length, 1);
+    assert.equal(segments[0].points.length, 2);
+    assert.deepEqual(ribbonSegments(null), []);
+  });
+
+  await t.test(
+    "eventPins carry the timeline's own emoji at the anchored position",
+    () => {
+      const events = [
+        {
+          hoursFromNow: 5,
+          kind: "maneuver",
+          severity: "warn",
+          label: "Tack to port",
+          detail: "32 nm · 12.2 kn TWS",
+          position: { lat: -18.825, lon: -174.49 },
+        },
+        {
+          hoursFromNow: null,
+          kind: "space",
+          severity: "info",
+          label: "Comet",
+          detail: "",
+          position: null,
+        },
+        {
+          hoursFromNow: 12,
+          kind: "convective",
+          severity: "severe",
+          label: "Convection risk",
+          detail: "CAPE 3000 J/kg",
+          position: { lat: -19.5, lon: -175.2 },
+        },
+      ];
+      const pins = eventPins(events);
+      assert.equal(pins.length, 2, "unplaceable events stay off the map");
+      assert.deepEqual(
+        {
+          index: pins[0].index,
+          glyph: pins[0].glyph,
+          severity: pins[0].severity,
+        },
+        { index: 0, glyph: "⇄", severity: "warn" },
+      );
+      assert.deepEqual(
+        { lon: pins[1].lon, glyph: pins[1].glyph },
+        {
+          lon: -175.2,
+          glyph: "⚡",
+        },
+      );
+      assert.deepEqual(eventPins(null), []);
+    },
+  );
+});
+
+test("the advisory cyclone graphic (work doc #47 phase 3)", async (t) => {
+  const { readFileSync } = require("node:fs");
+  const { stormGraphic, stormRingColor } = await import(
+    "../public/components/map-model.mjs"
+  );
+  const engine = require("../plugin/bulletin-engine.js");
+
+  await t.test(
+    "the NHC advisory draws rings, track and forecast points",
+    () => {
+      const raw = readFileSync(
+        require("node:path").join(
+          __dirname,
+          "fixtures",
+          "bulletins",
+          "wtpz23-knhc-tcmep3.txt",
+        ),
+        "utf8",
+      );
+      const result = engine.filterBulletin({
+        rawText: raw,
+        source: "api",
+        track: [[-112.5, 20]],
+      });
+      const blockIndex = result.blocks.findIndex((b) => b.storm);
+      const graphic = stormGraphic(result.blocks[blockIndex], blockIndex);
+      assert.ok(graphic, "storm graphic built from the parsed advisory");
+      assert.equal(graphic.name, "HURRICANE RACHEL");
+      assert.equal(graphic.severityLabel, "HURRICANE FORCE");
+      // The centre is the analysed position
+      assert.deepEqual(graphic.center, [-111.5, 19.4]);
+      // The present wind fields arrive as ready quadrant rings
+      const thresholds = graphic.rings
+        .filter((ring) => ring.kind === "wind")
+        .map((ring) => ring.threshold);
+      assert.deepEqual(thresholds, [64, 50, 34]);
+      for (const ring of graphic.rings) {
+        assert.ok(ring.points.length > 3, "ring is a polygon");
+        for (const [lon, lat] of ring.points) {
+          assert.ok(Number.isFinite(lon) && Number.isFinite(lat));
+        }
+      }
+      // The track runs from the centre through every forecast position
+      assert.equal(graphic.track.length, 1 + 6);
+      assert.deepEqual(graphic.track[0], [-111.5, 19.4]);
+      const last = graphic.forecastPoints.at(-1);
+      assert.match(graphic.forecastPoints[0].label, /FORECAST VALID 03\/1200Z/);
+      assert.equal(last.lon, -117.7);
+      assert.equal(last.lat, 20.7);
+    },
+  );
+
+  await t.test("a text-only NFFN storm declaration has no graphic", () => {
+    assert.equal(
+      stormGraphic(
+        {
+          text: "TROPICAL CYCLONE WATI CENTRE 994HPA WAS LOCATED NEAR 12.1S 163.0W",
+        },
+        0,
+      ),
+      null,
+    );
+    assert.equal(stormGraphic(null, 0), null);
+  });
+
+  await t.test("ring colors follow the severity ladder", () => {
+    assert.equal(stormRingColor({ threshold: 64, kind: "wind" }), "#ff3b3b");
+    assert.equal(stormRingColor({ threshold: 50, kind: "wind" }), "#ff8c42");
+    assert.equal(stormRingColor({ threshold: 34, kind: "wind" }), "#ffd166");
+    assert.equal(stormRingColor({ threshold: 4, kind: "seas" }), "#4ec9b0");
+  });
+});

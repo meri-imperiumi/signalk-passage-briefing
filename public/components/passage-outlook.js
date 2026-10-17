@@ -41,6 +41,10 @@ import "./tactical-dashboard.js";
 import "./strategic-outlook.js";
 import "./conditions-here.js";
 import "./backfill-controls.js";
+// The departure control lives in the tactical and strategic shadow
+// templates; without this import the element never upgrades and
+// setDeparture crashes on its missing render() (work doc #15)
+import "./departure-control.js";
 
 /**
  * Plugin API base. SK v2 serves the webapp itself under

@@ -2146,6 +2146,11 @@ export function filterExceptions(simulationResult, simParams = {}) {
         lon: row.lon,
         comfortLevel: row.comfortLevel ?? null,
         slatting: Boolean(row.slatting),
+        // Ribbon regime fields (work doc #47): the map colors the
+        // route by how the plan is sailed — slatting stretches, the
+        // motoring dashes, night shading — not just the tier
+        motoring: Boolean(row.motoring),
+        night: Boolean(row.night),
         // Night-darkness context (work doc #32)
         cloudCover: row.cloudCover ?? null,
       })),

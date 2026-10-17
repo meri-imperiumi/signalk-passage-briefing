@@ -23,6 +23,7 @@ import {
   splitSevere,
 } from "./models.mjs";
 import { SK_BASE_CSS } from "./sk-base-css.js";
+import "./map-view.js";
 
 /**
  * Formats a position as `21°06.0'S 175°12.0'W`.
@@ -170,7 +171,11 @@ class ConditionsHere extends HTMLElement {
       </section>
       <section class="sk-card theme-red" id="warnings-card" hidden>
         <h3>Warnings for these waters</h3>
+        <!-- One console box for all blocks: the global .console style
+             draws a panel border, and one <pre> per block read as
+             unrelated boxes (work doc #47 test round) -->
         <div class="console" id="warnings"></div>
+        <pb-map-view id="warnings-map" hidden></pb-map-view>
       </section>
       <synoptic-chart hidden></synoptic-chart>
       <section class="sk-card" id="events-card" hidden>
@@ -329,13 +334,18 @@ class ConditionsHere extends HTMLElement {
       }
     }
 
-    // Warnings: filtered NAVAREA/NAVTEX blocks for these waters
+    // Warnings: filtered NAVAREA/NAVTEX blocks for these waters —
+    // all blocks inside ONE console box, blank-line separated; the
+    // map beneath draws their geometry (work doc #47)
     const blocks = payload?.metareaBulletin?.blocks ?? [];
     this._warningsCard.hidden = blocks.length === 0;
     this._warningsEl.innerHTML = "";
-    for (const block of blocks) {
-      const pre = document.createElement("pre");
-      pre.className = "console";
+    this._warningsEl.style.whiteSpace = "normal";
+    for (const [index, block] of blocks.entries()) {
+      const pre = document.createElement("div");
+      pre.dataset.blockIndex = String(index);
+      pre.style.whiteSpace = "pre-wrap";
+      pre.style.marginBottom = "8px";
       for (const token of splitSevere(block.text)) {
         if (token.severe) {
           const span = document.createElement("span");
@@ -348,6 +358,16 @@ class ConditionsHere extends HTMLElement {
       }
       this._warningsEl.appendChild(pre);
     }
+    // The map needs the vessel position (the here payload's single
+    // waypoint) and the warning shapes; hidden until there are any
+    const map = this.shadowRoot.getElementById("warnings-map");
+    if (map) {
+      map.onBlockSelect = (index) => this._highlightWarning(index);
+      map.setPayload(payload);
+      map.setBulletin(payload?.metareaBulletin ?? null);
+      map.hidden = !map.hasShapes();
+    }
+    this._map = map;
 
     // Celestial/space events (work doc #3): render only when present
     const events = payload?.spaceEvents ?? [];
@@ -493,6 +513,24 @@ class ConditionsHere extends HTMLElement {
       });
       this._zonesEl.appendChild(el);
     }
+  }
+
+  /**
+   * Click-through target (work doc #47): scroll to and flash one
+   * warning block's text inside the console box.
+   *
+   * @param {number} index - Block index in the console
+   */
+  _highlightWarning(index) {
+    const el = this.shadowRoot.querySelector(`[data-block-index="${index}"]`);
+    if (!el) {
+      return;
+    }
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.style.background = "rgba(78, 201, 176, 0.15)";
+    setTimeout(() => {
+      el.style.background = "";
+    }, 1600);
   }
 }
 

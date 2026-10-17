@@ -1776,3 +1776,51 @@ test("skySegments say polar day/night and all-night moon states", async (t) => {
     up.map((s) => s.text).join(" | "),
   );
 });
+
+test("timeline items anchor to the route for the map (work doc #47)", async (t) => {
+  const { mergeTimeline, trackPositionAt } = await import(
+    "../public/components/models.mjs"
+  );
+  const track = [
+    { hoursFromNow: 0, lat: -18.65, lon: -173.98 },
+    { hoursFromNow: 10, lat: -19.0, lon: -175.0 },
+    { hoursFromNow: 20, lat: -20.0, lon: -176.0 },
+  ];
+  await t.test("trackPositionAt interpolates between hourly rows", () => {
+    assert.deepEqual(trackPositionAt(0, track), { lat: -18.65, lon: -173.98 });
+    // Midway between rows 0 and 10
+    const mid = trackPositionAt(5, track);
+    assert.ok(Math.abs(mid.lat - -18.825) < 1e-9);
+    assert.ok(Math.abs(mid.lon - -174.49) < 1e-9);
+    // Beyond the last row clamps to it
+    assert.deepEqual(trackPositionAt(99, track), { lat: -20.0, lon: -176.0 });
+    assert.equal(trackPositionAt(5, null), null);
+  });
+
+  await t.test("mergeTimeline items carry their route position", () => {
+    const timeline = mergeTimeline(
+      {
+        passageSummary: {
+          track,
+          sailChanges: [
+            {
+              hoursFromNow: 5,
+              timestamp: "2026-06-21T08:00:00.000Z",
+              sailState: "MAIN_1_REEF",
+            },
+          ],
+        },
+      },
+      null,
+    );
+    assert.equal(timeline.length, 1);
+    assert.deepEqual(timeline[0].position, { lat: -18.825, lon: -174.49 });
+    // The day-checkpoint-free timeline without a track: position null
+    const bare = mergeTimeline({
+      passageSummary: {
+        sailChanges: [{ hoursFromNow: 3, sailState: "MAIN_FULL" }],
+      },
+    });
+    assert.equal(bare[0].position, null);
+  });
+});

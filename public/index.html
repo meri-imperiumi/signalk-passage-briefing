@@ -7,6 +7,10 @@
   <title>Passage Briefing</title>
   <link rel="icon" href="icon-256.png">
   <link rel="stylesheet" href="css/visuals.css">
+  <!-- Leaflet is vendored (BSD-2, work doc #47): no CDN, no build
+       tooling, loads as a classic script that sets window.L -->
+  <script src="vendor/leaflet/leaflet.js"
+    onerror="console.error('failed to load leaflet.js')"></script>
   <script type="module" src="app.js"></script>
 </head>
 <body>

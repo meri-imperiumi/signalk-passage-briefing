@@ -993,7 +993,7 @@ export function skySegments(
  * @param {Array<{hoursFromNow: number, lat: number, lon: number}>} track
  * @returns {{lat: number, lon: number}|null} Null when no track
  */
-function trackPositionAt(hoursFromNow, track) {
+export function trackPositionAt(hoursFromNow, track) {
   if (!Array.isArray(track) || track.length === 0) {
     return null;
   }
@@ -1790,6 +1790,13 @@ export function mergeTimeline(exceptions, payload = null) {
     if (!item.night && item.hoursFromNow != null) {
       item.night = trackNightAt(item.hoursFromNow, track, baseMs) ?? false;
     }
+    // The map's event pin anchor (work doc #47): where on the route
+    // the item happens — the same interpolation the night test uses,
+    // so a pin and its timeline row never disagree
+    item.position =
+      item.hoursFromNow != null
+        ? trackPositionAt(item.hoursFromNow, track)
+        : null;
     // The conditions tab (work doc #18): every item paints the tier
     // at its hour; sail changes keep their own enriched conditions
     // block when the track has none or the item predates it
@@ -1951,4 +1958,32 @@ export function etaTable(exceptions, payload = null) {
     fuel:
       summary.totalFuelLiters != null ? fmtLiters(summary.totalFuelLiters) : "",
   };
+}
+
+/**
+ * Glyph per timeline/timeline-event kind (work doc #18), shared by
+ * the passage timeline rows and the map's event pins (work doc #47):
+ * one map of kinds to marks so both views never drift apart.
+ * Monochrome marks that inherit the severity colour; unknown kinds
+ * fall back to a plain bullet so new sources render before their
+ * glyph is picked.
+ */
+export const GLYPHS = {
+  sail: "⛵",
+  maneuver: "⇄",
+  convective: "⚡",
+  rain: "🌧",
+  sea: "🌊",
+  zone: "⚑",
+  space: "✦",
+  hazard: "⚠",
+  line: "⌀",
+  energy: "🔋",
+  departure: "⚓",
+  time: "◷",
+};
+
+/** The glyph for one event kind, or a plain bullet. */
+export function kindGlyph(kind) {
+  return GLYPHS[kind] ?? "•";
 }

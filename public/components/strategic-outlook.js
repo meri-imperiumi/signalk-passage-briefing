@@ -6,6 +6,7 @@
  * @file components/strategic-outlook.js
  */
 
+import { blockShapes, eventPins, trackLine } from "./map-model.mjs";
 import {
   etaTable,
   fmtShip,
@@ -13,6 +14,7 @@ import {
   mergeTimeline,
   splitSevere,
 } from "./models.mjs";
+import "./map-view.js";
 import "./passage-timeline.js";
 import "./source-status.js";
 import { SK_BASE_CSS } from "./sk-base-css.js";
@@ -101,6 +103,15 @@ strong.sev {
         <h2>Warnings On Your Waters</h2>
         <div class="console" id="blocks"></div>
       </section>
+      <section class="sk-card theme-teal" id="map-card" hidden>
+        <h2>Warnings Map</h2>
+        <!-- The warnings map (work doc #47): the route and the same
+             warning blocks the console renders as text, drawn where
+             they are; a shape click highlights its text card. Own
+             top-level card, above the synoptic chart, so the
+             geographic picture reads before the weather rasters. -->
+        <pb-map-view id="warnings-map"></pb-map-view>
+      </section>
       <section class="sk-card theme-red" id="cap-card" hidden>
         <h2>Official Alerts</h2>
         <div id="cap-alerts"></div>
@@ -119,6 +130,17 @@ strong.sev {
     );
     this._timeline = this.shadowRoot.getElementById("timeline");
     this._bulletinEl = this.shadowRoot.getElementById("bulletin");
+    // The warnings map (work doc #47): shapes click through to the
+    // console text card they belong to; timeline pins click through
+    // to the timeline rows, and row clicks focus the map pin
+    this._map = this.shadowRoot.getElementById("warnings-map");
+    if (this._map) {
+      this._map.onBlockSelect = (index) => this._highlightBlock(index);
+      this._map.onEventSelect = (index) => this._timeline?.reveal(index);
+    }
+    if (this._timeline) {
+      this._timeline.onEventSelect = (index) => this._map?.focusEvent(index);
+    }
     if (this._exceptions) {
       this.setExceptions(this._exceptions);
     }
@@ -144,6 +166,9 @@ strong.sev {
     }
     this._renderTimeline();
     this.renderCapAlerts();
+    this._map?.setPayload(payload);
+    this._hasTrack = trackLine(payload?.waypoints).length > 0;
+    this._updateMapCard();
   }
 
   /**
@@ -222,9 +247,20 @@ strong.sev {
     if (!this._timeline) {
       return;
     }
-    this._timeline.setTimeline(
-      mergeTimeline(this._exceptions ?? null, this._payload ?? null),
+    const events = mergeTimeline(
+      this._exceptions ?? null,
+      this._payload ?? null,
     );
+    this._timeline.setTimeline(events);
+    // Two projections of one event list (work doc #47): the map's
+    // pins are the same merged events the timeline renders as rows;
+    // the ribbon is the simulated track they interpolate over
+    this._map?.setTimeline(events);
+    const track = this._exceptions?.passageSummary?.track ?? [];
+    this._map?.setRibbon(track);
+    this._hasRibbon = track.length > 0;
+    this._hasPins = eventPins(events).length > 0;
+    this._updateMapCard();
   }
 
   /**
@@ -335,9 +371,12 @@ strong.sev {
     const blocks = normalized?.blocks ?? [];
     blocksCard.hidden = blocks.length === 0;
     blocksEl.innerHTML = "";
-    for (const block of blocks) {
+    for (const [index, block] of blocks.entries()) {
       const pre = document.createElement("div");
       pre.style.marginBottom = "8px";
+      // The map's click-through key (work doc #47): a shape carries
+      // the index of the text card it belongs to
+      pre.dataset.blockIndex = String(index);
       for (const token of splitSevere(block.text)) {
         if (token.severe) {
           const strong = document.createElement("strong");
@@ -361,6 +400,46 @@ strong.sev {
         blocksEl.appendChild(prov);
       }
     }
+    this._map?.setBulletin(normalized);
+    this._hasShapes = blockShapes(normalized?.blocks).length > 0;
+    this._updateMapCard();
+  }
+
+  /**
+   * Map card visibility (work doc #47): the card shows when there is
+   * anything geographic to draw — a compiled track or placeable
+   * warning shapes. Empty hides the card entirely; the map element
+   * stays mounted so the basemap is warm when data arrives (the
+   * ResizeObserver invalidates size when the card reveals).
+   */
+  _updateMapCard() {
+    const card = this.shadowRoot.getElementById("map-card");
+    if (card) {
+      card.hidden = !(
+        this._hasTrack ||
+        this._hasShapes ||
+        this._hasRibbon ||
+        this._hasPins
+      );
+    }
+  }
+
+  /**
+   * Click-through target (work doc #47): the map hands over the
+   * block index; the console scrolls to and flashes its text card.
+   *
+   * @param {number} index - Block index in the console
+   */
+  _highlightBlock(index) {
+    const el = this.shadowRoot.querySelector(`[data-block-index="${index}"]`);
+    if (!el) {
+      return;
+    }
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.style.background = "rgba(78, 201, 176, 0.15)";
+    setTimeout(() => {
+      el.style.background = "";
+    }, 1600);
   }
 }
 

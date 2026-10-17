@@ -10,6 +10,7 @@
  * @file components/tactical-dashboard.js
  */
 
+import { blockShapes, eventPins, trackLine } from "./map-model.mjs";
 import {
   fmtShip,
   fmtUtc,
@@ -18,6 +19,7 @@ import {
   splitSevere,
   tacticalNow,
 } from "./models.mjs";
+import "./map-view.js";
 import "./passage-timeline.js";
 import { SK_BASE_CSS } from "./sk-base-css.js";
 
@@ -135,6 +137,14 @@ strong.sev {
         <h2>Official Alerts</h2>
         <div id="cap-alerts"></div>
       </section>
+      <section class="sk-card theme-teal" id="map-card" hidden>
+        <h2>Warnings Map</h2>
+        <!-- The warnings map (work doc #47), same as the strategic
+             screen's: the 24 h plan, its warnings and its events,
+             drawn where they happen; above the synoptic chart like
+             the strategic card -->
+        <pb-map-view id="warnings-map"></pb-map-view>
+      </section>
       <synoptic-chart hidden></synoptic-chart>
     `;
     this._awsEl = this.shadowRoot.getElementById("aws");
@@ -153,6 +163,16 @@ strong.sev {
     this._timeline = this.shadowRoot.getElementById("timeline");
     this._blocksCard = this.shadowRoot.getElementById("blocks-card");
     this._blocksEl = this.shadowRoot.getElementById("blocks");
+    // The warnings map (work doc #47): shapes click through to the
+    // console text card, pins to the timeline rows, rows back to pins
+    this._map = this.shadowRoot.getElementById("warnings-map");
+    if (this._map) {
+      this._map.onBlockSelect = (index) => this._highlightBlock(index);
+      this._map.onEventSelect = (index) => this._timeline?.reveal(index);
+    }
+    if (this._timeline) {
+      this._timeline.onEventSelect = (index) => this._map?.focusEvent(index);
+    }
     if (this._exceptions) {
       this.setExceptions(this._exceptions);
     }
@@ -281,6 +301,9 @@ strong.sev {
     this._renderTimeline();
     this.renderCapAlerts();
     this.renderSky();
+    this._map?.setPayload(payload);
+    this._hasTrack = trackLine(payload?.waypoints).length > 0;
+    this._updateMapCard();
   }
 
   /**
@@ -390,11 +413,51 @@ strong.sev {
       this._exceptions ?? null,
       this._payload ?? null,
     );
-    this._timeline.setTimeline(
-      items.filter(
-        (item) => item.hoursFromNow != null && item.hoursFromNow <= 24,
-      ),
+    const slice = items.filter(
+      (item) => item.hoursFromNow != null && item.hoursFromNow <= 24,
     );
+    this._timeline.setTimeline(slice);
+    // Two projections of the same 24 h list (work doc #47)
+    this._map?.setTimeline(slice);
+    const track = this._exceptions?.passageSummary?.track ?? [];
+    this._map?.setRibbon(track);
+    this._hasRibbon = track.length > 0;
+    this._hasPins = eventPins(slice).length > 0;
+    this._updateMapCard();
+  }
+
+  /**
+   * Map card visibility (work doc #47): geographic data only — same
+   * rule as the strategic screen.
+   */
+  _updateMapCard() {
+    const card = this.shadowRoot.getElementById("map-card");
+    if (card) {
+      card.hidden = !(
+        this._hasTrack ||
+        this._hasShapes ||
+        this._hasRibbon ||
+        this._hasPins
+      );
+    }
+  }
+
+  /**
+   * Click-through target (work doc #47): scroll to and flash the
+   * warning block's text card.
+   *
+   * @param {number} index - Block index in the console
+   */
+  _highlightBlock(index) {
+    const el = this.shadowRoot.querySelector(`[data-block-index="${index}"]`);
+    if (!el) {
+      return;
+    }
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.style.background = "rgba(78, 201, 176, 0.15)";
+    setTimeout(() => {
+      el.style.background = "";
+    }, 1600);
   }
 
   /**
@@ -414,9 +477,11 @@ strong.sev {
     const blocks = bulletin?.blocks ?? [];
     this._blocksCard.hidden = blocks.length === 0;
     this._blocksEl.innerHTML = "";
-    for (const block of blocks) {
+    for (const [index, block] of blocks.entries()) {
       const pre = document.createElement("div");
       pre.style.marginBottom = "8px";
+      // The map's click-through key (work doc #47)
+      pre.dataset.blockIndex = String(index);
       if (block.storm) {
         // Advisory family (work doc #21): the structured storm summary
         // replaces the raw radii tables — what the crew needs is the
@@ -476,6 +541,9 @@ strong.sev {
         this._blocksEl.appendChild(prov);
       }
     }
+    this._map?.setBulletin(bulletin);
+    this._hasShapes = blockShapes(blocks).length > 0;
+    this._updateMapCard();
   }
 }
 
