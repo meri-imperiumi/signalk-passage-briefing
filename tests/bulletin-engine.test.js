@@ -29,6 +29,7 @@ const {
   stormDeclarationPoint,
   stripBoilerplate,
   bboxIntersectsTrack,
+  polygonIntersectsTrack,
   ringContains,
   ukhoBlocksFromWarnings,
   extractIssuer,
@@ -267,7 +268,7 @@ test("a declared tropical system is its own point geometry", () => {
   assert.deepEqual(geometry.coordinates, [-163.4, -10.1]);
 });
 
-test("WITHIN nm of a named storm resolves to a padded bbox", () => {
+test("WITHIN nm of a named storm resolves to a radius ring", () => {
   const features = collectFeatures(
     "TROPICAL DEPRESSION 01F CENTER [1000HPA] WAS ANALYSED NEAR 10.1S\n163.4W AT 151800UTC.",
   );
@@ -275,17 +276,28 @@ test("WITHIN nm of a named storm resolves to a padded bbox", () => {
     "WITHIN 180 NAUTICAL MILES OF TD01F, EXPECT CLOCKWISE WINDS 20 TO 25\nKNOTS. ROUGH SEAS.",
     features,
   );
-  assert.equal(geometry.type, "bbox");
+  // A radius reads as a circle, not a square (work doc #47 session):
+  // the closed great-circle ring the quadrant builder draws
+  assert.equal(geometry.type, "polygon");
+  assert.deepEqual(
+    geometry.coordinates[0],
+    geometry.coordinates[geometry.coordinates.length - 1],
+    "the ring closes",
+  );
   // 180nm ≈ 3° of latitude around the TD centre
-  approx(geometry.coordinates[1], -13.1);
-  approx(geometry.coordinates[3], -7.1);
+  const lats = geometry.coordinates.map(([, lat]) => lat);
+  approx(Math.max(...lats), -7.1);
+  approx(Math.min(...lats), -13.1);
   // A Neiafu vessel (18.6S) is outside the TD's wind field
   assert.equal(
-    bboxIntersectsTrack(geometry.coordinates, [[-173.98, -18.65]]),
+    polygonIntersectsTrack(geometry.coordinates, [[-173.98, -18.65]]),
     false,
   );
   // A vessel inside the field is caught
-  assert.equal(bboxIntersectsTrack(geometry.coordinates, [[-163, -11]]), true);
+  assert.equal(
+    polygonIntersectsTrack(geometry.coordinates, [[-163, -11]]),
+    true,
+  );
 });
 
 test("chain endpoints referencing named systems splice their positions", () => {
@@ -891,7 +903,8 @@ test("FQPS01 NFFN 2026-10-16: named wind field and gale area place for vessels i
     /WITHIN 300 NAUTICAL MILES OF TROPICAL CYCLONE WATI CENTER/.test(b.text),
   );
   assert.ok(band, "Wati wind-field band kept for a vessel inside it");
-  assert.equal(band.geometryType, "bbox");
+  // The 300 nm radius reads as a circle polygon, not a square
+  assert.equal(band.geometryType, "polygon");
 
   // A vessel inside the gale polygon reads the complete warning
   const inGale = filterBulletin({

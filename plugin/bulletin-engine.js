@@ -702,12 +702,19 @@ function stormReferenceGeometry(text, features, bufferNm) {
   }
   if (points.length === 1) {
     const [lon, lat] = points[0];
-    const latPad = bufferNm / 60;
-    const lonPad = latPad / Math.max(0.2, Math.cos((lat * Math.PI) / 180));
-    return {
-      type: "bbox",
-      coordinates: [lon - lonPad, lat - latPad, lon + lonPad, lat + latPad],
-    };
+    // "WITHIN 300 NAUTICAL MILES OF TC WATI CENTRE" reads as a circle
+    // on the chart, not a square (work doc #47 session): the quadrant
+    // ring builder with four equal radii is exactly that circle
+    return quadrantRing({
+      lat,
+      lon,
+      radiiNm: {
+        ne: bufferNm,
+        se: bufferNm,
+        sw: bufferNm,
+        nw: bufferNm,
+      },
+    });
   }
   return { type: "line", coordinates: points, bufferNm };
 }
