@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.12.6] - 2026-10-17
+
 ### Fixed
 - Critical-hazard notifications re-alarmed at every server restart: the acknowledgement state persisted (0.12.5), but the published notification values did not, so the first escalation cycle after a restart re-raised the still-active cyclone as a fresh alarm. The state file now carries both maps — after a restart an identical notification republishes visually (restoring the notification path the server lost) without the sounder, a GDACS-refreshed message amends visually, and a storm escalated to red re-alarms for real. The gate is the pure `classifyPublish`, covered by tests together with the state-file round-trip.
 
