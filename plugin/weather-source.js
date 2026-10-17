@@ -98,10 +98,13 @@ function weatherDataToTimeStep(item) {
       twd: radToDeg(item.wind?.directionTrue),
       mslp: paToHpa(item.outside?.pressure),
       gust: msToKn(item.wind?.gust),
-      // The provider publishes no cloud cover; the celestial
-      // visibility gate stays open (work doc #3 Phase 2)
-      cloudCover: null,
-      // Nor any precipitation fields; rain-shower episodes degrade
+      // The provider publishes fractional cloud cover (0..1) when its
+      // run carries total cloud cover — the celestial visibility gate
+      // needs it; absence keeps the gate open (work doc #3 Phase 2)
+      cloudCover: Number.isFinite(item.outside?.cloudCover)
+        ? item.outside.cloudCover
+        : null,
+      // No precipitation fields; rain-shower episodes degrade
       // to absent rather than being invented
       precip: null,
       precipProbability: null,

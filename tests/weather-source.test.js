@@ -77,6 +77,21 @@ describe("weatherDataToTimeStep", () => {
     }
   });
 
+  test("the provider's fractional cloud cover maps through", () => {
+    // The router publishes total cloud cover 0..1 — the celestial
+    // visibility gate reads it (work doc #3 Phase 2; the mapping
+    // used to hardcode null back when the provider carried none)
+    const step = weatherDataToTimeStep(
+      weatherDataEntry({ outside: { pressure: 101300, cloudCover: 0.88 } }),
+    );
+    assert.equal(step.surface.cloudCover, 0.88);
+    // Absent cover degrades to null, never invented
+    assert.equal(
+      weatherDataToTimeStep(weatherDataEntry()).surface.cloudCover,
+      null,
+    );
+  });
+
   test("missing blocks degrade to nulls", () => {
     const step = weatherDataToTimeStep({
       date: "2026-10-03T12:00:00.000Z",
