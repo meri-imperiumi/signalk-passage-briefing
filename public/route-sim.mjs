@@ -22,7 +22,6 @@
  */
 
 import { meteorNightEvents } from "./components/meteors.mjs";
-import { downwindRecommendations } from "./downwind-sails.mjs";
 import { detectLineCrossings } from "./lines-of-interest.js";
 import {
   bearingRad,
@@ -727,6 +726,14 @@ export function watchBoundaries(watch, fromMs, untilMs) {
  * events) are navigation-driven and stay at their tactical times —
  * canvas work waits for daylight or a handover, course work does not.
  *
+ * Canvas-down events (`NO_SAILS` — motoring, adrift, storm tactics)
+ * are propulsion decisions, not canvas work: the engine starts when
+ * the wind leaves, daylight or not. They keep their detection time
+ * and their honest conditions, and the rows carry the canvas-down
+ * rig from that moment — the crew reads no gap between a downwind
+ * take-down and the engine, and no "motoring at dusk in 10 kn of
+ * wind" stale announcements (work doc #41 session).
+ *
  * Detections with no boundary in reach keep their detection time: an
  * unanchored change still beats a dropped one. Each anchored event
  * carries `anchor` (`"watch"`, `"dusk"`, `"dawn"`) so the timeline
@@ -795,15 +802,30 @@ export function anchorSailChanges(events, rows, watch = null) {
     }
   }
 
+  // Canvas-down events and maneuvers pass through unanchored: the
+  // engine (or the drift, or the storm tactic) does not wait for
+  // daylight, and course work does not either
+  const passthrough = [];
+  const downEvents = [];
+  const riggingPool = [];
+  for (const event of events) {
+    if (event.maneuver) {
+      passthrough.push(event);
+      continue;
+    }
+    if (event.sailState === "NO_SAILS") {
+      passthrough.push(event);
+      downEvents.push(event);
+      continue;
+    }
+    riggingPool.push(event);
+  }
+
   // Anchor each detection, keeping the last suggested state per
   // boundary
   const anchoredByBoundary = new Map();
   const unanchored = [];
-  for (const event of events) {
-    if (event.maneuver) {
-      unanchored.push(event);
-      continue;
-    }
+  for (const event of riggingPool) {
     const boundary = usePrevious
       ? [...boundaries]
           .reverse()
@@ -834,37 +856,52 @@ export function anchorSailChanges(events, rows, watch = null) {
 
   // Drop re-rigs of the canvas the schedule already carries; the
   // first change is always kept — it differs from the initial rig by
-  // construction
+  // construction. The effective rig includes the canvas-down
+  // decisions: a rig-up after an unanchored bare-poles stretch is a
+  // real change even when the last anchored rig would say otherwise.
+  const ordered = [...anchored, ...downEvents].sort(
+    (a, b) => a.hoursFromNow - b.hoursFromNow,
+  );
   const kept = [];
-  for (const event of anchored) {
-    const previous = kept.at(-1)?.sailState ?? event.previousSailState;
-    if (kept.length > 0 && event.sailState === previous) {
+  let effective = null;
+  for (const event of ordered) {
+    if (event.sailState === "NO_SAILS") {
+      effective = event.sailState;
       continue;
     }
-    kept.push(event);
+    if (kept.length === 0 || event.sailState !== effective) {
+      kept.push(event);
+      effective = event.sailState;
+    }
   }
 
-  // Rewrite the rows to the anchored schedule: rows at or after a
-  // boundary carry that boundary's rig, rows before the first one
-  // show the pre-change rig
+  // Rewrite the rows to the merged schedule (anchored rig changes
+  // plus the unanchored canvas-down moments): rows at or after an
+  // event carry that event's rig, rows before the first one show the
+  // rig the passage started with
+  const schedule = [...kept, ...downEvents]
+    .map((event) => ({
+      hoursFromNow: event.hoursFromNow,
+      sailState: event.sailState,
+      previousSailState: event.previousSailState ?? null,
+    }))
+    .sort((a, b) => a.hoursFromNow - b.hoursFromNow);
+  const preRig = schedule[0]?.previousSailState ?? null;
   for (const row of rows) {
     let applicable = null;
-    for (const event of kept) {
-      if (event.hoursFromNow <= row.hoursFromNow) {
-        applicable = event;
+    for (const entry of schedule) {
+      if (entry.hoursFromNow <= row.hoursFromNow) {
+        applicable = entry;
       }
     }
     if (applicable) {
       row.sailState = applicable.sailState;
-    } else if (kept.length > 0) {
-      const first = kept[0];
-      if (first.previousSailState != null) {
-        row.sailState = first.previousSailState;
-      }
+    } else if (preRig != null) {
+      row.sailState = preRig;
     }
   }
 
-  return [...kept, ...unanchored].sort(
+  return [...kept, ...passthrough, ...unanchored].sort(
     (a, b) => a.hoursFromNow - b.hoursFromNow,
   );
 }
@@ -1376,7 +1413,6 @@ export function simulateRun({
   // window changes the comfort the hours read — the recommendation
   // precedes and supersedes the slatting penalty it relieves.
   const deploymentEvents = [];
-  const poleNotes = [];
   let comfortWindows = [];
   // The param wins; the plugin's served config (the vessel's own
   // inventory) fills in when the caller passes none
@@ -1388,6 +1424,13 @@ export function simulateRun({
   if (advisorSails != null && advisorSails.length > 0) {
     const t0Ms = Date.parse(startTime.toISOString());
     const tEndMs = t0Ms + maxHours * 3600000;
+    // Named-storm hours: probable rain squalls, convective air and
+    // the squall-risk advisory hours share one gate
+    const stormSet = new Set(
+      [...rainHours, ...squallHours, ...upperAirAnomalies].map(
+        (e) => e.hoursFromNow,
+      ),
+    );
     const advisorHours = hourly.map((row) => ({
       hourMs: Date.parse(row.timestamp),
       twsKnots: row.twsKnots ?? 0,
@@ -1403,6 +1446,11 @@ export function simulateRun({
           : undefined,
       night: row.night === true,
       underCanvas: row.sailState !== "NO_SAILS",
+      // Named forecast events (probable rain squalls, convective air,
+      // the squall-risk hours) kill the deployment the same way the
+      // gust-factor gate does — the forecast's own "sail comes down"
+      // markers
+      storm: stormSet.has(row.hoursFromNow),
     }));
     const plan = deploymentPlan(advisorHours, {
       downwindSails: advisorSails,
@@ -1414,6 +1462,16 @@ export function simulateRun({
     // downwind sail is up, drawing, damping the motion. Stamped in
     // the comfort pass below, which always runs.
     comfortWindows = plan.filter((d) => d.claim === "comfort");
+    // Every deployment window stamps its hours: while a downwind sail
+    // is up there is no poled-out working canvas to advise about
+    for (const d of plan) {
+      for (const row of hourly) {
+        const ms = Date.parse(row.timestamp);
+        if (ms >= d.startMs && ms <= d.untilMs) {
+          row.deploymentWindow = true;
+        }
+      }
+    }
     // Timeline entries: deploy (anchored when the watch schedule put
     // a handover inside the window), and the take-down where the
     // forecast broke.
@@ -1436,19 +1494,21 @@ export function simulateRun({
       const breakLabel =
         d.breakReason === "squall gusts"
           ? "squall window"
-          : d.breakReason === "sea state"
-            ? "sea state"
-            : d.breakReason === "night"
-              ? "night"
-              : d.breakReason === "wind above envelope"
-                ? "wind building past the envelope"
-                : d.breakReason === "point of sail"
-                  ? "wind angle leaving the reach"
-                  : d.breakReason === "below fill floor"
-                    ? "wind dying"
-                    : d.breakReason === "wind below envelope"
+          : d.breakReason === "squall window"
+            ? "squall window"
+            : d.breakReason === "sea state"
+              ? "sea state"
+              : d.breakReason === "night"
+                ? "night"
+                : d.breakReason === "wind above envelope"
+                  ? "wind building past the envelope"
+                  : d.breakReason === "point of sail"
+                    ? "wind angle leaving the reach"
+                    : d.breakReason === "below fill floor"
                       ? "wind dying"
-                      : null;
+                      : d.breakReason === "wind below envelope"
+                        ? "wind dying"
+                        : null;
       if (breakLabel != null) {
         const untilRow = hourly.find(
           (row) => Date.parse(row.timestamp) === d.untilMs,
@@ -1519,59 +1579,6 @@ export function simulateRun({
     }
   }
 
-  // Poled-out drive advisories (bergie: the pole keeps the sails
-  // pulling past 150 deg TWA — below that it sails poorly): a deep
-  // run under canvas worth rigging the pole for, one entry per
-  // stretch. When the plan's TWA oscillates across the pole floor,
-  // the note names the oscillation instead — the crew would be in
-  // and out of the pole (bergie: the pole-toggle regime signal).
-  {
-    const POLE_FLOOR_DEG = 150;
-    const MIN_POLE_HOURS = 3;
-    let run = null;
-    let crossings = 0;
-    const flush = () => {
-      if (run && run.rows.length >= MIN_POLE_HOURS) {
-        const first = run.rows[0];
-        const last = run.rows.at(-1);
-        poleNotes.push({
-          hoursFromNow: first.hoursFromNow,
-          timestamp: first.timestamp,
-          untilTimestamp: last.timestamp,
-          hours: run.rows.length,
-          oscillating: crossings >= 2,
-        });
-      }
-      run = null;
-      crossings = 0;
-    };
-    for (const row of hourly) {
-      const folded =
-        row.twaRad == null
-          ? null
-          : Math.abs(((row.twaRad / DEG + 540) % 360) - 180);
-      if (
-        row.sailState !== "NO_SAILS" &&
-        row.sailState != null &&
-        folded != null &&
-        folded > POLE_FLOOR_DEG &&
-        (row.twsKnots ?? 0) >= 6
-      ) {
-        if (run) {
-          run.rows.push(row);
-        } else {
-          run = { rows: [row] };
-        }
-      } else {
-        if (run && folded != null && folded > POLE_FLOOR_DEG - 25) {
-          crossings++;
-        }
-        flush();
-      }
-    }
-    flush();
-  }
-
   return {
     etaHours: arrivedHours,
     eta: new Date(startTime.getTime() + arrivedHours * 3600000).toISOString(),
@@ -1588,10 +1595,79 @@ export function simulateRun({
     sunDayTransitions,
     regimeTransitions,
     deploymentEvents,
-    poleNotes,
     timeEvents,
     hazardAlerts: hazardAlerts(notes, positions),
   };
+}
+
+/**
+ * Poled-out drive advisories (bergie: the pole keeps the sails
+ * pulling past 150 deg TWA — below that it sails poorly): a deep run
+ * under canvas worth rigging the pole for, one entry per stretch.
+ * When the plan's TWA oscillates across the pole floor, the note
+ * names the oscillation instead — the crew would be in and out of
+ * the pole (bergie: the pole-toggle regime signal).
+ *
+ * Runs on the anchored schedule (the same rig the timeline
+ * announces), and skips the hours where the plan is motoring or a
+ * downwind sail is deployed: the engine needs no pole, and a flying
+ * Parasailor is not a deep run the pole would improve.
+ *
+ * @param {Array<{hoursFromNow: number, timestamp: string,
+ *   twaRad: ?number, twsKnots: ?number, sailState: ?string,
+ *   motoring: ?boolean, deploymentWindow: ?boolean}>} hourly - The
+ *   anchored hourly rows (post {@link anchorSailChanges} rewrite)
+ * @returns {Array<object>} Pole notes, chronological
+ */
+export function poleAdvisories(hourly) {
+  const notes = [];
+  const POLE_FLOOR_DEG = 150;
+  const MIN_POLE_HOURS = 3;
+  let run = null;
+  let crossings = 0;
+  const flush = () => {
+    if (run && run.rows.length >= MIN_POLE_HOURS) {
+      const first = run.rows[0];
+      const last = run.rows.at(-1);
+      notes.push({
+        hoursFromNow: first.hoursFromNow,
+        timestamp: first.timestamp,
+        untilTimestamp: last.timestamp,
+        hours: run.rows.length,
+        oscillating: crossings >= 2,
+      });
+    }
+    run = null;
+    crossings = 0;
+  };
+  for (const row of hourly) {
+    const folded =
+      row.twaRad == null
+        ? null
+        : Math.abs(((row.twaRad / DEG + 540) % 360) - 180);
+    if (
+      row.sailState !== "NO_SAILS" &&
+      row.sailState != null &&
+      row.motoring !== true &&
+      row.deploymentWindow !== true &&
+      folded != null &&
+      folded > POLE_FLOOR_DEG &&
+      (row.twsKnots ?? 0) >= 6
+    ) {
+      if (run) {
+        run.rows.push(row);
+      } else {
+        run = { rows: [row] };
+      }
+    } else {
+      if (run && folded != null && folded > POLE_FLOOR_DEG - 25) {
+        crossings++;
+      }
+      flush();
+    }
+  }
+  flush();
+  return notes;
 }
 
 /**
@@ -1778,7 +1854,6 @@ export function simulatePassage({
   performanceFactor,
   notes,
   energyHourly,
-  sails = null,
   watch = null,
   startTime = new Date(),
   departure = null,
@@ -1853,32 +1928,24 @@ export function simulatePassage({
     );
   };
 
-  // Tacks and gybes the plan implies (work doc #5): read off the
-  // raw hourly plan before twilight anchoring rewrites the rows.
-  // Recommendation-driven changes are then anchored to sunrise/sunset
-  // with conditions at the change point (nearest hourly step) so the
-  // timeline can say what the crew is rigging into
-  const maneuvers = detectManeuvers(nominal.hourly);
+  // Canvas changes anchored to the moments the whole crew can act on
+  // (work doc #5): recommendation-driven changes move to
+  // sunrise/sunset or a watch handover with conditions at the change
+  // point, so the timeline can say what the crew is rigging into
   const sailPlan = anchorSailChanges(
     nominal.sailEvents ?? [],
     nominal.hourly ?? [],
     watch,
   );
-
-  // Proactive downwind sail recommendations (work doc #41): the
-  // nominal plan's hours evaluated against the sail inventory — when
-  // the working canvas would slat and a downwind sail's envelope
-  // covers the conditions, recommend deploying it. Runs once over the
-  // nominal plan, not per perturbed ETA run.
-  const downwind = downwindRecommendations(nominal.hourly ?? [], sails, {
-    squallHours: new Set(
-      (nominal.squallHours ?? []).map((s) => s.hoursFromNow),
-    ),
-    rainHours: new Set((nominal.rainHours ?? []).map((s) => s.hoursFromNow)),
-    convectiveHours: new Set(
-      (nominal.upperAirAnomalies ?? []).map((s) => s.hoursFromNow),
-    ),
-  });
+  // Tacks and gybes the plan implies (work doc #5): detected on the
+  // anchored schedule — the same rig the timeline announces — so a
+  // maneuver never contradicts the canvas the crew was told to carry
+  // (with canvas down there is nothing to tack or gybe)
+  const maneuvers = detectManeuvers(nominal.hourly);
+  // Pole advisories read the anchored schedule too: no pole note in
+  // a stretch the plan announces as motoring or a downwind-sail
+  // deployment (work doc #41 session)
+  const poleNotes = poleAdvisories(nominal.hourly ?? []);
 
   return {
     eta: {
@@ -1938,7 +2005,7 @@ export function simulatePassage({
       })
       .sort((x, y) => x.hoursFromNow - y.hoursFromNow),
     // Proactive downwind sail deployments (work doc #41)
-    downwindRecommendations: downwind,
+    deploymentEvents: nominal.deploymentEvents ?? [],
     // Territorial waters transitions with their place in the passage
     // schedule (work doc #17); undated when the crossing lies beyond
     // the simulated horizon. Each carries the IANA zone at the
@@ -1958,8 +2025,8 @@ export function simulatePassage({
     dayCheckpoints: nominal.dayCheckpoints,
     sunDayTransitions: nominal.sunDayTransitions,
     regimeTransitions: nominal.regimeTransitions,
-    deploymentEvents: nominal.deploymentEvents ?? [],
-    poleNotes: nominal.poleNotes ?? [],
+    // Pole advisories computed on the anchored schedule
+    poleNotes,
     energy: energySummary(energyHourly, startTime),
     runs: runs.map((run, i) => ({
       twsFactor: ETA_FACTORS[i],
@@ -2115,8 +2182,6 @@ export function filterExceptions(simulationResult, simParams = {}) {
       // Whole-route sail-work queue: recommendations plus the
       // tacks/gybes the plan implies (work doc #5)
       sailChanges: simulationResult.sailEvents ?? [],
-      // Proactive downwind sail deployments (work doc #41)
-      downwindRecommendations: simulationResult.downwindRecommendations ?? [],
       // Whole-route hazard alerts (work doc #18): the unified
       // timeline slices per screen, so the summary carries them all
       hazards: simulationResult.hazardAlerts ?? [],

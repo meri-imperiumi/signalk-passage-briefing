@@ -439,37 +439,23 @@ class PassageOutlook extends HTMLElement {
   /** Loads everything the simulation needs, then simulates. */
   async bootstrap() {
     try {
-      const [
-        status,
-        routes,
-        config,
-        matrix,
-        polar,
-        notes,
-        time,
-        navState,
-        sails,
-      ] = await Promise.all([
-        fetchJson(`${PLUGIN_API}/status`),
-        fetchJson(`${PLUGIN_API}/routes`),
-        fetchJson(`${PLUGIN_API}/config`).catch(() => ({})),
-        fetchJson(`${PLUGIN_API}/matrix`).catch(() => null),
-        fetchJson(`${PLUGIN_API}/polar`).catch(() => null),
-        fetchNotes(),
-        fetchShipTime(),
-        fetchNavigationState(),
-        // Sail inventory (work doc #41): the downwind sails the
-        // proactive recommendations deploy from — null when the
-        // endpoint is unavailable (older plugin, no inventory)
-        fetchJson(`${PLUGIN_API}/sails`).catch(() => null),
-      ]);
+      const [status, routes, config, matrix, polar, notes, time, navState] =
+        await Promise.all([
+          fetchJson(`${PLUGIN_API}/status`),
+          fetchJson(`${PLUGIN_API}/routes`),
+          fetchJson(`${PLUGIN_API}/config`).catch(() => ({})),
+          fetchJson(`${PLUGIN_API}/matrix`).catch(() => null),
+          fetchJson(`${PLUGIN_API}/polar`).catch(() => null),
+          fetchNotes(),
+          fetchShipTime(),
+          fetchNavigationState(),
+        ]);
       this._status = status;
       this._config = config;
       this._matrix = matrix;
       this._polar = polar;
       this._notes = notes;
       this._navigationState = navState;
-      this._sails = sails?.sails ?? null;
       if (time) {
         this.applyShipTime(time);
       }
@@ -792,9 +778,6 @@ class PassageOutlook extends HTMLElement {
         polar: this._polar?.table ?? null,
         performanceFactor: this._polar?.performanceFactor,
         notes: this._notes ?? [],
-        // Sail inventory (work doc #41): the downwind sails the
-        // proactive recommendations evaluate
-        sails: this._sails ?? null,
         // Running watch schedule (signalk-watch-schedule): sail
         // changes anchor to watch changes while it runs
         watch: this._watch ?? null,

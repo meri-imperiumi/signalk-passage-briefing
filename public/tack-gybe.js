@@ -131,11 +131,16 @@ function crossingFraction(a, crossing, d) {
 }
 
 /**
- * Detects tacks and gybes along the hourly simulation rows.
+ * Detects tacks and gybes along the hourly simulation rows. Runs on
+ * the anchored schedule (the rig the timeline announces), so no
+ * maneuver ever contradicts the canvas the crew was told to carry —
+ * with canvas down there is nothing to tack or gybe, and a wind-side
+ * flip across an engine-on (or adrift) stretch is the engine turning
+ * the boat, not a crew maneuver.
  *
  * @param {Array<object>} hourly - Simulation hourly rows (need
  *   timestamp, hoursFromNow, lat, lon, headingDeg, twdDeg, twsKnots,
- *   sogKnots, distanceFromStartNm, sailState, motoring)
+ *   sogKnots, sailState, motoring)
  * @param {object} [options]
  * @param {number} [options.minTwaMarginDeg] - Reject crossings where
  *   either side's |TWA| is below this (wind wobble guard)
@@ -145,27 +150,43 @@ export function detectManeuvers(
   hourly,
   { minTwaMarginDeg = MIN_TWA_MARGIN_DEG } = {},
 ) {
-  const rows = (hourly ?? []).filter(isSailing);
+  const all = hourly ?? [];
   // Anchors: sailing steps with an established wind side (|TWA| above
   // the margin). A crossing counts only when the established side
   // flips between anchors — wind wobble that stays on one side never
   // fabricates a maneuver, while a genuine veer spread across a
-  // low-wind-angle hour still lands its tack.
+  // low-wind-angle hour still lands its tack. Anchors carry their
+  // index into the full hourly run so the gap between them can be
+  // checked for engine-on hours
   const anchors = [];
-  for (const r of rows) {
+  for (let idx = 0; idx < all.length; idx++) {
+    const r = all[idx];
+    if (!isSailing(r)) {
+      continue;
+    }
     const twa = signedTwa(r);
     if (twa != null && Math.abs(twa) >= minTwaMarginDeg) {
-      anchors.push({ row: r, twa });
+      anchors.push({ row: r, twa, idx });
     }
   }
   const events = [];
   for (let i = 1; i < anchors.length; i++) {
-    const { row: a, twa: twaA } = anchors[i - 1];
-    const { row: b, twa: twaB } = anchors[i];
+    const { row: a, twa: twaA, idx: idxA } = anchors[i - 1];
+    const { row: b, twa: twaB, idx: idxB } = anchors[i];
     const sideA = tackSide(twaA);
     const sideB = tackSide(twaB);
     if (sideA === sideB) {
       continue; // No crossing of the boat's wind line
+    }
+    // The engine (or the drift) turned the boat through the wind:
+    // canvas-down hours between the anchors mean no crew maneuver
+    // happened — the sail work the flip would demand never existed
+    // (work doc #41 session: no gybes inside a motoring stretch)
+    const engineTurned = all
+      .slice(idxA + 1, idxB)
+      .some((between) => !isSailing(between));
+    if (engineTurned) {
+      continue;
     }
     let maneuver;
     let crossing;

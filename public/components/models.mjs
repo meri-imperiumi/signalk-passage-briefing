@@ -1379,32 +1379,6 @@ export function mergeTimeline(exceptions, payload = null) {
     });
   }
 
-  // Proactive downwind sail deployments (work doc #41): when the
-  // working canvas would slat and a downwind sail's envelope covers
-  // the conditions, recommend deploying it — with the honest payoff
-  // (the worst tier the window holds) and the retract boundary
-  for (const r of summary.downwindRecommendations ?? []) {
-    push({
-      hoursFromNow: r.hoursFromNow ?? null,
-      timestamp: r.timestamp ?? null,
-      kind: "sail",
-      severity: "info",
-      label: `Deploy ${r.sailName}`,
-      detail: [
-        r.comfortLevel != null
-          ? `holds ${r.comfortLevel} instead of slatting`
-          : null,
-        r.retractReason != null ? `until ${r.retractReason}` : null,
-        r.hoursCount != null ? `${Math.round(r.hoursCount)} h window` : null,
-      ]
-        .filter(Boolean)
-        .join(" · "),
-      night: false,
-      comfortLevel: r.comfortLevel ?? null,
-      slatting: false,
-    });
-  }
-
   // Macro sea-state anomaly episodes (steepness below the breaking
   // ratio): peak ratio and seas over the episode's time range
   for (const a of summary.macroSeaAnomalies ?? []) {

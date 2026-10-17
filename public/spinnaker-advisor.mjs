@@ -77,6 +77,8 @@ export const DOWNWIND_HS_CEILING_M = 3.5;
  * @param {number} [params.hsMeters] - Significant wave height (m)
  * @param {number} [params.gustFactor] - Gust / base wind ratio
  * @param {boolean} [params.night] - Sun below the horizon at the hour
+ * @param {boolean} [params.storm] - Named forecast event at the hour
+ *   (probable rain squalls, convective air, squall-risk advisory)
  * @param {boolean} [params.nightOk] - Whether night deployment is
  *   acceptable (default false: most crews are reluctant)
  * @param {{minTwsKnots?: number|null, maxTwsKnots?: number|null}} params.envelope
@@ -92,6 +94,7 @@ export function evaluateDownwindSail({
   hsMeters,
   gustFactor,
   night = false,
+  storm = false,
   nightOk = false,
   envelope = {},
 }) {
@@ -110,6 +113,11 @@ export function evaluateDownwindSail({
   // the squalls anyway, and the reef-then-slat cycle follows
   if (gustFactor != null && gustFactor >= DOWNWIND_SQUALL_GUST_FACTOR) {
     return "squall gusts";
+  }
+  // Named forecast events take precedence as retract reasons: they
+  // are the forecast's explicit "sail comes down now" markers
+  if (storm) {
+    return "squall window";
   }
   if (maxTws != null && twsKnots > maxTws) {
     return "wind above envelope";

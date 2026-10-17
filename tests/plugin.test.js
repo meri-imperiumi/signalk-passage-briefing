@@ -2629,7 +2629,12 @@ test("wider-area severe warnings ride the payload for the map (work doc #47)", a
     },
   ]);
   const r = app.getRoutes().find((x) => x.path === "/api/bulletin");
-  const res = { payload: null, json(p) { this.payload = p; } };
+  const res = {
+    payload: null,
+    json(p) {
+      this.payload = p;
+    },
+  };
   await r.handler({ query: {} }, res);
   const bulletin = res.payload;
   assert.ok(bulletin, "bulletin served");

@@ -1693,76 +1693,163 @@ test("regime rows and transitions follow the distance-to-land annotations", asyn
   assert.equal(bareRun.hourly[0].regime, "unknown");
 });
 
-test("downwind recommendations fire in the slatting regime on a run (work doc #41)", async () => {
+test("deployment events fire in the slatting regime on a run (work doc #41)", async () => {
   const { simulatePassage } = await simPromise;
-  const SAILS = [
-    {
-      name: "Parasailor",
-      downwind: true,
-      sailFamily: "parasailor",
-      minimumWindKnots: 5,
-      maximumWindKnots: 25,
-      active: true,
-    },
-    { name: "Main", downwind: false },
-  ];
   // Dead run (wind from astern) at 10 kn over the fixture's 1.5 m
   // swell: the slatting regime the Parasailor fixes. The trade-wind
   // gusts (tws + 5) stay under the squall bars.
   const result = simulatePassage({
     payload: buildPayload({ twd: 180 }),
     startTime: new Date("2026-06-21T06:00:00Z"),
-    sails: SAILS,
+    config: {
+      downwindSails: [
+        {
+          name: "Parasailor",
+          claim: "comfort",
+          minTwaDeg: 130,
+          minTwsKnots: 5,
+          maxTwsKnots: 25,
+        },
+      ],
+    },
   });
-  const recs = result.downwindRecommendations;
-  assert.ok(recs.length >= 1, JSON.stringify(recs));
-  assert.equal(recs[0].sailName, "Parasailor");
-  assert.ok(recs[0].hoursCount >= 3, `hours ${recs[0].hoursCount}`);
-  // The retract boundary carries its named reason (nightfall breaks
-  // the day stretches by default)
-  assert.ok(
-    recs.every(
-      (r) =>
-        r.retractReason == null ||
-        ["nightfall", "sails drawing", "wind envelope exit"].includes(
-          r.retractReason,
-        ),
-    ),
-    JSON.stringify(recs.map((r) => r.retractReason)),
-  );
+  const events = result.deploymentEvents;
+  assert.ok(events.length >= 1, JSON.stringify(events));
+  const deploy = events.find((e) => !e.takeDown);
+  assert.equal(deploy.sailName, "Parasailor");
+  assert.equal(deploy.claim, "comfort");
+  assert.ok(deploy.hours >= 3, `hours ${deploy.hours}`);
   // The summary carries them for the timeline
   const { filterExceptions } = await simPromise;
   const exceptions = filterExceptions(result);
-  assert.deepEqual(exceptions.passageSummary.downwindRecommendations, recs);
+  assert.deepEqual(exceptions.passageSummary.deploymentEvents, events);
 });
 
-test("squally air kills the downwind recommendation (work doc #41)", async () => {
+test("squally air kills the downwind deployment (work doc #41)", async () => {
   const { simulatePassage } = await simPromise;
   // Gusts at twice the base wind and over the absolute bar: squall
   // windows the whole way, no deployment is worth it
   const result = simulatePassage({
     payload: buildPayload({ twd: 180, gust: 22 }),
     startTime: new Date("2026-06-21T06:00:00Z"),
-    sails: [
-      {
-        name: "Parasailor",
-        downwind: true,
-        minimumWindKnots: 5,
-        maximumWindKnots: 25,
-        active: true,
-      },
-    ],
+    config: {
+      downwindSails: [
+        {
+          name: "Parasailor",
+          claim: "comfort",
+          minTwaDeg: 130,
+          minTwsKnots: 5,
+          maxTwsKnots: 25,
+        },
+      ],
+    },
   });
-  assert.deepEqual(result.downwindRecommendations, []);
+  assert.deepEqual(result.deploymentEvents, []);
 });
 
-test("no downwind sails in the inventory, no recommendations", async () => {
+test("no downwind sails in the inventory, no deployments", async () => {
   const { simulatePassage } = await simPromise;
   const result = simulatePassage({
     payload: buildPayload({ twd: 180 }),
     startTime: new Date("2026-06-21T06:00:00Z"),
   });
-  assert.deepEqual(result.downwindRecommendations, []);
+  assert.deepEqual(result.deploymentEvents, []);
+});
+
+// Run-bin matrix: the learned rig at 10 kn on a deep run (twsBin 2,
+// twaBin 5 — the run fixtures hold TWA 170)
+const RUN_MATRIX = {
+  twsBinsKnots: [0, 5, 10, 15, 20, 25, 30, 35, 40],
+  twaBinsDegrees: [0, 30, 60, 90, 120, 150, 180],
+  matrix: [
+    {
+      twsBin: 2,
+      twaBin: 5,
+      night: false,
+      preferredSailState: "MAIN_1_REEF_STAYSAIL",
+      minTwsGustTrigger: 12,
+      samplesCount: 3,
+    },
+    {
+      twsBin: 2,
+      twaBin: 6,
+      night: false,
+      preferredSailState: "MAIN_1_REEF_STAYSAIL",
+      minTwsGustTrigger: 12,
+      samplesCount: 3,
+    },
+  ],
+};
+
+test("pole advisories skip deployment windows", async () => {
+  const { simulatePassage } = await simPromise;
+  const base = {
+    payload: buildPayload({ twd: 170 }),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    matrix: RUN_MATRIX,
+  };
+  // Deep run under the working canvas: the pole note fires
+  const plain = simulatePassage(base);
+  assert.ok(plain.poleNotes.length >= 1, JSON.stringify(plain.poleNotes));
+  // The same run with the Parasailor deployed: the downwind sail is
+  // up and drawing — the pole is moot, no note may land inside a
+  // deployment window (work doc #41 session)
+  const deployed = simulatePassage({
+    ...base,
+    config: {
+      downwindSails: [
+        {
+          name: "Parasailor",
+          claim: "comfort",
+          minTwaDeg: 130,
+          minTwsKnots: 5,
+          maxTwsKnots: 25,
+        },
+      ],
+    },
+  });
+  assert.ok(
+    deployed.deploymentEvents.some((e) => !e.takeDown),
+    JSON.stringify(deployed.deploymentEvents),
+  );
+  assert.deepEqual(deployed.poleNotes, []);
+});
+
+test("canvas-down announcements keep the engine-start hour", async () => {
+  const { simulatePassage } = await simPromise;
+  // The learned rig for the run bin is bare poles: the apparent wind
+  // over the deck sits below the fill floor, so the engine starts
+  const result = simulatePassage({
+    payload: buildPayload({ twd: 170 }),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    matrix: {
+      ...RUN_MATRIX,
+      matrix: [
+        {
+          twsBin: 2,
+          twaBin: 5,
+          night: false,
+          preferredSailState: "NO_SAILS",
+          minTwsGustTrigger: 12,
+          samplesCount: 3,
+        },
+      ],
+    },
+  });
+  const down = result.sailEvents.filter((e) => e.sailState === "NO_SAILS");
+  assert.ok(down.length >= 1, JSON.stringify(result.sailEvents));
+  // Not anchored to dusk: the engine decision is announced when it
+  // happens, with the conditions of that moment — never as a stale
+  // "motoring at dusk in 10 kn of wind"
+  for (const event of down) {
+    assert.equal(event.anchor, undefined, "canvas-down is not canvas work");
+  }
+  assert.ok(down[0].hoursFromNow < 12, `announced at ${down[0].hoursFromNow}`);
+  // The rows carry the canvas-down rig from the announcement hour
+  const row = result.hourlyComfort.find(
+    (r) => r.hoursFromNow >= down[0].hoursFromNow,
+  );
+  assert.equal(row.sailState, "NO_SAILS");
 });
 
 test("Parasailor deployment windows supersede slatting (work doc #41)", async () => {

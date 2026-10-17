@@ -122,6 +122,74 @@ describe("tack & gybe detection", () => {
     assert.equal(events.length, 0);
   });
 
+  test("a wind-side flip across engine-on hours is no crew maneuver", async () => {
+    const { detectManeuvers } = await tgPromise;
+    // The wind veers through the stern while the canvas is down and
+    // the engine turns the boat: no gybe happened — the engine did
+    // the turning (work doc #41 session)
+    const events = detectManeuvers([
+      row({
+        hoursFromNow: 1,
+        timestamp: "2026-06-21T01:00:00.000Z",
+        headingDeg: 90,
+        twdDeg: 270,
+      }),
+      row({
+        hoursFromNow: 2,
+        timestamp: "2026-06-21T02:00:00.000Z",
+        headingDeg: 90,
+        twdDeg: 260,
+        sailState: "NO_SAILS",
+        motoring: true,
+      }),
+      row({
+        hoursFromNow: 3,
+        timestamp: "2026-06-21T03:00:00.000Z",
+        headingDeg: 90,
+        twdDeg: 250,
+        sailState: "NO_SAILS",
+        motoring: true,
+      }),
+      row({
+        hoursFromNow: 4,
+        timestamp: "2026-06-21T04:00:00.000Z",
+        headingDeg: 90,
+        twdDeg: -70,
+      }),
+    ]);
+    assert.deepEqual(events, []);
+
+    // Sailing through the same flip, the gybe is real
+    const sailed = detectManeuvers([
+      row({
+        hoursFromNow: 1,
+        timestamp: "2026-06-21T01:00:00.000Z",
+        headingDeg: 90,
+        twdDeg: 270,
+      }),
+      row({
+        hoursFromNow: 2,
+        timestamp: "2026-06-21T02:00:00.000Z",
+        headingDeg: 90,
+        twdDeg: 260,
+      }),
+      row({
+        hoursFromNow: 3,
+        timestamp: "2026-06-21T03:00:00.000Z",
+        headingDeg: 90,
+        twdDeg: 250,
+      }),
+      row({
+        hoursFromNow: 4,
+        timestamp: "2026-06-21T04:00:00.000Z",
+        headingDeg: 90,
+        twdDeg: -70,
+      }),
+    ]);
+    assert.equal(sailed.length, 1);
+    assert.equal(sailed[0].maneuver, "gybe");
+  });
+
   test("drift-mode hours (SOG 0) are excluded", async () => {
     const { detectManeuvers } = await tgPromise;
     const events = detectManeuvers([

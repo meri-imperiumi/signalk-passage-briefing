@@ -51,6 +51,11 @@ test("the gates fire in order with honest reasons", () => {
     "the squall gate fires before the envelope ceiling",
   );
   assert.equal(
+    evaluateDownwindSail({ ...base, storm: true }),
+    "squall window",
+    "named forecast events (rain squalls, convective air) kill the hour",
+  );
+  assert.equal(
     evaluateDownwindSail({ ...base, awsKnots: 1.4 }),
     "below fill floor",
   );
