@@ -34,6 +34,7 @@ const {
 } = require("./sails-configuration.js");
 const {
   filterBulletin,
+  hasSevereKeyword,
   resolveBulletinSource,
   textNearTrack,
   ukhoBlocksFromWarnings,
@@ -584,15 +585,10 @@ module.exports = (app) => {
   /** Filtered blocks for one cache entry against a track: structured
    * UKHO JSON entries skip the text pipeline entirely. */
   function blocksForEntry(entry, track) {
-    // Provenance (work doc #31): the feed URL the text arrived from,
-    // stamped on every surviving block — the spool path has a file
-    // path, not a URL, and carries no provenance
-    const sourceUrl = /^https?:\/\//.test(entry.url ?? "") ? entry.url : null;
-    const withProvenance = (blocks) =>
-      sourceUrl ? blocks.map((block) => ({ ...block, sourceUrl })) : blocks;
     if (entry.format === "ukho-json") {
       try {
-        return withProvenance(
+        return withEntryProvenance(
+          entry,
           ukhoBlocksFromWarnings(
             parseUkhoWarnings(JSON.parse(entry.text)),
             track,
@@ -608,7 +604,7 @@ module.exports = (app) => {
       track,
       issuedAt: entry.fetchedAt,
     });
-    return withProvenance(bulletin?.blocks ?? []);
+    return withEntryProvenance(entry, bulletin?.blocks ?? []);
   }
 
   /** Bulletin-level metadata (header/issuedAt/source/raw text) for
@@ -658,6 +654,54 @@ module.exports = (app) => {
    *   route waypoints
    * @returns {Promise<object|null>} `metareaBulletin` shape with `blocks`
    */
+  /** How many wider-area warning blocks ride the payload for the
+   * map (work doc #47): the crew zooms and pans to them; the cap
+   * bounds the payload without losing a gale. */
+  const WIDER_BLOCK_LIMIT = 24;
+
+  /** Stamps one cache entry's feed provenance onto blocks (the spool
+   * path has a file path, not a URL, and carries no provenance). */
+  function withEntryProvenance(entry, blocks) {
+    const sourceUrl = /^https?:\/\//.test(entry.url ?? "") ? entry.url : null;
+    return sourceUrl
+      ? blocks.map((block) => ({ ...block, sourceUrl }))
+      : blocks;
+  }
+
+  /**
+   * Wider-area context for the map (work doc #47): severe, geometric
+   * blocks from the SAME cached bulletins that the track filter
+   * discarded. The console stays filtered — text noise offshore is
+   * noise — but a gale two hundred miles off the route belongs on a
+   * map the crew can zoom and pan. Nothing here reaches the console
+   * or the fit; the map draws them muted.
+   *
+   * @param {object} entry - Bulletin cache entry
+   * @param {Set<string>} excludeTexts - The track-filtered blocks'
+   *   texts (already on the console)
+   * @returns {Array<object>} Severe geometric blocks not on the track
+   */
+  function widerBlocksForEntry(entry, excludeTexts) {
+    if (entry.format === "ukho-json") {
+      return []; // UKHO warnings are already track-filtered directly
+    }
+    const bulletin = filterBulletin({
+      rawText: entry.text,
+      source: entry.source ?? "api",
+      track: [], // Unfiltered: every block the parse found
+      issuedAt: entry.fetchedAt,
+    });
+    return withEntryProvenance(
+      entry,
+      (bulletin?.blocks ?? []).filter(
+        (block) =>
+          block.geometry != null &&
+          !excludeTexts.has(block.text) &&
+          hasSevereKeyword(block.text),
+      ),
+    );
+  }
+
   async function bulletinForTrack(waypoints) {
     const cached = await loadBulletinCache(app.getDataDirPath());
     if (cached.length === 0) {
@@ -672,6 +716,8 @@ module.exports = (app) => {
     // unplaced case (storm named without coordinates) keeps, never
     // loses.
     const merged = [];
+    const widerSeen = new Set();
+    const wider = [];
     for (const entry of cached.slice(0, MERGE_BULLETINS)) {
       if (
         entry.zone == null &&
@@ -681,6 +727,18 @@ module.exports = (app) => {
         continue;
       }
       const blocks = blocksForEntry(entry, track);
+      // Wider-area severe warnings from the same bulletins: the map
+      // draws them muted, the console never sees them
+      for (const block of widerBlocksForEntry(
+        entry,
+        new Set(blocks.map((b) => b.text)),
+      )) {
+        if (wider.length >= WIDER_BLOCK_LIMIT || widerSeen.has(block.text)) {
+          continue;
+        }
+        widerSeen.add(block.text);
+        wider.push(block);
+      }
       if (blocks.length > 0) {
         merged.push({ entry, blocks });
       }
@@ -710,7 +768,7 @@ module.exports = (app) => {
       bulletinText: merged[0].entry.text,
       source: merged[0].entry.source ?? "api",
     };
-    return { ...meta, blocks };
+    return { ...meta, blocks, wider };
   }
 
   /**

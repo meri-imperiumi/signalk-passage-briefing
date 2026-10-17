@@ -542,6 +542,7 @@ strong.sev {
       }
     }
     this._map?.setBulletin(bulletin);
+    this._map?.setWider(bulletin?.wider ?? []);
     this._hasShapes = blockShapes(blocks).length > 0;
     this._updateMapCard();
   }

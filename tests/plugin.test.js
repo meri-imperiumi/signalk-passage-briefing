@@ -2602,6 +2602,58 @@ test("metarea console: wrong-ocean entries lose the headline to zone bulletins",
   plugin.stop();
 });
 
+test("wider-area severe warnings ride the payload for the map (work doc #47)", async () => {
+  // The TC Wati bulletin: a Neiafu vessel keeps the storm warning,
+  // while the gale polygon 300 nm east is severe, geometric and
+  // OFF the track — map context, not console noise
+  const { saveBulletinCache } = require("../plugin/bulletin-source.js");
+  const raw = readFileSync(
+    join(__dirname, "fixtures", "bulletins", "fqps01-nffn-2026-10-16.txt"),
+    "utf8",
+  );
+  const app = createMockApp();
+  app.getSelfPath = (path) =>
+    path === "navigation.position"
+      ? { latitude: -18.65, longitude: -173.98 }
+      : null;
+  const plugin = pluginFactory(app);
+  plugin.start({});
+  plugin.registerWithRouter(app.router);
+  await saveBulletinCache(app.getDataDirPath(), [
+    {
+      url: "tgftp://fqps01.nffn",
+      fetchedAt: "2026-10-16T20:00:00.000Z",
+      text: raw,
+      source: "spool",
+      zone: 14,
+    },
+  ]);
+  const r = app.getRoutes().find((x) => x.path === "/api/bulletin");
+  const res = { payload: null, json(p) { this.payload = p; } };
+  await r.handler({ query: {} }, res);
+  const bulletin = res.payload;
+  assert.ok(bulletin, "bulletin served");
+  // The console keeps the storm warning
+  assert.ok(
+    bulletin.blocks.some((b) => /TROPICAL CYCLONE WATI/.test(b.text)),
+    "storm warning on the console",
+  );
+  assert.ok(
+    !bulletin.blocks.some((b) => /GALE WARNING 011/.test(b.text)),
+    "the distant gale stays off the console",
+  );
+  // ...and rides the wider list for the map
+  assert.ok(Array.isArray(bulletin.wider), "wider list present");
+  const gale = bulletin.wider.find((b) => /GALE WARNING 011/.test(b.text));
+  assert.ok(gale, "the distant gale rides the wider list");
+  assert.ok(gale.geometry, "wider block carries its geometry");
+  assert.ok(
+    !gale.text.includes("TROPICAL CYCLONE WATI"),
+    "no duplicate of console blocks in wider",
+  );
+  plugin.stop();
+});
+
 test("routes listing: cached with stale-while-revalidate, distances active-only", async () => {
   const app = createMockApp();
   app.getSelfPath = (path) =>

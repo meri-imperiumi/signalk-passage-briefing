@@ -401,6 +401,7 @@ strong.sev {
       }
     }
     this._map?.setBulletin(normalized);
+    this._map?.setWider(normalized?.wider ?? []);
     this._hasShapes = blockShapes(normalized?.blocks).length > 0;
     this._updateMapCard();
   }

@@ -95,6 +95,7 @@ class PbMapView extends HTMLElement {
       this.attachShadow({ mode: "open" });
     }
     this._blocks = [];
+    this._wider = [];
     this._payload = null;
     this._ribbonRows = [];
     this._events = [];
@@ -344,6 +345,20 @@ class PbMapView extends HTMLElement {
   }
 
   /**
+   * Wider-area severe warnings (work doc #47): severe geometric
+   * blocks from the same bulletins that the track filter discarded —
+   * drawn muted, zoomable context the console never shows. They sit
+   * outside the fit on purpose: the map stays anchored on the
+   * vessel's waters, the crew pans to the rest.
+   *
+   * @param {Array<object>} blocks - wider blocks from the payload
+   */
+  setWider(blocks) {
+    this._wider = blocks ?? [];
+    this._render();
+  }
+
+  /**
    * Briefing payload: the compiled track plus the CAP alerts and
    * GDACS events that ride it.
    *
@@ -492,6 +507,34 @@ class PbMapView extends HTMLElement {
     }
     this._overlayGroup = L.layerGroup().addTo(this.map);
     this._eventMarkers = new Map();
+    // Wider-area severe warnings first (work doc #47): muted and
+    // beneath everything — context to pan to, not the headline
+    for (const shape of blockShapes(this._wider ?? [], referenceLon)) {
+      const layer =
+        shape.kind === "line"
+          ? L.polyline(
+              shape.points.map(([lon, lat]) => [lat, lon]),
+              {
+                color: "#7f95a1",
+                weight: 1.5,
+                dashArray: "2 6",
+                fillOpacity: 0.04,
+              },
+            )
+          : L.polygon(
+              shape.points.map(([lon, lat]) => [lat, lon]),
+              {
+                color: "#7f95a1",
+                weight: 1.5,
+                dashArray: "2 6",
+                fillOpacity: 0.04,
+              },
+            );
+      const label = (this._wider[shape.index]?.text ?? "")
+        .split("\n")[0]
+        .slice(0, 90);
+      layer.bindTooltip(`Off your waters — ${label}`).addTo(this._overlayGroup);
+    }
     // The route ribbon first (work doc #47): underlies the warning
     // shapes — comfort tier colors, motoring dashed, night dimmed
     for (const segment of this._ribbon ?? []) {
