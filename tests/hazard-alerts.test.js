@@ -377,3 +377,71 @@ describe("critical hazard notifications (work doc #30)", () => {
     );
   });
 });
+
+test("the publish gate (work doc #30): restart restores visually, never re-alarms", () => {
+  const notification = {
+    state: "emergency",
+    message: "Tropical cyclone: ONE-26 — 708.3 nm",
+    level: "orange",
+  };
+  // First publish: raise
+  assert.deepEqual(ha.classifyPublish({ notification }), {
+    publish: true,
+    kind: "raise",
+  });
+  // Identical value live: silence
+  assert.deepEqual(
+    ha.classifyPublish({ before: { ...notification, at: "x" }, notification }),
+    { publish: false, kind: "silent" },
+  );
+  // THE RESTART: the same value read back from the state file
+  // restores the notification path visually — no sounder
+  assert.deepEqual(
+    ha.classifyPublish({
+      before: { ...notification, at: "x", restored: true },
+      notification,
+    }),
+    { publish: true, kind: "restore" },
+  );
+  // Restart with GDACS having refreshed the message: visual amendment
+  assert.deepEqual(
+    ha.classifyPublish({
+      before: { ...notification, at: "x", restored: true },
+      notification: {
+        ...notification,
+        message: "Tropical cyclone: ONE-26 — 706.1 nm",
+      },
+    }),
+    // Both amendments and restores publish visually — the kind only
+    // records which situation it was
+    { publish: true, kind: "restore" },
+  );
+  // Restart with the storm escalated to red: a real raise
+  assert.deepEqual(
+    ha.classifyPublish({
+      before: { ...notification, at: "x", restored: true },
+      notification: { ...notification, level: "red" },
+    }),
+    { publish: true, kind: "raise" },
+  );
+  // Message amendment while live: visual
+  assert.deepEqual(
+    ha.classifyPublish({
+      before: { ...notification, at: "x" },
+      notification: {
+        ...notification,
+        message: "Tropical cyclone: ONE-26 — 706.1 nm",
+      },
+    }),
+    { publish: true, kind: "amend" },
+  );
+  // Clear after an active value: a raise-class state change (the
+  // clear is nominal — method empty — at the publisher)
+  assert.deepEqual(
+    ha.classifyPublish({
+      before: { ...notification, at: "x" },
+      notification: null,
+    }),
+    { publish: true, kind: "raise" },
+  );
+});

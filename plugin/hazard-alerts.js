@@ -306,5 +306,55 @@ module.exports = {
   escalateHazards,
   retainLatched,
   shouldRaise,
+  classifyPublish,
   applyHysteresis,
 };
+
+/**
+ * The publish gate (work doc #30 anti-flap): decides how one
+ * escalation's notification reaches Signal K given the last
+ * published value.
+ *
+ * - `raise` — first publish, a state change, or a GDACS escalation:
+ *   visual + sound, the alarm fires.
+ * - `amend` — same state, new message (GDACS refreshed the
+ *   figures): visual only, the sounders stay quiet.
+ * - `restore` — identical value read back from the restart state
+ *   file: visual only, restoring the notification path the server
+ *   lost at restart without re-raising the alarm.
+ * - `silent` — identical value already live: publish nothing.
+ *
+ * @param {object} params
+ * @param {{state: string, message: string, level: string|null,
+ *   restored?: boolean}|undefined} params.before - Last published
+ *   value (or the restart-restored entry)
+ * @param {{state: string, message: string, level: string|null}|null}
+ *   params.notification - The notification to publish, null to clear
+ * @returns {{publish: boolean, kind: "raise"|"amend"|"restore"|
+ *   "silent"}}
+ */
+function classifyPublish({ before, notification }) {
+  const state = notification ? notification.state : "normal";
+  const message = notification ? notification.message : "";
+  if (!before) {
+    return { publish: true, kind: "raise" };
+  }
+  const restoring = before.restored === true;
+  if (before.state === state && before.message === message && !restoring) {
+    return { publish: false, kind: "silent" };
+  }
+  const rank = (value) => ALERT_RANK[String(value ?? "").toLowerCase()] ?? -1;
+  // A GDACS escalation re-alarms even across a restart restore: the
+  // crew acked orange, the storm is red now — that is news
+  const escalated =
+    notification?.level != null &&
+    before.level != null &&
+    rank(notification.level) > rank(before.level);
+  if (escalated) {
+    return { publish: true, kind: "raise" };
+  }
+  if (before.state === state) {
+    return { publish: true, kind: restoring ? "restore" : "amend" };
+  }
+  return { publish: true, kind: "raise" };
+}

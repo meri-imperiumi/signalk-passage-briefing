@@ -14,12 +14,12 @@ const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 
 const {
-  loadHazardAcks,
-  saveHazardAcks,
+  loadHazardState,
+  saveHazardState,
   ACK_FILE,
 } = require("../plugin/hazard-state.js");
 
-test("acks round-trip through the state file", () => {
+test("state round-trips through the state file", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "hazard-state-"));
   const acks = new Map([
     [
@@ -27,34 +27,68 @@ test("acks round-trip through the state file", () => {
       { level: "orange", distanceNm: 708.3, at: new Date().toISOString() },
     ],
   ]);
-  saveHazardAcks(dataDir, acks);
-  const loaded = loadHazardAcks(dataDir);
-  assert.deepEqual(loaded.get("gdacs-TC1001339"), acks.get("gdacs-TC1001339"));
+  const published = new Map([
+    [
+      "gdacs-TC1001339",
+      {
+        state: "emergency",
+        message: "Tropical cyclone: ONE-26 — 708.3 nm",
+        level: "orange",
+        at: new Date().toISOString(),
+      },
+    ],
+  ]);
+  saveHazardState(dataDir, acks, published);
+  const loaded = loadHazardState(dataDir);
+  assert.deepEqual(
+    loaded.acks.get("gdacs-TC1001339"),
+    acks.get("gdacs-TC1001339"),
+  );
+  assert.equal(loaded.published.get("gdacs-TC1001339").state, "emergency");
+  assert.equal(
+    loaded.published.get("gdacs-TC1001339").restored,
+    true,
+    "published entries load flagged for visual restore",
+  );
 
-  // The file is readable JSON with the acks under `acked`
+  // The file is readable JSON with both maps
   const raw = JSON.parse(readFileSync(join(dataDir, ACK_FILE), "utf8"));
   assert.ok(raw.acked["gdacs-TC1001339"]);
+  assert.ok(raw.published["gdacs-TC1001339"]);
 });
 
 test("stale acks prune on load and save", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "hazard-state-"));
   const fresh = new Date().toISOString();
   const stale = new Date(Date.now() - 8 * 24 * 3600000).toISOString();
-  saveHazardAcks(
+  saveHazardState(
     dataDir,
     new Map([
       ["gdacs-fresh", { level: "orange", distanceNm: 100, at: fresh }],
       ["gdacs-stale", { level: "red", distanceNm: 50, at: stale }],
     ]),
+    new Map([
+      [
+        "gdacs-fresh",
+        { state: "emergency", message: "x", level: "orange", at: fresh },
+      ],
+      [
+        "gdacs-stale",
+        { state: "emergency", message: "x", level: "red", at: stale },
+      ],
+    ]),
   );
-  const loaded = loadHazardAcks(dataDir);
-  assert.ok(loaded.has("gdacs-fresh"));
-  assert.ok(!loaded.has("gdacs-stale"), "week-old ack pruned");
+  const loaded = loadHazardState(dataDir);
+  assert.ok(loaded.acks.has("gdacs-fresh"));
+  assert.ok(!loaded.acks.has("gdacs-stale"), "week-old ack pruned");
+  assert.ok(loaded.published.has("gdacs-fresh"));
+  assert.ok(!loaded.published.has("gdacs-stale"), "week-old published pruned");
 });
 
 test("a corrupt state file degrades to an empty map", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "hazard-state-"));
   writeFileSync(join(dataDir, ACK_FILE), "{not json");
-  const loaded = loadHazardAcks(dataDir);
-  assert.equal(loaded.size, 0, "empty, not a crash");
+  const loaded = loadHazardState(dataDir);
+  assert.equal(loaded.acks.size, 0, "empty, not a crash");
+  assert.equal(loaded.published.size, 0, "empty, not a crash");
 });

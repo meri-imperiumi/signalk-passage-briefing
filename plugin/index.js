@@ -66,7 +66,7 @@ const {
 } = require("./notes-publisher.js");
 const hazardSource = require("./hazard-source.js");
 const hazardAlerts = require("./hazard-alerts.js");
-const { loadHazardAcks, saveHazardAcks } = require("./hazard-state.js");
+const { loadHazardState, saveHazardState } = require("./hazard-state.js");
 const maritimeZones = require("./maritime-zones-source.js");
 const capSource = require("./cap-source.js");
 const {
@@ -1565,13 +1565,12 @@ module.exports = (app) => {
   const activeHazardNotifications = new Map();
   const hazardMissCounts = new Map();
   /** Loaded in start(): the plugin factory runs before the server
-   * exposes getDataDirPath, and the ack file needs the data dir. */
+   * exposes getDataDirPath, and the state file needs the data dir.
+   * The published map rides the same file: after a restart the
+   * still-active notifications restore visually, not as fresh
+   * alarms. */
   let acknowledgedHazards = new Map();
-  /** Last published notification value per id (state, message,
-   * level): the publish gate compares against it so identical values
-   * never re-ride and message amendments stay silent to the alarm
-   * layer. */
-  const publishedHazardValues = new Map();
+  let publishedHazardValues = new Map();
   /** Waypoints of the most recent compile (route or here): the
    * escalation's track reference between refreshes. */
   let lastCompiledWaypoints = null;
@@ -1716,18 +1715,25 @@ module.exports = (app) => {
     const message = notification ? notification.message : "";
     const level = notification?.level ?? null;
     const before = publishedHazardValues.get(id);
-    if (before && before.state === state && before.message === message) {
+    const verdict = hazardAlerts.classifyPublish({ before, notification });
+    if (!verdict.publish) {
       return; // Identical value: silence, not churn
     }
-    const rank = (value) =>
-      hazardAlerts.ALERT_RANK[String(value ?? "").toLowerCase()] ?? -1;
-    const escalated =
-      before != null &&
-      level != null &&
-      before.level != null &&
-      rank(level) > rank(before.level);
-    const amended = before != null && before.state === state && !escalated;
-    publishedHazardValues.set(id, { state, message, level });
+    publishedHazardValues.set(id, {
+      state,
+      message,
+      level,
+      at: new Date().toISOString(),
+    });
+    try {
+      saveHazardState(
+        app.getDataDirPath(),
+        acknowledgedHazards,
+        publishedHazardValues,
+      );
+    } catch (error) {
+      app.debug?.(`Hazard state save failed: ${error.message}`);
+    }
     app.handleMessage(PLUGIN_ID, {
       context: "vessels.self",
       updates: [
@@ -1739,9 +1745,13 @@ module.exports = (app) => {
               value: notification
                 ? {
                     state,
-                    // Amendments stay visual: the text moved on,
-                    // the sounders must not
-                    method: amended ? ["visual"] : ["visual", "sound"],
+                    // Amendments and restart restores stay visual:
+                    // the text moved on or the server lost the path,
+                    // the sounders must not re-fire
+                    method:
+                      verdict.kind === "raise"
+                        ? ["visual", "sound"]
+                        : ["visual"],
                     message,
                     timestamp: new Date().toISOString(),
                   }
@@ -1903,9 +1913,13 @@ module.exports = (app) => {
       });
     }
     try {
-      saveHazardAcks(app.getDataDirPath(), acknowledgedHazards);
+      saveHazardState(
+        app.getDataDirPath(),
+        acknowledgedHazards,
+        publishedHazardValues,
+      );
     } catch (error) {
-      app.debug?.(`Hazard ack save failed: ${error.message}`);
+      app.debug?.(`Hazard state save failed: ${error.message}`);
     }
   }
 
@@ -2610,7 +2624,9 @@ module.exports = (app) => {
       sourceStatus = createSourceStatus({ dataDir: app.getDataDirPath() });
       // Acknowledgement state survives restarts (work doc #30): the
       // factory runs before getDataDirPath exists, so this loads here
-      acknowledgedHazards = loadHazardAcks(app.getDataDirPath());
+      const hazardState = loadHazardState(app.getDataDirPath());
+      acknowledgedHazards = hazardState.acks;
+      publishedHazardValues = hazardState.published;
       sourceStatus.define(WEATHER_SOURCE);
       sourceStatus.define(HAZARD_SOURCE);
       sourceStatus.define(EPHEMERIS_SOURCE);
