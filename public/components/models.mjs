@@ -1023,6 +1023,21 @@ export function trackPositionAt(hoursFromNow, track) {
 }
 
 /**
+ * A finite lat/lon pair as a timeline item's map position, or null —
+ * the escape hatch for events that carry their own authoritative
+ * position (the boundary walk's crossing fix, the ceremonial line's
+ * crossing point) so the hour-interpolated track position never
+ * overwrites them.
+ *
+ * @param {number|null} lat
+ * @param {number|null} lon
+ * @returns {{lat: number, lon: number}|null}
+ */
+function positionFromPair(lat, lon) {
+  return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
+}
+
+/**
  * Night test for a timeline item: the crew's position at that hour,
  * interpolated along the simulated track, tested against the sun
  * (the same sunset threshold the sail logic buckets by). One uniform
@@ -1672,6 +1687,12 @@ export function mergeTimeline(exceptions, payload = null) {
     push({
       hoursFromNow: z.hoursFromNow ?? relHours(z.timestamp, fetchMs),
       timestamp: z.timestamp ?? null,
+      // The boundary walk's own crossing position (work doc #47 session):
+      // the pin sits where the route actually crosses the line, not
+      // where the hour-interpolated simulated track happens to be —
+      // the two drift apart by a mile or two and the pin must read
+      // against the boundary geometry on the map
+      position: positionFromPair(z.lat, z.lon),
       kind: "zone",
       severity: "info",
       label: `${z.kind === "leave" ? "Leaving" : "Entering"} ${territory} territorial waters`,
@@ -1766,11 +1787,14 @@ export function mergeTimeline(exceptions, payload = null) {
     }
     // The map's event pin anchor (work doc #47): where on the route
     // the item happens — the same interpolation the night test uses,
-    // so a pin and its timeline row never disagree
-    item.position =
-      item.hoursFromNow != null
-        ? trackPositionAt(item.hoursFromNow, track)
-        : null;
+    // so a pin and its timeline row never disagree. Events that carry
+    // their own authoritative position (the boundary walk's crossing
+    // fix, the ceremonial line's crossing point) keep it: the
+    // hour-interpolated track position may sit a mile or two off the
+    // geometry the pin is read against
+    if (item.position == null && item.hoursFromNow != null) {
+      item.position = trackPositionAt(item.hoursFromNow, track);
+    }
     // The conditions tab (work doc #18): every item paints the tier
     // at its hour; sail changes keep their own enriched conditions
     // block when the track has none or the item predates it
@@ -1838,6 +1862,9 @@ export function mergeTimeline(exceptions, payload = null) {
     push({
       hoursFromNow: relHours(l.eta, fetchMs),
       timestamp: l.eta ?? null,
+      // The crossing's own interpolated position on the sign-change
+      // segment — more precise than the hourly track interpolation
+      position: positionFromPair(l.lat, l.lon),
       kind: "line",
       severity: "info",
       label: l.ceremony ? `${l.lineName} — ${l.ceremony}` : l.lineName,

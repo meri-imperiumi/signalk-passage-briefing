@@ -35,10 +35,10 @@ import {
   frameBounds,
   hazardPin,
   ribbonSegments,
+  routeRibbon,
   stormGraphic,
   stormMarker,
   stormRingColor,
-  trackLine,
 } from "./map-model.mjs";
 import { comfortColor } from "./models.mjs";
 import { SK_BASE_CSS } from "./sk-base-css.js";
@@ -99,7 +99,6 @@ class PbMapView extends HTMLElement {
     this._payload = null;
     this._ribbonRows = [];
     this._events = [];
-    this._track = [];
     this._shapes = [];
     this._pins = [];
     this._caps = [];
@@ -373,13 +372,16 @@ class PbMapView extends HTMLElement {
   }
 
   /**
-   * The simulated passage track (work doc #47): the route ribbon —
-   * colored by comfort tier, motoring stretches dashed, night legs
-   * dimmed. Same rows the timeline's night test interpolates over.
+   * The simulated passage rows (work doc #47): they colorize the real
+   * route geometry — comfort tier colors, motoring stretches dashed,
+   * night legs dimmed, mapped onto the route by distance made good.
+   * The map draws one line: the route itself, colored as the plan
+   * reads.
    *
    * @param {Array<{hoursFromNow: number, lat: number, lon: number,
-   *   comfortLevel: string|null, slatting: boolean, motoring: boolean,
-   *   night: boolean}>} track - summary.track rows
+   *   distanceFromStartNm: number, comfortLevel: string|null,
+   *   slatting: boolean, motoring: boolean, night: boolean}>} track -
+   *   summary.track rows
    */
   setRibbon(track) {
     this._ribbonRows = track ?? [];
@@ -489,7 +491,20 @@ class PbMapView extends HTMLElement {
     }
     // Compute every spec in the boat's frame before drawing
     const referenceLon = this._frameLon();
-    this._track = trackLine(this._payload?.waypoints, referenceLon);
+    // One route line (work doc #47 session): the real route geometry
+    // carrying the plan's color encoding — not a plain route line
+    // plus a second sim-track ribbon that drifts off it. The row
+    // ribbon survives only where no route geometry exists
+    this._ribbon =
+      (this._payload?.waypoints ?? []).filter(
+        (w) => Number.isFinite(w?.lat) && Number.isFinite(w?.lon),
+      ).length >= 2
+        ? routeRibbon(
+            this._payload.waypoints,
+            this._ribbonRows ?? [],
+            referenceLon,
+          )
+        : ribbonSegments(this._ribbonRows ?? [], referenceLon);
     this._shapes = blockShapes(this._blocks, referenceLon);
     this._caps = (this._payload?.capAlerts ?? [])
       .map((alert) => capShape(alert, referenceLon))
@@ -530,13 +545,13 @@ class PbMapView extends HTMLElement {
                 fillOpacity: 0.04,
               },
             );
-      const label = (this._wider[shape.index]?.text ?? "")
-        .split("\n")[0]
-        .slice(0, 90);
-      layer.bindTooltip(`Off your waters — ${label}`).addTo(this._overlayGroup);
+      layer
+        .bindTooltip(`Off your waters — ${shape.label ?? ""}`)
+        .addTo(this._overlayGroup);
     }
-    // The route ribbon first (work doc #47): underlies the warning
-    // shapes — comfort tier colors, motoring dashed, night dimmed
+    // The colorized route first (work doc #47): underlies the warning
+    // shapes — comfort tier colors, motoring dashed, night dimmed,
+    // drawn along the real route geometry
     for (const segment of this._ribbon ?? []) {
       const color = segment.comfortLevel
         ? comfortColor(segment.comfortLevel)
@@ -592,6 +607,9 @@ class PbMapView extends HTMLElement {
               shape.points.map(([lon, lat]) => [lat, lon]),
               style,
             );
+      if (shape.label) {
+        layer.bindTooltip(shape.label);
+      }
       layer
         .on("click", () => this._select(shape.index))
         .addTo(this._overlayGroup);
@@ -625,12 +643,6 @@ class PbMapView extends HTMLElement {
       })
         .bindTooltip(pin.label)
         .addTo(this._overlayGroup);
-    }
-    if (this._track.length > 0) {
-      L.polyline(
-        this._track.map(([lon, lat]) => [lat, lon]),
-        { color: "#4ec9b0", weight: 2.5, opacity: 0.9 },
-      ).addTo(this._overlayGroup);
     }
     // Cyclone graphics (work doc #47 phase 3): quadrant wind/seas
     // rings, the forecast track, and the centre marker — the classic
@@ -745,7 +757,6 @@ class PbMapView extends HTMLElement {
         ...storm.track,
         ...storm.forecastPoints.map((point) => [point.lon, point.lat]),
       ]),
-      ...this._track,
       ...(this._ribbon ?? []).flatMap((segment) => segment.points),
       ...(this._eventPins ?? []).map((pin) => [pin.lon, pin.lat]),
       ...this._shapes.flatMap((shape) =>

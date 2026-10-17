@@ -18,6 +18,7 @@ const engine = require("../plugin/bulletin-engine.js");
 
 test("map model", async (t) => {
   const {
+    blockShape,
     blockShapes,
     capShape,
     corridorRing,
@@ -147,6 +148,21 @@ test("map model", async (t) => {
     );
     // The polygon ring is closed
     assert.deepEqual(gale.points[0], gale.points[gale.points.length - 1]);
+    // Every area shape names its block for the map tooltip: the
+    // console card's first line (work doc #47 session: a dashed swell
+    // box used to hover silent). Point shapes are exempt — the storm
+    // marker supplies its own label
+    for (const shape of blockShapes(inside.blocks)) {
+      if (shape.kind === "point") {
+        continue;
+      }
+      assert.ok(shape.label?.length > 0, `shape ${shape.index} has a label`);
+      const block = inside.blocks[shape.index];
+      assert.ok(
+        block.text.split("\n")[0].startsWith(shape.label),
+        `label ${shape.label} reads from the block's own first line`,
+      );
+    }
   });
 
   await t.test("trackLine unwraps and drops non-finite waypoints", () => {
@@ -208,6 +224,27 @@ test("map model", async (t) => {
     assert.equal(capShape({ headline: "no area" }), null);
   });
 
+  await t.test("dashed bbox blocks carry their tooltip label", () => {
+    // The swell box the crew hovered silent: "IN THE AREA SOUTH OF
+    // 22S AND WEST OF 175E, EXPECT MODERATE SOUTHERLY SWELLS." — a
+    // cardinal-bound approximation, dashed orange, and until now no
+    // tooltip at all
+    const shape = blockShape(
+      {
+        text: "IN THE AREA SOUTH OF 22S AND WEST OF 175E, EXPECT MODERATE SOUTHERLY\nSWELLS.",
+        geometry: { type: "bbox", coordinates: [175, -30, 180, -22] },
+      },
+      3,
+    );
+    assert.equal(shape.kind, "bbox");
+    assert.equal(shape.dashed, true);
+    assert.equal(shape.severe, false);
+    assert.equal(
+      shape.label,
+      "IN THE AREA SOUTH OF 22S AND WEST OF 175E, EXPECT MODERATE SOUTHERLY",
+    );
+  });
+
   await t.test("hazardPin keeps only placeable events", () => {
     assert.deepEqual(
       hazardPin({
@@ -243,7 +280,7 @@ test("map model", async (t) => {
 });
 
 test("ribbon segments and event pins (work doc #47)", async (t) => {
-  const { eventPins, ribbonSegments } = await import(
+  const { eventPins, ribbonSegments, routeRibbon } = await import(
     "../public/components/map-model.mjs"
   );
 
@@ -354,6 +391,91 @@ test("ribbon segments and event pins (work doc #47)", async (t) => {
     assert.equal(segments.length, 1);
     assert.equal(segments[0].points.length, 2);
     assert.deepEqual(ribbonSegments(null), []);
+  });
+
+  await t.test(
+    "routeRibbon colorizes the real route by the plan's regimes",
+    () => {
+      // The payload's waypoints are the route's own geometry, sampled
+      // along it; each point takes the attributes of the simulated row
+      // whose made-good distance covers it — one colorized route line,
+      // not a route line plus a second sim-track ribbon (work doc #47
+      // session map report)
+      const waypoints = [
+        { lat: -18.6, lon: -174, distanceFromStartNm: 0 },
+        { lat: -18.8, lon: -174.4, distanceFromStartNm: 30 },
+        { lat: -19, lon: -174.8, distanceFromStartNm: 60 },
+        { lat: -19.2, lon: -175.2, distanceFromStartNm: 90 },
+      ];
+      const track = [
+        {
+          distanceFromStartNm: 0,
+          lat: -18.6,
+          lon: -174,
+          comfortLevel: "pleasant",
+          slatting: false,
+          motoring: false,
+          night: false,
+        },
+        {
+          distanceFromStartNm: 45,
+          lat: -18.9,
+          lon: -174.6,
+          comfortLevel: "rough",
+          slatting: true,
+          motoring: false,
+          night: true,
+        },
+        {
+          distanceFromStartNm: 100,
+          lat: -19.3,
+          lon: -175.4,
+          comfortLevel: "rough",
+          slatting: true,
+          motoring: false,
+          night: true,
+        },
+      ];
+      const segments = routeRibbon(waypoints, track);
+      assert.equal(segments.length, 2, "two regime stretches on the route");
+      assert.deepEqual(segments[0], {
+        points: [
+          [-174, -18.6],
+          [-174.4, -18.8],
+          [-174.8, -19],
+        ],
+        comfortLevel: "pleasant",
+        slatting: false,
+        motoring: false,
+        night: false,
+      });
+      assert.equal(segments[1].comfortLevel, "rough");
+      assert.equal(segments[1].night, true);
+      assert.deepEqual(
+        segments[1].points[0],
+        segments[0].points.at(-1),
+        "segments share their boundary point",
+      );
+    },
+  );
+
+  await t.test(
+    "routeRibbon keeps the route on the map without row data",
+    () => {
+      const waypoints = [
+        { lat: -18.6, lon: -174, distanceFromStartNm: 0 },
+        { lat: -18.8, lon: -174.4, distanceFromStartNm: 30 },
+      ];
+      const segments = routeRibbon(waypoints, []);
+      assert.equal(segments.length, 1, "one neutral stretch");
+      assert.equal(segments[0].comfortLevel, null);
+      assert.equal(segments[0].points.length, 2);
+    },
+  );
+
+  await t.test("routeRibbon needs route geometry", () => {
+    assert.equal(routeRibbon(null, []), null);
+    assert.equal(routeRibbon([{ lat: 1, lon: 2 }], []), null);
   });
 
   await t.test(

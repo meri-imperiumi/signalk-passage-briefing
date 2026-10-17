@@ -1823,4 +1823,59 @@ test("timeline items anchor to the route for the map (work doc #47)", async (t) 
     });
     assert.equal(bare[0].position, null);
   });
+
+  await t.test("zone and line pins sit at their own crossing position", () => {
+    // The boundary walk's crossing fix is the authoritative spot: the
+    // hour-interpolated track position can sit a mile or two off the
+    // boundary geometry the pin is read against (work doc #47 session
+    // map-offset report)
+    const timeline = mergeTimeline(
+      {
+        passageSummary: {
+          track,
+          zoneTransitions: [
+            {
+              kind: "leave",
+              territory: { name: "Tonga", iso_ter: "TO" },
+              hoursFromNow: 5,
+              timestamp: "2026-06-21T08:00:00.000Z",
+              distanceFromStartNm: 28,
+              // Deliberately off the interpolated track position
+              lat: -18.9,
+              lon: -174.6,
+            },
+          ],
+          linesOfInterest: [
+            {
+              lineName: "Tropic of Capricorn",
+              eta: "2026-06-21T12:00:00.000Z",
+              lat: -23.4,
+              lon: -177.1,
+              distanceFromStartNm: 337,
+            },
+          ],
+        },
+      },
+      null,
+    );
+    const zone = timeline.find((item) => item.kind === "zone");
+    assert.deepEqual(zone.position, { lat: -18.9, lon: -174.6 });
+    const line = timeline.find((item) => item.kind === "line");
+    assert.deepEqual(line.position, { lat: -23.4, lon: -177.1 });
+    // An undated transition (payload fallback) still pins, at the
+    // walk's own crossing
+    const undated = mergeTimeline({
+      passageSummary: {
+        zoneTransitions: [
+          {
+            kind: "enter",
+            territory: { name: "New Zealand", iso_ter: "NZ" },
+            lat: -35.3,
+            lon: 174.5,
+          },
+        ],
+      },
+    });
+    assert.deepEqual(undated[0].position, { lat: -35.3, lon: 174.5 });
+  });
 });

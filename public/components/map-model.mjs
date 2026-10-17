@@ -18,6 +18,7 @@
  * @file components/map-model.mjs
  */
 
+import { greatCircleNm } from "../sereno-physics.mjs";
 import { kindGlyph, splitSevere } from "./models.mjs";
 
 const DEG = Math.PI / 180;
@@ -129,7 +130,10 @@ export function corridorRing(points, bufferNm) {
  * @param {number} index - Block index in the console (the
  *   click-through key)
  * @returns {{kind: string, index: number, points: number[][],
- *   bufferNm: number|null, severe: boolean, dashed: boolean}|null}
+ *   bufferNm: number|null, severe: boolean, dashed: boolean,
+ *   label: string}|null} `label` names the block for the map tooltip
+ *   (the console card's first line, clipped) — points carry no label,
+ *   the storm marker supplies its own
  */
 export function blockShape(block, index, referenceLon = null) {
   const geometry = block?.geometry;
@@ -137,6 +141,10 @@ export function blockShape(block, index, referenceLon = null) {
     return null;
   }
   const severe = isSevereText(block?.text);
+  // The map tooltip names the block the way the console's own text
+  // card headline does — the card stays authoritative, the pin says
+  // what you are hovering
+  const label = (block?.text ?? "").split("\n")[0].slice(0, 90);
   if (geometry.type === "point") {
     const [lon, lat] = geometry.coordinates;
     return {
@@ -166,6 +174,7 @@ export function blockShape(block, index, referenceLon = null) {
       bufferNm: null,
       severe,
       dashed: true,
+      label,
     };
   }
   // polygon or line: a ring, or an axis — axes with a stated band
@@ -182,6 +191,7 @@ export function blockShape(block, index, referenceLon = null) {
       bufferNm: block.geometry.bufferNm,
       severe,
       dashed: false,
+      label,
     };
   }
   if (geometry.type === "line") {
@@ -192,6 +202,7 @@ export function blockShape(block, index, referenceLon = null) {
       bufferNm: null,
       severe,
       dashed: false,
+      label,
     };
   }
   return {
@@ -205,6 +216,7 @@ export function blockShape(block, index, referenceLon = null) {
     bufferNm: block.geometry.bufferNm ?? null,
     severe,
     dashed: false,
+    label,
   };
 }
 
@@ -377,6 +389,119 @@ export function ribbonSegments(track, referenceLon = null) {
   }
   // Continuity: a segment's end is the next segment's start, so the
   // ribbon never shows a gap at a regime change
+  for (let i = segments.length - 1; i > 0; i--) {
+    if (
+      segments[i].points.length > 1 &&
+      (segments[i - 1].points.at(-1)[0] !== segments[i].points[0][0] ||
+        segments[i - 1].points.at(-1)[1] !== segments[i].points[0][1])
+    ) {
+      segments[i - 1].points.push([...segments[i].points[0]]);
+    }
+  }
+  return segments.map(({ key, ...segment }) => segment);
+}
+
+/**
+ * The colorized route (work doc #47 session): the real route polyline
+ * — the payload's waypoints, sampled along the route's own geometry —
+ * carrying the plan's per-stretch encoding. Each route point takes
+ * the attributes of the simulated row whose made-good distance covers
+ * it (waypoints and rows both measure from the route start), and
+ * consecutive points sharing an encoding collapse into one polyline —
+ * the same segment shape {@link ribbonSegments} emits. One line on
+ * the map, the route itself, colored as the plan reads: no second
+ * simplified sim-track line drifting a mile or two off the route.
+ *
+ * Returns null when the payload carries no route geometry (here
+ * mode), so the caller can fall back to the row ribbon.
+ *
+ * @param {Array<{lat: number, lon: number,
+ *   distanceFromStartNm?: number}>} waypoints - The viewed route's
+ *   sampled geometry
+ * @param {Array<{distanceFromStartNm: number, lat: number, lon: number,
+ *   comfortLevel: string|null, slatting: boolean, motoring: boolean,
+ *   night: boolean}>} track - summary.track rows
+ * @param {number|null} referenceLon - The map's longitude frame
+ * @returns {Array<{points: number[][], comfortLevel: string|null,
+ *   slatting: boolean, motoring: boolean, night: boolean}>|null}
+ */
+export function routeRibbon(waypoints, track, referenceLon = null) {
+  const points = (waypoints ?? []).filter(
+    (w) => Number.isFinite(w?.lat) && Number.isFinite(w?.lon),
+  );
+  if (points.length < 2) {
+    return null;
+  }
+  // Route distance per point: the payload carries it from the
+  // sampling; payloads without it get it recomputed along the line
+  let acc = 0;
+  const distances = points.map((point, i) => {
+    if (Number.isFinite(point?.distanceFromStartNm)) {
+      return point.distanceFromStartNm;
+    }
+    if (i > 0) {
+      acc += greatCircleNm(
+        points[i - 1].lat,
+        points[i - 1].lon,
+        point.lat,
+        point.lon,
+      );
+    }
+    return acc;
+  });
+  const rows = (track ?? [])
+    .filter((row) => Number.isFinite(row?.distanceFromStartNm))
+    .sort((a, b) => a.distanceFromStartNm - b.distanceFromStartNm);
+  // Without row data the route still draws — one neutral stretch the
+  // renderer paints in the plain route color
+  const attributes = [];
+  let cursor = 0;
+  for (const d of distances) {
+    while (
+      cursor + 1 < rows.length &&
+      rows[cursor + 1].distanceFromStartNm <= d
+    ) {
+      cursor++;
+    }
+    attributes.push(rows[cursor] ?? null);
+  }
+  const keyOf = (row) =>
+    row == null
+      ? "none"
+      : [
+          row.comfortLevel ?? "?",
+          row.slatting === true ? "slat" : "calm",
+          row.motoring === true ? "motor" : "sail",
+          row.night === true ? "night" : "day",
+        ].join("|");
+  const segments = [];
+  let current = null;
+  let prev = referenceLon;
+  for (let i = 0; i < points.length; i++) {
+    let lon = points[i].lon;
+    if (prev != null) {
+      while (lon - prev > 180) lon -= 360;
+      while (lon - prev < -180) lon += 360;
+    }
+    prev = lon;
+    const row = attributes[i];
+    const key = keyOf(row);
+    if (current && current.key === key) {
+      current.points.push([lon, points[i].lat]);
+    } else {
+      current = {
+        key,
+        points: [[lon, points[i].lat]],
+        comfortLevel: row?.comfortLevel ?? null,
+        slatting: row?.slatting === true,
+        motoring: row?.motoring === true,
+        night: row?.night === true,
+      };
+      segments.push(current);
+    }
+  }
+  // Continuity: a segment's end is the next segment's start, so the
+  // route never shows a gap at a regime change
   for (let i = segments.length - 1; i > 0; i--) {
     if (
       segments[i].points.length > 1 &&

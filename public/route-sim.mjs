@@ -2209,6 +2209,9 @@ export function filterExceptions(simulationResult, simParams = {}) {
         hoursFromNow: row.hoursFromNow,
         lat: row.lat,
         lon: row.lon,
+        // Distance made good at the row: the route ribbon maps the
+        // plan's encoding onto the real route geometry by it
+        distanceFromStartNm: row.distanceFromStartNm ?? null,
         comfortLevel: row.comfortLevel ?? null,
         slatting: Boolean(row.slatting),
         // Ribbon regime fields (work doc #47): the map colors the
