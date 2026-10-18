@@ -12,6 +12,7 @@ test("webapp view models", async (t) => {
   const {
     COMFORT_TIERS,
     compiledLabel,
+    GLYPHS,
     comfortColor,
     effectiveDeparture,
     etaTable,
@@ -30,6 +31,8 @@ test("webapp view models", async (t) => {
     hereHourly,
     hereNow,
   } = await import("../public/components/models.mjs");
+
+  const { eventPins } = await import("../public/components/map-model.mjs");
 
   const {
     briefingAgeHours,
@@ -421,6 +424,57 @@ test("webapp view models", async (t) => {
     assert.equal(timeline[2].label, "No sails - drifting");
     assert.deepEqual(mergeTimeline(null, null), []);
   });
+
+  await t.test(
+    "motoring events ride their own motorboat glyph (doc #47 session)",
+    () => {
+      const timeline = mergeTimeline({
+        passageSummary: {
+          track: [],
+          sailChanges: [
+            {
+              hoursFromNow: 3,
+              timestamp: "2026-06-21T10:00:00.000Z",
+              sailState: "NO_SAILS",
+              propulsion: "motor",
+            },
+            {
+              hoursFromNow: 9,
+              timestamp: "2026-06-21T16:00:00.000Z",
+              sailState: "MAIN_1_REEF",
+            },
+          ],
+        },
+      });
+      assert.equal(timeline.length, 2);
+      assert.equal(timeline[0].kind, "motor");
+      assert.equal(timeline[0].label, "Motoring");
+      assert.equal(GLYPHS[timeline[0].kind], "🚤");
+      // The map's event pins read the same glyph map
+      const pins = eventPins(
+        timeline.map((item) => ({ ...item, position: { lat: 1, lon: 2 } })),
+      );
+      assert.equal(pins[0].glyph, "🚤");
+      assert.equal(pins[1].glyph, "⛵");
+      // A canvas-up event keeps the sail kind
+      assert.equal(timeline[1].kind, "sail");
+      // A drifting event (no engine) stays on the sail kind: the ask was
+      // to distinguish motoring, not to invent a drift glyph
+      const drift = mergeTimeline({
+        passageSummary: {
+          sailChanges: [
+            {
+              hoursFromNow: 3,
+              sailState: "NO_SAILS",
+              propulsion: "adrift",
+            },
+          ],
+        },
+      });
+      assert.equal(drift[0].kind, "sail");
+      assert.equal(drift[0].label, "No sails - drifting");
+    },
+  );
 
   await t.test("fmtHm renders clock time in ship's time (doc #33)", () => {
     setShipTime({ offsetMinutes: 780, region: "Pacific/Tongatapu" });

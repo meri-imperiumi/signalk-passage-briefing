@@ -1365,10 +1365,19 @@ export function mergeTimeline(exceptions, payload = null) {
           : e.anchor === "dawn"
             ? "at dawn"
             : null;
+    // Canvas-down propulsion events ride their own kind: the timeline
+    // and the map's event pins draw a motorboat for the engine (work
+    // doc #47 session — motoring must not read as a sail change),
+    // falling back to the plain sail glyph for the survival tactic
+    const canvasDown = e.sailState === "NO_SAILS";
     push({
       hoursFromNow: e.hoursFromNow ?? null,
       timestamp: e.timestamp ?? null,
-      kind: maneuver ? "maneuver" : "sail",
+      kind: maneuver
+        ? "maneuver"
+        : canvasDown && e.propulsion === "motor"
+          ? "motor"
+          : "sail",
       severity: maneuver ? "warn" : "info",
       label,
       detail: [
@@ -1747,7 +1756,13 @@ export function mergeTimeline(exceptions, payload = null) {
   // installed. Items with no record stay quiet: absence never
   // implies external authority.
   const weatherProv = payload?.metadata?.provenance ?? null;
-  const SIMULATED_KINDS = new Set(["sail", "maneuver", "convective", "sea"]);
+  const SIMULATED_KINDS = new Set([
+    "sail",
+    "motor",
+    "maneuver",
+    "convective",
+    "sea",
+  ]);
   const derivedProvenance = (item) => {
     if (!weatherProv || item.hoursFromNow == null) {
       return null;
@@ -1971,6 +1986,7 @@ export function etaTable(exceptions, payload = null) {
  */
 export const GLYPHS = {
   sail: "⛵",
+  motor: "🚤",
   maneuver: "⇄",
   convective: "⚡",
   rain: "🌧",

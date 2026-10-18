@@ -502,13 +502,16 @@ describe("plugin", () => {
   test("GRIB cycle time: schedules a catch-up refresh when the next run publishes", async () => {
     const { mockOpenMeteo } = require("./openmeteo-mock.js");
     const RAD = Math.PI / 180;
+    // A run decoded two hours ago: fresh per the publication schedule,
+    // and robust to the test machine's wall clock
+    const cycleMs = Date.now() - 2 * 3600000;
     const step = (hours) => ({
-      date: new Date(
-        Date.parse("2026-10-17T12:00:00.000Z") + hours * 3600000,
-      ).toISOString(),
+      date: new Date(cycleMs + hours * 3600000).toISOString(),
       type: "point",
       description:
-        "ECMWF IFS 0.25° open data, cycle 2026-10-17T12:00:00.000Z, +" +
+        "ECMWF IFS 0.25° open data, cycle " +
+        new Date(cycleMs).toISOString() +
+        ", +" +
         hours +
         " h",
       wind: { speedTrue: 5.14, directionTrue: 45 * RAD, gust: 7.7 },
@@ -589,18 +592,17 @@ describe("plugin", () => {
       assert.equal(res.payload.payload.metadata.source, "weather-api");
       assert.equal(
         res.payload.payload.metadata.cycleTime,
-        "2026-10-17T12:00:00.000Z",
+        new Date(cycleMs).toISOString(),
       );
 
       // The catch-up refresh is scheduled at the next cycle's
-      // publication: cycle + 12 h 15 m from the wall clock
+      // publication: cycle + 12 h 15 m — a run decoded two hours ago
+      // lands the timer ~10.25 h out
       assert.ok(scheduled.length >= 1, "a run-refresh timer was scheduled");
-      const expected =
-        Date.parse("2026-10-17T12:00:00.000Z") + 12.25 * 3600000 - Date.now();
       const dueIn = scheduled.at(-1).delay;
       assert.ok(
-        Math.abs(dueIn - expected) < 60000,
-        `delay ${dueIn} ms ≈ next publication in ${Math.round(expected / 60000)} min`,
+        dueIn > 9.75 * 3600000 && dueIn < 10.75 * 3600000,
+        `delay ${dueIn / 3600000} h ≈ cycle + 12 h 15 m`,
       );
 
       // Firing the timer runs the here refresh against the same

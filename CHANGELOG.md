@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- A motorboat glyph (🚤) for canvas-down propulsion events: the timeline rows and the map's event pins drew motoring with the same ⛵ as every sail change, and the crew had to read the label to tell the two apart. Motoring events now ride their own `motor` kind (the drifting case stays on the sail glyph — the ask was to distinguish motoring), and the map pins read the same glyph map.
+
 ## [0.12.9] - 2026-10-18
 
 ### Added
