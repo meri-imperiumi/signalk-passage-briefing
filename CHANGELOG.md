@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- The Parasailor window sailed straight through the plan's own rig changes: the deployment advisor computed its windows on the raw rig trajectory before twilight anchoring rewrote the rows, so a Parasailor deployed for a 53-hour window stayed "up" on the timeline through a motoring stretch and a dawn re-rig the anchored schedule had announced — its take-down landing 32 hours after the engine started. The deployment pass now re-runs on the anchored schedule: the advisor's gates gained the plan's own rig as a first-class gate (canvas down = no downwind sail flies over a motoring stretch; the anchored schedule's rig changes end the window whatever the wind says — one rig state per hour: downwind sail, white sails, or no sails and motoring), and the deployment events, comfort windows and pole advisories all read the same anchored rig the timeline announces. The take-down lands where the crew actually changes the rig — at the dawn re-rig, named for what it is.
+
 ### Added
 - A motorboat glyph (🚤) for canvas-down propulsion events: the timeline rows and the map's event pins drew motoring with the same ⛵ as every sail change, and the crew had to read the label to tell the two apart. Motoring events now ride their own `motor` kind (the drifting case stays on the sail glyph — the ask was to distinguish motoring), and the map pins read the same glyph map.
 

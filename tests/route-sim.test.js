@@ -1781,6 +1781,48 @@ const RUN_MATRIX = {
   ],
 };
 
+test("deployment windows break at the anchored schedule's rig changes", async () => {
+  // The one-rig invariant (work doc #47 session): the plan carries
+  // the Parasailor OR the white sails OR no sails — a deployment
+  // window cannot sail through a stretch the anchored schedule
+  // announced as a re-rig. The twilight-anchored schedule re-rigs the
+  // working canvas at dusk (hour 12): the Parasailor window that
+  // started at hour 1 must take down there, not sail on.
+  const { simulatePassage } = await simPromise;
+  const result = simulatePassage({
+    payload: buildPayload({ twd: 170 }),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    matrix: RUN_MATRIX,
+    config: {
+      downwindSails: [
+        {
+          name: "Parasailor",
+          claim: "comfort",
+          minTwaDeg: 130,
+          minTwsKnots: 5,
+          maxTwsKnots: 25,
+        },
+      ],
+    },
+  });
+  const events = result.deploymentEvents;
+  const deploy = events.find((e) => !e.takeDown);
+  assert.ok(deploy, "a Parasailor deployment was planned");
+  assert.equal(deploy.sailName, "Parasailor");
+  // The take-down lands at the anchored rig change (the dusk re-rig
+  // at 12.5; the take-down stamps the last hour the sail was up),
+  // named for what it is
+  const down = events.find((e) => e.takeDown);
+  assert.ok(down, "the deployment took down");
+  assert.equal(down.breakLabel, "rig change");
+  assert.ok(
+    down.hoursFromNow <= 13,
+    `take-down at ${down.hoursFromNow} h, at the re-rig`,
+  );
+  // The window's hours count stops at the re-rig
+  assert.ok(down.hours <= 12, `window ${down.hours} h ends at the re-rig`);
+});
+
 test("pole advisories skip deployment windows", async () => {
   const { simulatePassage } = await simPromise;
   const base = {
@@ -1812,7 +1854,25 @@ test("pole advisories skip deployment windows", async () => {
     deployed.deploymentEvents.some((e) => !e.takeDown),
     JSON.stringify(deployed.deploymentEvents),
   );
-  assert.deepEqual(deployed.poleNotes, []);
+  // The anchored schedule truncates the windows (the dusk re-rig
+  // ends the Parasailor), so pole notes may legitimately fire in the
+  // uncovered stretch afterwards — but never inside a window
+  for (const note of deployed.poleNotes) {
+    for (let i = 0; i < deployed.deploymentEvents.length; i++) {
+      const event = deployed.deploymentEvents[i];
+      if (event.takeDown) {
+        continue;
+      }
+      const until =
+        deployed.deploymentEvents.find(
+          (e, j) => j > i && e.takeDown && e.sailName === event.sailName,
+        )?.hoursFromNow ?? Number.POSITIVE_INFINITY;
+      assert.ok(
+        !(note.hoursFromNow >= event.hoursFromNow && note.hoursFromNow < until),
+        `pole note at ${note.hoursFromNow} h inside the window ${event.hoursFromNow}-${until}`,
+      );
+    }
+  }
 });
 
 test("canvas-down announcements keep the engine-start hour", async () => {

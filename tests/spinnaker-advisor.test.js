@@ -70,6 +70,21 @@ test("the gates fire in order with honest reasons", () => {
     null,
   );
   assert.equal(evaluateDownwindSail({ twaDeg: NaN }), "unknown");
+  // The plan's own rig gates the deployment: no downwind sail flies
+  // over a motoring stretch, and the anchored schedule's rig changes
+  // end the window whatever the wind says (work doc #47 session: the
+  // Parasailor window sailed through a motoring stretch and a dawn
+  // re-rig, its take-down 32 hours after the engine started)
+  assert.equal(
+    evaluateDownwindSail({ ...base, underCanvas: false }),
+    "bare poles",
+  );
+  assert.equal(
+    evaluateDownwindSail({ ...base, rigChanged: true }),
+    "rig change",
+  );
+  // Absent fields never gate: the legacy callers pass neither
+  assert.equal(evaluateDownwindSail(base), null);
 });
 
 test("the crew's own numbers shape the constants", () => {

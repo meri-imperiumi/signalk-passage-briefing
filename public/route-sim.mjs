@@ -907,6 +907,205 @@ export function anchorSailChanges(events, rows, watch = null) {
 }
 
 /**
+ * The downwind-sail deployment pass (work doc #41, refined in the
+ * work doc #47 session): evaluates the advisor's gates per hour,
+ * collects the deployment windows, emits the deploy/take-down
+ * timeline entries, stamps the covering rows (`deploymentWindow`) and
+ * evaluates the comfort per row with the Parasailor-class windows
+ * applied — the recommendation precedes and supersedes the slatting
+ * penalty it relieves.
+ *
+ * Runs twice over the nominal run: once on the RAW rig trajectory
+ * inside the run (provisional — twilight anchoring has not rewritten
+ * the rows yet), and once on the ANCHORED schedule in
+ * {@link simulatePassage}, where the anchored rig is authoritative
+ * and the windows break at canvas-down and anchored rig changes.
+ *
+ * @param {Array<object>} hourly - The rows to evaluate (mutated:
+ *   `deploymentWindow` restamped, comfort fields restamped)
+ * @param {object} options
+ * @param {Array<object>|null} options.advisorSails - The advisor
+ *   inventory (from `downwindSails` or the served config)
+ * @param {number} options.t0Ms - The passage's start instant (epoch ms)
+ * @param {number} options.tEndMs - The horizon end (epoch ms)
+ * @param {object|null} options.watch - Running watch schedule
+ * @param {Set<number>} options.stormSet - Named-storm hours
+ *   (hoursFromNow)
+ * @param {Set<number>|null} [options.rigChangedHours] - Hours
+ *   (hoursFromNow) where the anchored schedule carried out a rig
+ *   change — the post-anchoring pass breaks windows there
+ * @param {object} options.cfg - Simulation config (comfort model
+ *   constants)
+ * @returns {{deploymentEvents: Array<object>, comfortWindows:
+ *   Array<object>}}
+ */
+function runDeploymentPass(
+  hourly,
+  { advisorSails, t0Ms, tEndMs, watch, stormSet, rigChangedHours = null, cfg },
+) {
+  const deploymentEvents = [];
+  let comfortWindows = [];
+  if (advisorSails != null && advisorSails.length > 0) {
+    const advisorHours = hourly.map((row) => ({
+      hourMs: Date.parse(row.timestamp),
+      twsKnots: row.twsKnots ?? 0,
+      twaDeg:
+        row.twaRad == null
+          ? NaN
+          : Math.abs(((row.twaRad / DEG + 540) % 360) - 180),
+      awsKnots: row.awsKnots ?? 0,
+      hsMeters: row.hsMeters ?? undefined,
+      gustFactor:
+        row.gustKnots != null && row.twsKnots > 1
+          ? row.gustKnots / row.twsKnots
+          : undefined,
+      night: row.night === true,
+      underCanvas: row.sailState !== "NO_SAILS",
+      // The anchored schedule's own rig changes end the deployment
+      // whatever the wind says (post-anchoring pass only)
+      rigChanged:
+        rigChangedHours != null && rigChangedHours.has(row.hoursFromNow),
+      // Named forecast events (probable rain squalls, convective air,
+      // the squall-risk hours) kill the deployment the same way the
+      // gust-factor gate does — the forecast's own "sail comes down"
+      // markers
+      storm: stormSet.has(row.hoursFromNow),
+    }));
+    const plan = deploymentPlan(advisorHours, {
+      downwindSails: advisorSails,
+      watchAnchorsMs: watchBoundaries(watch, t0Ms, tEndMs),
+      minWindowHours: DOWNWIND_MIN_WINDOW_HOURS,
+    });
+    // The covering comfort window per row: the Parasailor-class
+    // (comfort claim) deployment changes what the hours read — the
+    // downwind sail is up, drawing, damping the motion. Stamped in
+    // the comfort pass below, which always runs.
+    comfortWindows = plan.filter((d) => d.claim === "comfort");
+    // Every deployment window stamps its hours: while a downwind sail
+    // is up there is no poled-out working canvas to advise about
+    for (const row of hourly) {
+      row.deploymentWindow = plan.some((d) => {
+        const ms = Date.parse(row.timestamp);
+        return ms >= d.startMs && ms <= d.untilMs;
+      });
+    }
+    // Timeline entries: deploy (anchored when the watch schedule put
+    // a handover inside the window), and the take-down where the
+    // forecast broke.
+    for (const d of plan) {
+      const anchorText =
+        d.anchoredMs != null && d.anchoredMs !== d.startMs
+          ? "at the watch change"
+          : null;
+      deploymentEvents.push({
+        hoursFromNow: Math.round(((d.startMs - t0Ms) / 3600000) * 10) / 10,
+        timestamp: new Date(d.startMs).toISOString(),
+        sailName: d.sailName,
+        claim: d.claim,
+        anchored: anchorText,
+        hours: d.hours,
+      });
+      const breakLabel =
+        d.breakReason === "squall gusts"
+          ? "squall window"
+          : d.breakReason === "squall window"
+            ? "squall window"
+            : d.breakReason === "bare poles"
+              ? "canvas down"
+              : d.breakReason === "rig change"
+                ? "rig change"
+                : d.breakReason === "sea state"
+                  ? "sea state"
+                  : d.breakReason === "night"
+                    ? "night"
+                    : d.breakReason === "wind above envelope"
+                      ? "wind building past the envelope"
+                      : d.breakReason === "point of sail"
+                        ? "wind angle leaving the reach"
+                        : d.breakReason === "below fill floor"
+                          ? "wind dying"
+                          : d.breakReason === "wind below envelope"
+                            ? "wind dying"
+                            : null;
+      if (breakLabel != null) {
+        const untilRow = hourly.find(
+          (row) => Date.parse(row.timestamp) === d.untilMs,
+        );
+        deploymentEvents.push({
+          hoursFromNow: Math.round(((d.untilMs - t0Ms) / 3600000) * 10) / 10,
+          timestamp: new Date(d.untilMs).toISOString(),
+          sailName: d.sailName,
+          claim: d.claim,
+          takeDown: true,
+          breakReason: d.breakReason ?? null,
+          breakLabel,
+          anchored: null,
+          hours: d.hours,
+          // For the conditions tab: the row the take-down lands on
+          untilTimestamp: untilRow?.timestamp ?? null,
+        });
+      }
+    }
+  } else {
+    // No downwind sail in the inventory: the advisor stays silent and
+    // no window stamps the rows
+    for (const row of hourly) {
+      row.deploymentWindow = false;
+    }
+  }
+
+  // The comfort evaluation per row (SPEC §5.2): inside a Parasailor
+  // deployment window the downwind sail is up, drawing, damping the
+  // motion — the recommendation precedes and supersedes the slatting
+  // penalty it relieves. Outside, the plan's own rig applies (canvas
+  // down reads motoring; unknown stays legacy).
+  const covering = (rowMs) =>
+    comfortWindows.find((d) => rowMs >= d.startMs && rowMs <= d.untilMs);
+  for (const row of hourly) {
+    const rowMs = Date.parse(row.timestamp);
+    const covered = covering(rowMs);
+    const vessel = {
+      sogKnots: row.sogKnots ?? 0,
+      headingRad: row.headingRad ?? 0,
+      waterlineLengthM: cfg.waterline_length_m,
+      kHeel: cfg.k_heel,
+      kPitch: cfg.k_pitch,
+      sailState: covered
+        ? "sailing"
+        : // null is a meaningful state (unknown rig: legacy slatting
+          // behavior) — only an absent field falls back to the row's
+          // post-suggestion rig
+          (row.sailStateAtComfort !== undefined
+              ? row.sailStateAtComfort
+              : row.sailState) == null
+          ? null
+          : (row.sailStateAtComfort !== undefined
+                ? row.sailStateAtComfort
+                : row.sailState) === "NO_SAILS"
+            ? "motoring"
+            : "sailing",
+      downwindStabilized: covered != null,
+    };
+    if (row.hsMeters != null && row.tpSeconds != null) {
+      const comfort = serenoComfort(
+        {
+          hsMeters: row.hsMeters,
+          tpSeconds: row.tpSeconds,
+          waveTravelDirectionRad: row.waveTravelRad ?? null,
+        },
+        vessel,
+        { twsKnots: row.twsKnots ?? 0, twaRad: row.twaRad ?? Math.PI },
+      );
+      row.azMs2 = comfort.acceleration.value;
+      row.comfortLevel = comfort.comfort;
+      row.slatting = comfort.slatting;
+      row.parasailorRecommended = covered != null;
+    }
+  }
+  return { deploymentEvents, comfortWindows };
+}
+
+/**
  * Runs the step-forward simulation once.
  *
  * @param {object} params
@@ -1412,172 +1611,25 @@ export function simulateRun({
   // horizons need the whole simulated timeline, and an established
   // window changes the comfort the hours read — the recommendation
   // precedes and supersedes the slatting penalty it relieves.
-  const deploymentEvents = [];
-  let comfortWindows = [];
-  // The param wins; the plugin's served config (the vessel's own
-  // inventory) fills in when the caller passes none
-  const advisorSails = Array.isArray(downwindSails)
-    ? downwindSails
-    : Array.isArray(cfg.downwindSails)
-      ? cfg.downwindSails
-      : null;
-  if (advisorSails != null && advisorSails.length > 0) {
-    const t0Ms = Date.parse(startTime.toISOString());
-    const tEndMs = t0Ms + maxHours * 3600000;
-    // Named-storm hours: probable rain squalls, convective air and
-    // the squall-risk advisory hours share one gate
-    const stormSet = new Set(
+  // simulatePassage re-runs this pass on the ANCHORED schedule after
+  // twilight anchoring, so the windows this raw pass produced are
+  // provisional.
+  const { deploymentEvents } = runDeploymentPass(hourly, {
+    advisorSails: Array.isArray(downwindSails)
+      ? downwindSails
+      : Array.isArray(cfg.downwindSails)
+        ? cfg.downwindSails
+        : null,
+    t0Ms: Date.parse(startTime.toISOString()),
+    tEndMs: Date.parse(startTime.toISOString()) + maxHours * 3600000,
+    watch,
+    stormSet: new Set(
       [...rainHours, ...squallHours, ...upperAirAnomalies].map(
         (e) => e.hoursFromNow,
       ),
-    );
-    const advisorHours = hourly.map((row) => ({
-      hourMs: Date.parse(row.timestamp),
-      twsKnots: row.twsKnots ?? 0,
-      twaDeg:
-        row.twaRad == null
-          ? NaN
-          : Math.abs(((row.twaRad / DEG + 540) % 360) - 180),
-      awsKnots: row.awsKnots ?? 0,
-      hsMeters: row.hsMeters ?? undefined,
-      gustFactor:
-        row.gustKnots != null && row.twsKnots > 1
-          ? row.gustKnots / row.twsKnots
-          : undefined,
-      night: row.night === true,
-      underCanvas: row.sailState !== "NO_SAILS",
-      // Named forecast events (probable rain squalls, convective air,
-      // the squall-risk hours) kill the deployment the same way the
-      // gust-factor gate does — the forecast's own "sail comes down"
-      // markers
-      storm: stormSet.has(row.hoursFromNow),
-    }));
-    const plan = deploymentPlan(advisorHours, {
-      downwindSails: advisorSails,
-      watchAnchorsMs: watchBoundaries(watch, t0Ms, tEndMs),
-      minWindowHours: DOWNWIND_MIN_WINDOW_HOURS,
-    });
-    // The covering comfort window per row: the Parasailor-class
-    // (comfort claim) deployment changes what the hours read — the
-    // downwind sail is up, drawing, damping the motion. Stamped in
-    // the comfort pass below, which always runs.
-    comfortWindows = plan.filter((d) => d.claim === "comfort");
-    // Every deployment window stamps its hours: while a downwind sail
-    // is up there is no poled-out working canvas to advise about
-    for (const d of plan) {
-      for (const row of hourly) {
-        const ms = Date.parse(row.timestamp);
-        if (ms >= d.startMs && ms <= d.untilMs) {
-          row.deploymentWindow = true;
-        }
-      }
-    }
-    // Timeline entries: deploy (anchored when the watch schedule put
-    // a handover inside the window), and the take-down where the
-    // forecast broke.
-    for (const d of plan) {
-      const startRow = hourly.find(
-        (row) => Date.parse(row.timestamp) === d.startMs,
-      );
-      const anchorText =
-        d.anchoredMs != null && d.anchoredMs !== d.startMs
-          ? "at the watch change"
-          : null;
-      deploymentEvents.push({
-        hoursFromNow: Math.round(((d.startMs - t0Ms) / 3600000) * 10) / 10,
-        timestamp: new Date(d.startMs).toISOString(),
-        sailName: d.sailName,
-        claim: d.claim,
-        anchored: anchorText,
-        hours: d.hours,
-      });
-      const breakLabel =
-        d.breakReason === "squall gusts"
-          ? "squall window"
-          : d.breakReason === "squall window"
-            ? "squall window"
-            : d.breakReason === "sea state"
-              ? "sea state"
-              : d.breakReason === "night"
-                ? "night"
-                : d.breakReason === "wind above envelope"
-                  ? "wind building past the envelope"
-                  : d.breakReason === "point of sail"
-                    ? "wind angle leaving the reach"
-                    : d.breakReason === "below fill floor"
-                      ? "wind dying"
-                      : d.breakReason === "wind below envelope"
-                        ? "wind dying"
-                        : null;
-      if (breakLabel != null) {
-        const untilRow = hourly.find(
-          (row) => Date.parse(row.timestamp) === d.untilMs,
-        );
-        deploymentEvents.push({
-          hoursFromNow: Math.round(((d.untilMs - t0Ms) / 3600000) * 10) / 10,
-          timestamp: new Date(d.untilMs).toISOString(),
-          sailName: d.sailName,
-          claim: d.claim,
-          takeDown: true,
-          breakReason: d.breakReason ?? null,
-          breakLabel,
-          anchored: null,
-          hours: d.hours,
-          // For the conditions tab: the row the take-down lands on
-          untilTimestamp: untilRow?.timestamp ?? null,
-        });
-      }
-    }
-  }
-
-  // The comfort evaluation per row (SPEC §5.2): inside a Parasailor
-  // deployment window the downwind sail is up, drawing, damping the
-  // motion — the recommendation precedes and supersedes the slatting
-  // penalty it relieves. Outside, the plan's own rig applies (canvas
-  // down reads motoring; unknown stays legacy).
-  const covering = (rowMs) =>
-    comfortWindows.find((d) => rowMs >= d.startMs && rowMs <= d.untilMs);
-  for (const row of hourly) {
-    const rowMs = Date.parse(row.timestamp);
-    const covered = covering(rowMs);
-    const vessel = {
-      sogKnots: row.sogKnots ?? 0,
-      headingRad: row.headingRad ?? 0,
-      waterlineLengthM: cfg.waterline_length_m,
-      kHeel: cfg.k_heel,
-      kPitch: cfg.k_pitch,
-      sailState: covered
-        ? "sailing"
-        : // null is a meaningful state (unknown rig: legacy slatting
-          // behavior) — only an absent field falls back to the row's
-          // post-suggestion rig
-          (row.sailStateAtComfort !== undefined
-              ? row.sailStateAtComfort
-              : row.sailState) == null
-          ? null
-          : (row.sailStateAtComfort !== undefined
-                ? row.sailStateAtComfort
-                : row.sailState) === "NO_SAILS"
-            ? "motoring"
-            : "sailing",
-      downwindStabilized: covered != null,
-    };
-    if (row.hsMeters != null && row.tpSeconds != null) {
-      const comfort = serenoComfort(
-        {
-          hsMeters: row.hsMeters,
-          tpSeconds: row.tpSeconds,
-          waveTravelDirectionRad: row.waveTravelRad ?? null,
-        },
-        vessel,
-        { twsKnots: row.twsKnots ?? 0, twaRad: row.twaRad ?? Math.PI },
-      );
-      row.azMs2 = comfort.acceleration.value;
-      row.comfortLevel = comfort.comfort;
-      row.slatting = comfort.slatting;
-      row.parasailorRecommended = covered != null;
-    }
-  }
+    ),
+    cfg,
+  });
 
   return {
     etaHours: arrivedHours,
@@ -1937,6 +1989,45 @@ export function simulatePassage({
     nominal.hourly ?? [],
     watch,
   );
+  // The deployment advisor re-runs on the ANCHORED schedule (work
+  // doc #47 session): the pre-anchoring windows were computed on the
+  // raw rig trajectory — a Parasailor window sailed straight through
+  // a stretch the anchored schedule announced as motoring, its
+  // take-down 32 hours after the engine started. The anchored rows
+  // carry the announced rig, so the advisor's gates break each window
+  // where the plan actually changes it: canvas down at the engine,
+  // and the Parasailor down at every anchored rig change — one rig
+  // state per hour (downwind sail, white sails, or no sails).
+  const rigChangedHours = new Set(
+    (sailPlan ?? [])
+      .filter((event) => !event.maneuver)
+      .map(
+        (event) =>
+          (nominal.hourly ?? []).find(
+            (row) => row.hoursFromNow >= event.hoursFromNow,
+          )?.hoursFromNow,
+      )
+      .filter((hour) => hour != null),
+  );
+  const anchoredDeployment = runDeploymentPass(nominal.hourly ?? [], {
+    advisorSails: simCfg.downwindSails,
+    t0Ms: Date.parse(startTime.toISOString()),
+    tEndMs:
+      (nominal.hourly ?? []).length > 0
+        ? Date.parse(nominal.hourly.at(-1).timestamp) + 3600000
+        : Date.parse(startTime.toISOString()),
+    watch,
+    stormSet: new Set(
+      [
+        ...(nominal.squallHours ?? []),
+        ...(nominal.rainHours ?? []),
+        ...(nominal.upperAirAnomalies ?? []),
+      ].map((e) => e.hoursFromNow),
+    ),
+    rigChangedHours,
+    cfg: simCfg,
+  });
+  const deploymentEvents = anchoredDeployment.deploymentEvents;
   // Tacks and gybes the plan implies (work doc #5): detected on the
   // anchored schedule — the same rig the timeline announces — so a
   // maneuver never contradicts the canvas the crew was told to carry
@@ -2004,8 +2095,10 @@ export function simulatePassage({
           : event;
       })
       .sort((x, y) => x.hoursFromNow - y.hoursFromNow),
-    // Proactive downwind sail deployments (work doc #41)
-    deploymentEvents: nominal.deploymentEvents ?? [],
+    // Proactive downwind sail deployments (work doc #41): the
+    // post-anchoring pass, so the windows break where the announced
+    // rig changes
+    deploymentEvents,
     // Territorial waters transitions with their place in the passage
     // schedule (work doc #17); undated when the crossing lies beyond
     // the simulated horizon. Each carries the IANA zone at the

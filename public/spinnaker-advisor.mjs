@@ -76,6 +76,12 @@ export const DOWNWIND_HS_CEILING_M = 3.5;
  * @param {number} params.awsKnots - Apparent wind speed (kn)
  * @param {number} [params.hsMeters] - Significant wave height (m)
  * @param {number} [params.gustFactor] - Gust / base wind ratio
+ * @param {boolean} [params.underCanvas] - Whether the plan's rig
+ *   carries canvas at the hour — false (motoring or drifting) means
+ *   no downwind sail flies
+ * @param {boolean} [params.rigChanged] - Whether the anchored
+ *   schedule carried out a rig change at this hour — the deployment
+ *   ends there, whatever the wind says (the crew is on deck anyway)
  * @param {boolean} [params.night] - Sun below the horizon at the hour
  * @param {boolean} [params.storm] - Named forecast event at the hour
  *   (probable rain squalls, convective air, squall-risk advisory)
@@ -93,6 +99,8 @@ export function evaluateDownwindSail({
   awsKnots,
   hsMeters,
   gustFactor,
+  underCanvas,
+  rigChanged,
   night = false,
   storm = false,
   nightOk = false,
@@ -100,6 +108,21 @@ export function evaluateDownwindSail({
 }) {
   if (!Number.isFinite(twsKnots) || !Number.isFinite(twaDeg)) {
     return "unknown";
+  }
+  // The plan's own rig gates the deployment: with canvas down the
+  // boat is motoring or drifting — no downwind sail flies over a
+  // motoring stretch (work doc #47 session: a Parasailor window
+  // computed on the pre-anchoring rig sailed straight through a
+  // stretch the anchored schedule announced as motoring, its
+  // take-down 32 hours after the engine started)
+  if (underCanvas === false) {
+    return "bare poles";
+  }
+  // One rig at a time: the anchored schedule's own rig changes end
+  // the deployment whatever the wind says — the crew re-rigged, the
+  // Parasailor comes down with the working canvas it replaced
+  if (rigChanged === true) {
+    return "rig change";
   }
   if (Math.abs(twaDeg) < (envelope.minTwaDeg ?? DOWNWIND_MIN_TWA_DEG)) {
     return "point of sail";
@@ -240,7 +263,10 @@ export function deploymentPlan(hours, options = {}) {
     .sort((a, b) => a - b);
 
   // Per-hour, per-sail hard-gate failures (night handled separately
-  // in the horizon scan — it continues, never starts)
+  // in the horizon scan — it continues, never starts). The plan's own
+  // rig and the named forecast events ride with the hour: no downwind
+  // sail flies over a motoring stretch or an anchored rig change, and
+  // squall/convective hours end the deployment.
   const perSail = hours.map((hour) =>
     sails.map((sail) => ({
       sail,
@@ -250,6 +276,9 @@ export function deploymentPlan(hours, options = {}) {
         awsKnots: hour.awsKnots,
         hsMeters: hour.hsMeters,
         gustFactor: hour.gustFactor,
+        underCanvas: hour.underCanvas,
+        rigChanged: hour.rigChanged,
+        storm: hour.storm,
         envelope: sail,
       }),
     })),
