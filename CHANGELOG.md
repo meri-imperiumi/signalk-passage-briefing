@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.12.9] - 2026-10-18
+
 ### Added
 - GRIB-run freshness the briefing can act on (work doc #47 session): the Weather API payload now carries the decoded run's cycle instant (`metadata.cycleTime`, parsed from the provider's step descriptions — null for continuous sources like Open-Meteo), and the plugin schedules one catch-up refresh per compiled briefing at the next cycle's expected publication (cycle + 12 h 15 m — the 6 h IFS cadence plus its ≈6 h publication lag). A briefing compiled minutes before the newer run decoded — the Tonga→Opua outlook of 2026-10-17, compiled at 21:16 UTC with the newer cycle landing shortly after, served for hours while Windy showed a stronger gradient — now recompiles itself once the newer run is available. Offline at fire time skids to the next cron window; boot scheduling anchors to the cached here payload; route compiles schedule for their own route.
 
