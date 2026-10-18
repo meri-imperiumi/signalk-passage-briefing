@@ -1781,18 +1781,39 @@ const RUN_MATRIX = {
   ],
 };
 
-test("deployment windows break at the anchored schedule's rig changes", async () => {
-  // The one-rig invariant (work doc #47 session): the plan carries
-  // the Parasailor OR the white sails OR no sails — a deployment
-  // window cannot sail through a stretch the anchored schedule
-  // announced as a re-rig. The twilight-anchored schedule re-rigs the
-  // working canvas at dusk (hour 12): the Parasailor window that
-  // started at hour 1 must take down there, not sail on.
+test("deployment windows supersede the matrix's rig changes (one rig at a time)", async () => {
+  // The day/night matrix re-rigs the working canvas at dusk
+  // (STAYSAIL_MAIN_1_REEF) — but the Parasailor window covers the
+  // dusk: one rig at a time (work doc #47 session), the matrix does
+  // not re-rig the working canvas under the downwind sail. The
+  // Parasailor is the rig from departure; only its own take-down ends
+  // it.
   const { simulatePassage } = await simPromise;
   const result = simulatePassage({
     payload: buildPayload({ twd: 170 }),
     startTime: new Date("2026-06-21T06:00:00Z"),
-    matrix: RUN_MATRIX,
+    matrix: {
+      twsBinsKnots: [0, 5, 10, 15, 20, 25, 30, 35, 40],
+      twaBinsDegrees: [0, 30, 60, 90, 120, 150, 180],
+      matrix: [
+        {
+          twsBin: 2,
+          twaBin: 5,
+          night: false,
+          preferredSailState: "MAIN_1_REEF_STAYSAIL",
+          minTwsGustTrigger: 12,
+          samplesCount: 3,
+        },
+        {
+          twsBin: 2,
+          twaBin: 5,
+          night: true,
+          preferredSailState: "STAYSAIL_MAIN_1_REEF",
+          minTwsGustTrigger: 12,
+          samplesCount: 3,
+        },
+      ],
+    },
     config: {
       downwindSails: [
         {
@@ -1806,21 +1827,101 @@ test("deployment windows break at the anchored schedule's rig changes", async ()
     },
   });
   const events = result.deploymentEvents;
-  const deploy = events.find((e) => !e.takeDown);
-  assert.ok(deploy, "a Parasailor deployment was planned");
-  assert.equal(deploy.sailName, "Parasailor");
-  // The take-down lands at the anchored rig change (the dusk re-rig
-  // at 12.5; the take-down stamps the last hour the sail was up),
-  // named for what it is
-  const down = events.find((e) => e.takeDown);
-  assert.ok(down, "the deployment took down");
-  assert.equal(down.breakLabel, "rig change");
+  // The mainstream night cycle: dawn deploys alternate with dusk
+  // nightfall take-downs — the Parasailor never flies through a night
+  const deploys = events.filter((e) => !e.takeDown);
+  const downs = events.filter((e) => e.takeDown);
+  assert.ok(deploys.length >= 2, JSON.stringify(events));
+  assert.equal(deploys[0].sailName, "Parasailor");
   assert.ok(
-    down.hoursFromNow <= 13,
-    `take-down at ${down.hoursFromNow} h, at the re-rig`,
+    downs.every((e) => e.breakLabel === "nightfall"),
+    JSON.stringify(downs),
   );
-  // The window's hours count stops at the re-rig
-  assert.ok(down.hours <= 12, `window ${down.hours} h ends at the re-rig`);
+  // One rig at a time: no working-canvas event lands inside a
+  // deployment window — the Parasailor was up, the matrix did not
+  // re-rig under it
+  for (const item of result.sailEvents.filter((e) => !e.maneuver)) {
+    for (let i = 0; i < events.length; i++) {
+      const event = events[i];
+      if (event.takeDown) {
+        continue;
+      }
+      const until =
+        events.find(
+          (e, j) => j > i && e.takeDown && e.sailName === event.sailName,
+        )?.hoursFromNow ?? Number.POSITIVE_INFINITY;
+      assert.ok(
+        !(item.hoursFromNow >= event.hoursFromNow && item.hoursFromNow < until),
+        `sail change at ${item.hoursFromNow} inside the window ${event.hoursFromNow}-${until}`,
+      );
+    }
+  }
+});
+
+test("continue policy: the Parasailor flies through the nights (this crew's practice)", async () => {
+  // The opt-in night policy (work doc #47 session): night hours keep
+  // an open deployment — night flying when squall risk is low, the
+  // crew's own logged practice (23–40% of their downwind hours ran
+  // after dark). One deployment spans the whole passage; the
+  // matrix's dusk re-rigs stay suppressed under it.
+  const { simulatePassage } = await simPromise;
+  const result = simulatePassage({
+    payload: buildPayload({ twd: 170 }),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    matrix: {
+      twsBinsKnots: [0, 5, 10, 15, 20, 25, 30, 35, 40],
+      twaBinsDegrees: [0, 30, 60, 90, 120, 150, 180],
+      matrix: [
+        {
+          twsBin: 2,
+          twaBin: 5,
+          night: false,
+          preferredSailState: "MAIN_1_REEF_STAYSAIL",
+          minTwsGustTrigger: 12,
+          samplesCount: 3,
+        },
+        {
+          twsBin: 2,
+          twaBin: 5,
+          night: true,
+          preferredSailState: "STAYSAIL_MAIN_1_REEF",
+          minTwsGustTrigger: 12,
+          samplesCount: 3,
+        },
+      ],
+    },
+    config: {
+      downwind_night_policy: "continue",
+      downwindSails: [
+        {
+          name: "Parasailor",
+          claim: "comfort",
+          minTwaDeg: 130,
+          minTwsKnots: 5,
+          maxTwsKnots: 25,
+        },
+      ],
+    },
+  });
+  // One deployment, hoisted at departure, never struck at dusk
+  const events = result.deploymentEvents;
+  assert.equal(
+    events.filter((e) => !e.takeDown).length,
+    1,
+    JSON.stringify(events),
+  );
+  assert.equal(
+    events.filter((e) => e.breakLabel === "nightfall").length,
+    0,
+    "no nightfall take-down under the continue policy",
+  );
+  // The matrix's working-canvas re-rigs stay suppressed under the
+  // flying Parasailor
+  assert.deepEqual(
+    result.sailEvents.filter((e) => !e.maneuver),
+    [],
+    JSON.stringify(result.sailEvents),
+  );
 });
 
 test("pole advisories skip deployment windows", async () => {

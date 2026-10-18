@@ -184,6 +184,13 @@ const HERE_TTL_MS = 3 * 60 * 60 * 1000;
  */
 const DEFAULTS = {
   motoring_tws_threshold: 3.5,
+  // Downwind-sail night policy (work doc #47 session): "break" is
+  // the default — no downwind sail at night; dusk strikes the sail
+  // and reefable white sails (poled out) carry the dark period, dawn
+  // may re-open. "continue" — night hours keep an open deployment:
+  // night flying when squall risk is low (this crew's logged
+  // practice: 23–40% of their downwind hours ran after dark)
+  downwind_night_policy: "break",
   drift_mode_enabled: true,
   motor_fuel_l_per_hour: 1.8,
   waterline_length_m: 9.4,
@@ -2393,6 +2400,17 @@ module.exports = (app) => {
           title: "Motoring TWS Threshold (knots)",
           default: DEFAULTS.motoring_tws_threshold,
         },
+        downwind_night_policy: {
+          type: "string",
+          title: "Downwind Sail Night Policy",
+          enum: ["continue", "break"],
+          description:
+            '"continue" (default): night hours keep an open downwind-sail ' +
+            'deployment — night flying when squall risk is low. "break": dusk ' +
+            "ends the deployment, reefable white sails carry the dark period, " +
+            "dawn may re-open.",
+          default: DEFAULTS.downwind_night_policy,
+        },
         drift_mode_enabled: {
           type: "boolean",
           title: "Enable Drift Mode (Zero Fuel / Current Drift)",
@@ -2751,6 +2769,7 @@ module.exports = (app) => {
         // advisor stays silent rather than recommending canvas the
         // boat may not carry.
         downwindSails: downwindSailCache,
+        downwind_night_policy: config.downwind_night_policy,
       };
       stateMachine = new PassageStateMachine();
       db = new PassageDatabase(app.getDataDirPath());

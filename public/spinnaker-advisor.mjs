@@ -230,8 +230,8 @@ export function collectDownwindWindows(hours, options = {}) {
  *
  * @param {Array<{hourMs: number, twsKnots: number, twaDeg: number,
  *   awsKnots: number, hsMeters?: number, gustFactor?: number,
- *   night?: boolean, underCanvas?: boolean}>} hours - Chronological
- *   forecast hours
+ *   night?: boolean, underCanvas?: boolean, rigChanged?: boolean,
+ *   storm?: boolean}>} hours - Chronological forecast hours
  * @param {object} [options]
  * @param {Array<{name: string, claim: "comfort"|"drive",
  *   minTwsKnots?: number|null, maxTwsKnots?: number|null,
@@ -245,6 +245,13 @@ export function collectDownwindWindows(hours, options = {}) {
  * @param {number} [options.minWindowHours] - Hassle threshold
  * @param {boolean} [options.nightOk] - Whether night hours may start
  *   a horizon (default false)
+ * @param {"continue"|"break"} [options.nightPolicy] - What night
+ *   hours do to an open window (default "continue"): they keep it
+ *   (this crew's logged practice — night flying when squall risk is
+ *   low), or, with "break", they end it — dusk strikes the sail and
+ *   reefable white sails carry the dark period (the mainstream
+ *   pattern: dawn deploys, dusk takes down, poled-out white sails
+ *   overnight)
  * @returns {Array<{startMs: number, untilMs: number, sailName: string,
  *   claim: string, anchoredMs: number|null, breakReason: string|null,
  *   hours: number}>} Deployments, chronological
@@ -258,6 +265,12 @@ export function deploymentPlan(hours, options = {}) {
   }
   const minWindowHours = options.minWindowHours ?? DOWNWIND_MIN_WINDOW_HOURS;
   const nightOk = options.nightOk ?? false;
+  // Night policy (work doc #47 session): the default is "break" —
+  // no downwind sail at night; dusk strikes the sail and reefable
+  // white sails carry the dark period. "continue" opts in to night
+  // hours keeping an open window (night flying when squall risk is
+  // low — the practice behind the logged deployments)
+  const nightBreaks = options.nightPolicy !== "continue";
   const anchors = (options.watchAnchorsMs ?? [])
     .filter((t) => Number.isFinite(t))
     .sort((a, b) => a - b);
@@ -313,10 +326,11 @@ export function deploymentPlan(hours, options = {}) {
       for (let i = start; i < hours.length; i++) {
         const entry = perSail[i].find((p) => p.sail === sail);
         const hourNight = hours[i].night === true;
-        if (entry.reason == null || (hourNight && entry.reason === "night")) {
+        const nightBreak = nightBreaks && hourNight;
+        if (entry.reason == null && !nightBreak) {
           horizon++;
         } else {
-          breakReason = entry.reason;
+          breakReason = entry.reason ?? "night";
           break;
         }
       }

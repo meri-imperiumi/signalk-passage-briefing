@@ -70,6 +70,12 @@ export const SIMULATION_DEFAULTS = {
   k_heel: 0.35,
   k_pitch: 0.4,
   lines_of_interest_enabled: true,
+  // Downwind-sail night policy (work doc #47 session): "break" — no
+  // downwind sail at night; dusk strikes the sail, reefable white
+  // sails carry the dark period, dawn may re-open. "continue" — night
+  // hours keep an open deployment (night flying when squall risk is
+  // low)
+  downwind_night_policy: "break",
 };
 
 /**
@@ -945,6 +951,9 @@ function runDeploymentPass(
 ) {
   const deploymentEvents = [];
   let comfortWindows = [];
+  /** Every deployment window (comfort and drive claims alike) — the
+   * suppression replay reads it, not just the comfort subset. */
+  let deploymentWindows = [];
   if (advisorSails != null && advisorSails.length > 0) {
     const advisorHours = hourly.map((row) => ({
       hourMs: Date.parse(row.timestamp),
@@ -975,12 +984,14 @@ function runDeploymentPass(
       downwindSails: advisorSails,
       watchAnchorsMs: watchBoundaries(watch, t0Ms, tEndMs),
       minWindowHours: DOWNWIND_MIN_WINDOW_HOURS,
+      nightPolicy: cfg.downwind_night_policy,
     });
     // The covering comfort window per row: the Parasailor-class
     // (comfort claim) deployment changes what the hours read — the
     // downwind sail is up, drawing, damping the motion. Stamped in
     // the comfort pass below, which always runs.
     comfortWindows = plan.filter((d) => d.claim === "comfort");
+    deploymentWindows = plan;
     // Every deployment window stamps its hours: while a downwind sail
     // is up there is no poled-out working canvas to advise about
     for (const row of hourly) {
@@ -1017,7 +1028,9 @@ function runDeploymentPass(
                 : d.breakReason === "sea state"
                   ? "sea state"
                   : d.breakReason === "night"
-                    ? "night"
+                    ? cfg.downwind_night_policy === "break"
+                      ? "nightfall"
+                      : "night"
                     : d.breakReason === "wind above envelope"
                       ? "wind building past the envelope"
                       : d.breakReason === "point of sail"
@@ -1052,6 +1065,7 @@ function runDeploymentPass(
     for (const row of hourly) {
       row.deploymentWindow = false;
     }
+    deploymentWindows = [];
   }
 
   // The comfort evaluation per row (SPEC §5.2): inside a Parasailor
@@ -1102,7 +1116,7 @@ function runDeploymentPass(
       row.parasailorRecommended = covered != null;
     }
   }
-  return { deploymentEvents, comfortWindows };
+  return { deploymentEvents, comfortWindows, windows: deploymentWindows };
 }
 
 /**
@@ -1136,6 +1150,13 @@ export function simulateRun({
   passageStartedAt = null,
   downwindSails = null,
   watch = null,
+  // The hours (rows' hoursFromNow stamps) whose matrix suggestions
+  // are suppressed: a deployment window supersedes the working
+  // canvas — while a downwind sail flies the plan does not re-rig it
+  // (work doc #47 session: one rig at a time — downwind sail, white
+  // sails, or no sails and motoring). Only the canvas-down suggestion
+  // still fires; the window's own take-down is that rig change.
+  suppressedSuggestionHours = null,
 }) {
   const cfg = { ...SIMULATION_DEFAULTS, ...config };
   const pf = parsePerformanceFactor(performanceFactor);
@@ -1310,6 +1331,15 @@ export function simulateRun({
         night,
       );
       const suggestedState = suggested?.preferredSailState ?? null;
+      // Deployment supersession (work doc #47 session): while a
+      // downwind sail flies, the matrix does not re-rig the working
+      // canvas — one rig at a time. Only the canvas-down suggestion
+      // still fires (the wind leaving the sail), so the window's own
+      // take-down is the rig change that ends it. The hour stamp
+      // matches the rows' hoursFromNow the suppression set carries.
+      const suppressWorkingCanvas =
+        suppressedSuggestionHours?.has(Math.round(hours * 10) / 10) === true &&
+        suggestedState !== "NO_SAILS";
       // Canvas-off guard (work doc #26): a NO_SAILS suggestion is a
       // two-regime decision — apparent wind below the fill floor
       // (slatting) or at the survival top. The boat still carries
@@ -1329,7 +1359,8 @@ export function simulateRun({
       if (
         suggestedState != null &&
         suggestedState !== sailState &&
-        noSailsJustified
+        noSailsJustified &&
+        !suppressWorkingCanvas
       ) {
         if (
           sailState == null ||
@@ -1920,6 +1951,7 @@ export function simulatePassage({
   // The energy series rides the briefing payload (work doc #10); the
   // explicit param wins when a caller feeds a different series
   energyHourly = energyHourly ?? payload?.energyHourly ?? null;
+  const simCfg = { ...SIMULATION_DEFAULTS, ...config };
   const runs = ETA_FACTORS.map((twsFactor) =>
     simulateRun({
       payload,
@@ -1935,14 +1967,76 @@ export function simulatePassage({
     }),
   );
   const base = runs.find((r) => r !== null);
-  const nominal = runs[ETA_FACTORS.indexOf(1.0)] ?? base;
+  const nominalIndex = ETA_FACTORS.indexOf(1.0);
+  let nominal = runs[nominalIndex] ?? base;
+
+  // Deployment supersession (work doc #47 session): the deployment
+  // windows need the whole timeline, so the nominal run replays — the
+  // advisor probes the raw trajectory, the run replays with the
+  // covered hours' working-canvas suggestions suppressed, and the
+  // Parasailor stays up through the dusk the matrix would otherwise
+  // have re-rigged. One rig at a time: downwind sail, white sails, or
+  // no sails and motoring. The trajectory is rig-independent (the
+  // polar does not take the rig, and canvas-down hours still fire),
+  // so one probe and one replay are exact.
+  const replaySails = Array.isArray(simCfg.downwindSails)
+    ? simCfg.downwindSails
+    : null;
+  if (nominal != null && replaySails != null && replaySails.length > 0) {
+    const probe = runDeploymentPass(nominal.hourly, {
+      advisorSails: replaySails,
+      t0Ms: Date.parse(startTime.toISOString()),
+      tEndMs:
+        (nominal.hourly ?? []).length > 0
+          ? Date.parse(nominal.hourly.at(-1).timestamp) + 3600000
+          : Date.parse(startTime.toISOString()),
+      watch,
+      stormSet: new Set(
+        [
+          ...(nominal.squallHours ?? []),
+          ...(nominal.rainHours ?? []),
+          ...(nominal.upperAirAnomalies ?? []),
+        ].map((e) => e.hoursFromNow),
+      ),
+      cfg: simCfg,
+    });
+    const suppressedSuggestionHours = new Set();
+    for (const window of probe.windows ?? []) {
+      for (const row of nominal.hourly ?? []) {
+        const ms = Date.parse(row.timestamp);
+        if (ms >= window.startMs && ms <= window.untilMs) {
+          suppressedSuggestionHours.add(row.hoursFromNow);
+        }
+      }
+    }
+    if (suppressedSuggestionHours.size > 0) {
+      const replay = simulateRun({
+        payload,
+        config,
+        matrix,
+        polar,
+        performanceFactor,
+        notes,
+        startTime,
+        twsFactor: 1.0,
+        passageStartedAt,
+        watch,
+        suppressedSuggestionHours,
+      });
+      if (replay != null) {
+        nominal = replay;
+        if (nominalIndex >= 0) {
+          runs[nominalIndex] = replay;
+        }
+      }
+    }
+  }
 
   // Lines of interest (work doc #1): wind-independent, so computed
   // once for the passage rather than per perturbed run — along the
   // simulated track, whose timestamps are the boat's schedule (the
   // payload waypoints' forecasts all start at the fetch window, which
   // would put every crossing at "now")
-  const simCfg = { ...SIMULATION_DEFAULTS, ...config };
   const linesOfInterest = simCfg.lines_of_interest_enabled
     ? detectLineCrossings(nominal.hourly ?? [])
     : [];
@@ -1998,9 +2092,13 @@ export function simulatePassage({
   // where the plan actually changes it: canvas down at the engine,
   // and the Parasailor down at every anchored rig change — one rig
   // state per hour (downwind sail, white sails, or no sails).
+  // Real rig changes only: announcements of a rig already carried
+  // (the passage's initial rig, previousSailState null) are not
+  // changes — the sail was up since its raw hour, and its twilight
+  // announcement must not strike a flying Parasailor
   const rigChangedHours = new Set(
     (sailPlan ?? [])
-      .filter((event) => !event.maneuver)
+      .filter((event) => !event.maneuver && event.previousSailState != null)
       .map(
         (event) =>
           (nominal.hourly ?? []).find(
