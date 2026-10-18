@@ -499,6 +499,135 @@ describe("plugin", () => {
     plugin.stop();
   });
 
+  test("GRIB cycle time: schedules a catch-up refresh when the next run publishes", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const RAD = Math.PI / 180;
+    const step = (hours) => ({
+      date: new Date(
+        Date.parse("2026-10-17T12:00:00.000Z") + hours * 3600000,
+      ).toISOString(),
+      type: "point",
+      description:
+        "ECMWF IFS 0.25° open data, cycle 2026-10-17T12:00:00.000Z, +" +
+        hours +
+        " h",
+      wind: { speedTrue: 5.14, directionTrue: 45 * RAD, gust: 7.7 },
+      outside: { pressure: 101300, cloudCover: 0.6 },
+      water: {
+        waveSignificantHeight: 1,
+        wavePeriod: 6,
+        waveDirection: 160 * RAD,
+      },
+    });
+    const app = createMockApp();
+    app.getSelfPath = (path) =>
+      path === "navigation.position"
+        ? { latitude: -21.1, longitude: -175.2 }
+        : null;
+    app.weatherApi = {
+      getForecasts: async () => [0, 3, 6, 9].map(step),
+    };
+
+    // Capture the run-refresh timer without breaking the plugin's own
+    // timers: scheduler-scale delays (minutes to hours — the test
+    // clock may sit anywhere inside the cycle) are captured, short
+    // ones pass through, and every handle is cleared in the finally
+    const scheduled = [];
+    const pendingTimers = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = (fn, delay, ...rest) => {
+      const handle = originalSetTimeout(fn, delay, ...rest);
+      pendingTimers.push(handle);
+      if (delay > 5 * 60000 && delay < 24 * 3600000) {
+        scheduled.push({ fn, delay, handle });
+      }
+      return handle;
+    };
+
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+    // Boot scheduling from the empty cache: nothing to anchor yet
+    assert.equal(scheduled.length, 0);
+
+    const feed = app.getDeltaHandlers()[0];
+    const call = async (path, req = { query: {} }) => {
+      const route = app.getRoutes().find((r) => r.path === path);
+      const res = {
+        code: null,
+        payload: null,
+        status(code) {
+          this.code = code;
+          return this;
+        },
+        json(payload) {
+          this.payload = payload;
+        },
+      };
+      await route.handler(req, res);
+      return res;
+    };
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "online" }] },
+      ],
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url);
+      if (u.includes("/signalk/v2/api/weather/")) {
+        // Never answered: the in-process path serves this compile —
+        // the stub proves the Open-Meteo fallback is NOT what ran
+        throw new Error("unexpected Open-Meteo call");
+      }
+      return mockOpenMeteo()(url, opts);
+    };
+    try {
+      await call("/api/briefing/refresh");
+      const res = await call("/api/briefing");
+      assert.equal(res.payload.payload.metadata.source, "weather-api");
+      assert.equal(
+        res.payload.payload.metadata.cycleTime,
+        "2026-10-17T12:00:00.000Z",
+      );
+
+      // The catch-up refresh is scheduled at the next cycle's
+      // publication: cycle + 12 h 15 m from the wall clock
+      assert.ok(scheduled.length >= 1, "a run-refresh timer was scheduled");
+      const expected =
+        Date.parse("2026-10-17T12:00:00.000Z") + 12.25 * 3600000 - Date.now();
+      const dueIn = scheduled.at(-1).delay;
+      assert.ok(
+        Math.abs(dueIn - expected) < 60000,
+        `delay ${dueIn} ms ≈ next publication in ${Math.round(expected / 60000)} min`,
+      );
+
+      // Firing the timer runs the here refresh against the same
+      // provider data: the compile re-runs (bulletin and synoptic
+      // fetches still fail against the bare fetch stub — only the
+      // weather read is proven here)
+      const cachedAtBefore = res.payload.cachedAt;
+      await scheduled.at(-1).fn();
+      assert.ok(
+        !app.getErrors().some((e) => /Weather API|weather-api/i.test(e)),
+        "the scheduled refresh compiled without a weather-api failure",
+      );
+      const refreshed = await call("/api/briefing");
+      assert.ok(
+        refreshed.payload.cachedAt !== cachedAtBefore,
+        "the scheduled refresh recompiled the here payload",
+      );
+    } finally {
+      for (const handle of pendingTimers) {
+        originalSetTimeout.clearTimeout?.(handle) ?? clearTimeout(handle);
+      }
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.fetch = originalFetch;
+      plugin.stop();
+    }
+  });
+
   test("ignores unrelated paths and unexpected values", () => {
     const app = createMockApp();
     const plugin = pluginFactory(app);

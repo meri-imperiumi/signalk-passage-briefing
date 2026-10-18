@@ -5,6 +5,7 @@ const {
   buildApiPayload,
   createWeatherApiFetcher,
   createWeatherFetcher,
+  modelCycleTime,
   modelLabel,
   weatherDataToTimeStep,
 } = require("../plugin/weather-source.js");
@@ -139,6 +140,27 @@ describe("modelLabel", () => {
   });
 });
 
+describe("modelCycleTime", () => {
+  test("extracts the decoded run's cycle from the step description", () => {
+    assert.equal(
+      modelCycleTime([weatherDataEntry()]),
+      "2026-10-03T00:00:00.000Z",
+    );
+    // Millisecond-precision wording degrades fine
+    assert.equal(
+      modelCycleTime([
+        weatherDataEntry({
+          description:
+            "ECMWF IFS 0.25° open data, cycle 2026-10-17T12:00:00.000Z, valid 2026-10-17T21:00:00.000Z",
+        }),
+      ]),
+      "2026-10-17T12:00:00.000Z",
+    );
+    assert.equal(modelCycleTime([{ date: "2026-10-03T12:00:00Z" }]), null);
+    assert.equal(modelCycleTime([]), null);
+  });
+});
+
 describe("buildApiPayload", () => {
   test("assembles the UnifiedWeatherPayload", () => {
     const waypoints = [
@@ -154,6 +176,9 @@ describe("buildApiPayload", () => {
     assert.deepEqual(payload.metadata.models, [
       "weather-api:ECMWF IFS 0.25° open data",
     ]);
+    // The decoded run's cycle instant rides the metadata — the
+    // run-refresh scheduler anchors to it (work doc #47 session)
+    assert.equal(payload.metadata.cycleTime, "2026-10-03T00:00:00.000Z");
     // Provenance (work doc #31): label-only — the provider publishes
     // no human page per point; the viewer link attaches at compile
     assert.equal(payload.metadata.provenance.kind, "forecast");

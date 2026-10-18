@@ -160,6 +160,28 @@ function modelLabel(items) {
 }
 
 /**
+ * The decoded run's cycle instant, from the provider's step
+ * descriptions ("… cycle 2026-10-17T12:00:00.000Z, valid …") — the
+ * freshness anchor the run-refresh scheduling reads (work doc #47
+ * session: a briefing compiled minutes before the next GRIB cycle
+ * decoded should say so, and recompile when the newer run lands).
+ * Null when the wording carries no cycle.
+ *
+ * @param {object[]} items - WeatherData entries
+ * @returns {string|null} ISO instant of the decoded run's cycle
+ */
+function modelCycleTime(items) {
+  const description = items.find(
+    (i) => typeof i?.description === "string",
+  )?.description;
+  const match = description?.match(
+    /cycle (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)/,
+  );
+  const ms = match ? Date.parse(match[1]) : NaN;
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+/**
  * Builds the UnifiedWeatherPayload from Weather API point forecasts
  * for each waypoint (SPEC §3.1).
  *
@@ -170,10 +192,12 @@ function modelLabel(items) {
  */
 function buildApiPayload(waypoints, forecastsByWaypoint) {
   let models = null;
+  let cycleTime = null;
   const payloadWaypoints = waypoints.map((waypoint) => {
     const items = forecastsByWaypoint.get(`${waypoint.lat},${waypoint.lon}`);
     if (models === null && items?.length > 0) {
       models = modelLabel(items);
+      cycleTime = modelCycleTime(items);
     }
     return {
       lat: waypoint.lat,
@@ -189,6 +213,9 @@ function buildApiPayload(waypoints, forecastsByWaypoint) {
       fetchedAt,
       source: "weather-api",
       models: [models ?? "weather-api"],
+      // The decoded GRIB run's cycle instant, when the provider's
+      // wording carries it — the run-refresh scheduler anchors to it
+      cycleTime,
       // Where this forecast came from (work doc #31): the provider
       // publishes no human-readable page per point, so the record
       // stays label-only — the on-board viewer link (weather-map
@@ -330,5 +357,6 @@ module.exports = {
   createWeatherFetcher,
   weatherDataToTimeStep,
   modelLabel,
+  modelCycleTime,
   buildApiPayload,
 };

@@ -1344,10 +1344,68 @@ module.exports = (app) => {
       payload.comfortTier,
       "here",
     );
+    // A newer GRIB cycle may publish after this compile: schedule the
+    // catch-up refresh (work doc #47 session)
+    scheduleRunRefresh({ kind: "here" }, payload.metadata.cycleTime);
     return { cachedAt: payload.metadata.fetchedAt };
   }
 
   let modelsPromise = null;
+
+  // Run-refresh scheduling (work doc #47 session): GRIB-based weather
+  // providers publish on a cycle cadence — ECMWF IFS open data lands
+  // four runs a day, each roughly six hours after its cycle time. A
+  // briefing compiled minutes before the next run decoded (the
+  // Tonga→Opua outlook of 2026-10-17: compiled 21:16 UTC, the 12z run
+  // decoded shortly after, and the served outlook stayed a full cycle
+  // behind Windy) should say so and recompile when the newer run is
+  // available. The delay anchors to the decoded run's cycle instant:
+  // the next cycle publishes ≈ cycle + 12 h 15 m (the 6 h cadence
+  // plus the ≈6 h publication lag). Open-Meteo-style continuous
+  // sources carry no cycle time and never schedule.
+  const RUN_REFRESH_DELAY_MS = 12.25 * 3600000;
+  let runRefreshTimer = null;
+  /**
+   * Schedules one catch-up refresh for the scope whose payload was
+   * just compiled, when that payload carries a GRIB cycle time and
+   * the next run's publication is still ahead. Offline at fire time
+   * skids to the next cron window — the online gating stays with the
+   * state machine.
+   *
+   * @param {{kind: "here"}|{kind: "route", routeId: string,
+   *   days: number}} scope - What to recompile
+   * @param {string|null} cycleTime - The payload's cycle instant
+   * @returns {void}
+   */
+  function scheduleRunRefresh(scope, cycleTime) {
+    if (runRefreshTimer) {
+      clearTimeout(runRefreshTimer);
+      runRefreshTimer = null;
+    }
+    const cycleMs = Date.parse(cycleTime ?? "");
+    if (!Number.isFinite(cycleMs)) {
+      return;
+    }
+    const delay = cycleMs + RUN_REFRESH_DELAY_MS - Date.now();
+    if (delay <= 0) {
+      return; // The next cycle should already be on disk
+    }
+    runRefreshTimer = setTimeout(async () => {
+      runRefreshTimer = null;
+      if (observations[INTERNET_STATE_PATH] === "offline") {
+        return;
+      }
+      try {
+        if (scope.kind === "route") {
+          await refreshBriefing(scope.routeId, scope.days);
+        } else {
+          await refreshHereQueued();
+        }
+      } catch (error) {
+        app.error(`Run refresh failed (${scope.kind}): ${error.message}`);
+      }
+    }, delay);
+  }
 
   /**
    * Current comfort tier for the tile (work doc #8): computed with
@@ -1568,6 +1626,12 @@ module.exports = (app) => {
     await writeFile(
       join(app.getDataDirPath(), "weather", "last-route"),
       routeId,
+    );
+    // A newer GRIB cycle may publish after this compile: schedule the
+    // catch-up refresh for this route (work doc #47 session)
+    scheduleRunRefresh(
+      { kind: "route", routeId, days: forecastDays },
+      payload.metadata.cycleTime,
     );
     // Tile freshness (work doc #8): route name when resolvable
     let routeName = routeId;
@@ -2650,6 +2714,21 @@ module.exports = (app) => {
           weatherSource: "open-meteo",
         });
       }
+      // Boot scheduling (work doc #47 session): the cached here
+      // payload's GRIB cycle anchors a catch-up refresh for runs that
+      // published after the last compile; route compiles schedule
+      // their own
+      void (async () => {
+        try {
+          const cached = await loadHere();
+          scheduleRunRefresh(
+            { kind: "here" },
+            cached?.payload?.metadata?.cycleTime,
+          );
+        } catch (_error) {
+          // No cached here payload yet: the first compile schedules
+        }
+      })();
       bulletinStations = Array.isArray(config.bulletin_stations)
         ? config.bulletin_stations.filter(
             (station) =>
@@ -2802,6 +2881,14 @@ module.exports = (app) => {
       if (cronTimer) {
         clearInterval(cronTimer);
         cronTimer = null;
+      }
+      // The run-refresh timer keeps the event loop alive for up to
+      // half a day — a stopped plugin must not hold the server, and a
+      // pending fire must not touch the closed data dir (work doc #47
+      // session)
+      if (runRefreshTimer) {
+        clearTimeout(runRefreshTimer);
+        runRefreshTimer = null;
       }
       if (teardownNotesProvider) {
         teardownNotesProvider();
