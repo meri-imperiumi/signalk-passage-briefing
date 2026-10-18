@@ -20,16 +20,13 @@ test("map model", async (t) => {
   const {
     blockShape,
     blockShapes,
-    capShape,
     corridorRing,
-    fitPoints,
     frameBounds,
-    hazardPin,
     isSevereText,
-    stormMarker,
+    notePins,
+    regionShapes,
     trackLine,
     unwrapFrame,
-    vesselFitBounds,
   } = await import("../public/components/map-model.mjs");
 
   await t.test("unwrapFrame keeps dateline-crossing shapes contiguous", () => {
@@ -186,44 +183,133 @@ test("map model", async (t) => {
     assert.deepEqual(trackLine(null), []);
   });
 
-  await t.test("capShape normalizes polygons and zero-radius boxes", () => {
-    // The frame anchors on the first point: 178E after -178W reads
-    // as -182, the short hop across the seam
-    assert.deepEqual(
-      capShape({
-        headline: "Gale for Fiji waters",
-        severity: "Severe",
-        geometry: {
-          type: "polygon",
-          coordinates: [
-            [-178, -17],
-            [178, -19],
-            [177, -22],
-          ],
+  await t.test(
+    "regionShapes maps published regions into the map's frame",
+    () => {
+      // Ours: provenance properties carry the honesty cues; severity
+      // re-derives from the description text
+      const ours = regionShapes({
+        "metarea-area-abc": {
+          name: "GALE WARNING",
+          description:
+            "IN THE AREA SOUTH OF 10S AND WEST OF 169W, EXPECT SOUTHEAST WINDS 25 TO 30 KNOTS. ROUGH TO VERY ROUGH SEAS.",
+          feature: {
+            geometry: {
+              type: "Polygon",
+              coordinates: [
+                [-180, -30],
+                [-180, -10],
+                [-169, -10],
+                [-169, -30],
+                [-180, -30],
+              ],
+            },
+            properties: {
+              sourcePlugin: "signalk-passage-briefing",
+              geometryType: "bbox",
+            },
+          },
         },
-      }),
-      {
-        kind: "polygon",
-        points: [
-          [-178, -17],
-          [-182, -19],
-          [-183, -22],
-        ],
-        label: "Gale for Fiji waters",
-        severity: "severe",
+      });
+      assert.equal(ours.length, 1);
+      assert.equal(ours[0].id, "metarea-area-abc");
+      assert.equal(ours[0].severe, true);
+      assert.equal(ours[0].dashed, true);
+      assert.equal(ours[0].ours, true);
+      assert.equal(ours[0].rings.length, 1);
+
+      // Third-party: no provenance, no dashes, no console click-through
+      const third = regionShapes({
+        "urn:uuid:1234": {
+          name: "Anchorage",
+          description: "Popular overnight anchorage.",
+          feature: {
+            geometry: {
+              type: "Polygon",
+              coordinates: [
+                [0, 0],
+                [0, 1],
+                [1, 1],
+                [0, 0],
+              ],
+            },
+          },
+        },
+      });
+      assert.equal(third[0].ours, false);
+      assert.equal(third[0].dashed, false);
+      assert.equal(third[0].severe, false);
+
+      // MultiPolygon: one spec, one ring per polygon part
+      const multi = regionShapes({
+        "cap-area-x": {
+          feature: {
+            geometry: {
+              type: "MultiPolygon",
+              coordinates: [
+                [
+                  [
+                    [178, -20],
+                    [180, -20],
+                    [180, -22],
+                    [178, -20],
+                  ],
+                ],
+                [
+                  [
+                    [-180, -20],
+                    [-178, -20],
+                    [-178, -22],
+                    [-180, -20],
+                  ],
+                ],
+              ],
+            },
+          },
+        },
+      });
+      assert.equal(multi[0].rings.length, 2);
+
+      // Geometry-less entries draw nothing
+      assert.deepEqual(regionShapes({ broken: { feature: {} } }), []);
+    },
+  );
+
+  await t.test("notePins: paired notes hide under their region's shape", () => {
+    const notes = {
+      "hazard-abc": {
+        title: "TC ONE-26",
+        description: "Tropical cyclone forecast to pass near the route.",
+        position: { latitude: -12.1, longitude: -163 },
+        properties: { sourcePlugin: "signalk-passage-briefing" },
+        url: "https://www.gdacs.org/x",
       },
-    );
+      "metarea-def": {
+        title: "GALE WARNING",
+        description: "GALE WARNING.",
+        position: { latitude: -20, longitude: -174 },
+        href: "/resources/regions/metarea-area-def",
+        properties: { sourcePlugin: "signalk-passage-briefing" },
+      },
+      placementless: {
+        title: "no position",
+        description: "...",
+      },
+    };
+    // Without its region drawn, the paired note shows as the marker
+    const alone = notePins(notes, new Set(), null);
+    assert.equal(alone.length, 2);
+    const gale = alone.find((pin) => pin.id === "metarea-def");
+    assert.deepEqual({ lon: gale.lon, lat: gale.lat }, { lon: -174, lat: -20 });
+    assert.equal(gale.severe, true);
+
+    // With the region drawn, the paired note stays hidden — the
+    // polygon is the extent, the marker would render twice
+    const paired = notePins(notes, new Set(["metarea-area-def"]), null);
     assert.deepEqual(
-      capShape({
-        event: "Tsunami",
-        geometry: {
-          type: "bbox",
-          coordinates: [-179.01, -18.01, -178.99, -17.99],
-        },
-      })?.kind,
-      "bbox",
+      paired.map((pin) => pin.id),
+      ["hazard-abc"],
     );
-    assert.equal(capShape({ headline: "no area" }), null);
   });
 
   await t.test("dashed bbox blocks carry their tooltip label", () => {
@@ -245,39 +331,6 @@ test("map model", async (t) => {
       shape.label,
       "IN THE AREA SOUTH OF 22S AND WEST OF 175E, EXPECT MODERATE SOUTHERLY",
     );
-  });
-
-  await t.test("hazardPin keeps only placeable events", () => {
-    assert.deepEqual(
-      hazardPin({
-        lat: -12.1,
-        lon: -163,
-        alertLevel: "Orange",
-        title: "TC ONE-26",
-        link: "https://www.gdacs.org/x",
-      }),
-      {
-        lon: -163,
-        lat: -12.1,
-        level: "orange",
-        label: "TC ONE-26",
-        url: "https://www.gdacs.org/x",
-      },
-    );
-    assert.equal(hazardPin({ lat: NaN, lon: 170 }), null);
-  });
-
-  await t.test("stormMarker names the system at its analysed position", () => {
-    const marker = stormMarker({
-      text: "PART 1 : WARNING STORM WARNING 012 ISSUED FROM RSMC NADI Oct 161926\n\nTROPICAL CYCLONE WATI CENTRE 994HPA CATEGORY 1 WAS LOCATED NEAR 12.1S 163.0W",
-      geometry: { type: "point", coordinates: [-163, -12.1] },
-    });
-    assert.deepEqual(
-      { lon: marker.lon, lat: marker.lat },
-      { lon: -163, lat: -12.1 },
-    );
-    assert.match(marker.label, /Tropical cyclone WATI/i);
-    assert.equal(stormMarker({ geometry: null }), null);
   });
 });
 

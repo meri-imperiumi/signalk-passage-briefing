@@ -53,6 +53,11 @@ function parsePosition(position) {
  * @returns {boolean} whether the note matches
  */
 function matchesQuery(note, params) {
+  // Related-resource listing (e.g. a region panel asking for the
+  // notes anchored to it): an href query is an exact match
+  if (params.href != null && note.href !== params.href) {
+    return false;
+  }
   if (params.distance != null || params.position != null) {
     const ref = parsePosition(params.position);
     if (!ref || !note.position) {
@@ -149,13 +154,18 @@ class NotesStore {
     await this.save();
   }
 
-  /** Keeps only the given ids (publisher expiry: warnings that
-   * dropped out of the filtered set leave the store). */
-  async prune(keepIds) {
+  /** Scoped expiry: keeps the given ids, drops only ids carrying the
+   * given prefix (this feed's notes) — other feeds' notes and notes
+   * written by other clients are untouched.
+   *
+   * @param {string[]} keepIds
+   * @param {string} prefix - the feed's id prefix, e.g. "metarea-"
+   */
+  async prune(keepIds, prefix) {
     await this.load();
     const keep = new Set(keepIds);
     for (const id of Object.keys(this.notes)) {
-      if (!keep.has(id)) {
+      if (id.startsWith(prefix) && !keep.has(id)) {
         delete this.notes[id];
       }
     }

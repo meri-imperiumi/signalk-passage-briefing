@@ -1605,12 +1605,14 @@ describe("plugin", () => {
     });
 
     // Providers + asset mount registered: the plotter-extension
-    // manifest, the Status Tiles example set, and the notes store
+    // manifest, the Status Tiles example set, the notes store and the
+    // regions store (work doc #48)
     const providers = app.getResourceProviders();
-    assert.equal(providers.length, 3);
+    assert.equal(providers.length, 4);
     assert.deepEqual(providers.map((p) => p.type).sort(), [
       "notes",
       "plotterExtensions",
+      "regions",
       "statusTileExamples",
     ]);
     assert.equal(

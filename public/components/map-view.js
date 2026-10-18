@@ -18,10 +18,14 @@
  *   self-hosted setups.
  *
  * Data arrives via `setBulletin()` / `setPayload()` from the screen
- * elements — the same shapes the console renders as text. Clicking a
- * shape calls `onBlockSelect(blockIndex)` so the console can
- * highlight its text card; the text stays authoritative, the map
- * shows where.
+ * elements. The warning shapes themselves are the published resources
+ * (work doc #48): the map consumes `/signalk/v2/api/resources/notes`
+ * and `/resources/regions` — our own warnings ride the same notes and
+ * regions other plotters see, and any third-party resource provider's
+ * notes and regions draw here for free. Clicking our own shape calls
+ * `onBlockSelect(blockIndex)` so the console can highlight its text
+ * card (matched by the note/region description, which is the block's
+ * text); the text stays authoritative, the map shows where.
  *
  * @file components/map-view.js
  */
@@ -30,20 +34,19 @@
 
 import {
   blockShapes,
-  capShape,
   chartAssetsFromManifest,
   eventPins,
   fitPoints,
   frameBounds,
-  hazardPin,
   isVectorChart,
   maplibreStyleFor,
+  notePins,
   OSM_LAYER,
   parseChartLayers,
+  regionShapes,
   ribbonSegments,
   routeRibbon,
   stormGraphic,
-  stormMarker,
   stormRingColor,
   vesselFitBounds,
 } from "./map-model.mjs";
@@ -64,9 +67,10 @@ class PbMapView extends HTMLElement {
     this._vessel = null;
     this._ribbonRows = [];
     this._events = [];
-    this._shapes = [];
-    this._pins = [];
-    this._caps = [];
+    this._resourceRegions = {};
+    this._resourceNotes = {};
+    this._regions = [];
+    this._noteMarkers = [];
     this._ribbon = [];
     this._eventPins = [];
     this._eventMarkers = new Map();
@@ -324,6 +328,7 @@ class PbMapView extends HTMLElement {
         this._fit();
       });
     this._render();
+    this._loadResources();
   }
 
   /**
@@ -382,9 +387,11 @@ class PbMapView extends HTMLElement {
   }
 
   /**
-   * Bulletin console data (same object the console text renders):
-   * block geometry draws as shapes, block indices key the
-   * click-through.
+   * Bulletin console data: block geometry keys the storm graphics and
+   * the console click-through. The shapes themselves draw from the
+   * published resources (work doc #48), so a bulletin change also
+   * re-fetches them — the publish pass that produced this bulletin
+   * may have refreshed the notes and regions.
    *
    * @param {{blocks?: Array<object>}|null} bulletin
    */
@@ -392,6 +399,36 @@ class PbMapView extends HTMLElement {
     this._blocks = bulletin?.blocks ?? [];
     this._render();
     this._fit();
+    this._loadResources();
+  }
+
+  /**
+   * Fetches the published resources once per bulletin: the notes and
+   * regions the plugin (and any other provider) publishes. A failed
+   * request keeps whatever was drawn before — a stale warning shape
+   * beats no warning shape.
+   */
+  async _loadResources() {
+    try {
+      const [regions, notes] = await Promise.all([
+        fetch("/signalk/v2/api/resources/regions")
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
+        fetch("/signalk/v2/api/resources/notes")
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
+      ]);
+      if (regions) {
+        this._resourceRegions = regions;
+      }
+      if (notes) {
+        this._resourceNotes = notes;
+      }
+      this._render();
+      this._fit();
+    } catch (error) {
+      console.warn("pb-map-view: resource fetch failed", error);
+    }
   }
 
   /**
@@ -565,13 +602,18 @@ class PbMapView extends HTMLElement {
             referenceLon,
           )
         : ribbonSegments(this._ribbonRows ?? [], referenceLon);
-    this._shapes = blockShapes(this._blocks, referenceLon);
-    this._caps = (this._payload?.capAlerts ?? [])
-      .map((alert) => capShape(alert, referenceLon))
-      .filter(Boolean);
-    this._pins = (this._payload?.hazardEvents ?? [])
-      .map((event) => hazardPin(event, referenceLon))
-      .filter(Boolean);
+    this._regions = regionShapes(this._resourceRegions, referenceLon);
+    this._noteMarkers = notePins(
+      this._resourceNotes,
+      new Set(this._regions.map((region) => region.id)),
+      referenceLon,
+    );
+    // The console click-through matches on the block's text — the
+    // note/region description IS that text (they are published from
+    // the same filtered blocks)
+    this._consoleIndex = new Map(
+      (this._blocks ?? []).map((block, index) => [block.text, index]),
+    );
     this._ribbon = ribbonSegments(this._ribbonRows ?? [], referenceLon);
     this._eventPins = eventPins(this._events ?? [], referenceLon);
     this._storms = (this._blocks ?? [])
@@ -633,85 +675,48 @@ class PbMapView extends HTMLElement {
         },
       ).addTo(this._overlayGroup);
     }
-    for (const shape of this._shapes) {
-      if (
-        shape.kind === "point" &&
-        this._storms?.some((storm) => storm.index === shape.index)
-      ) {
-        continue; // Advisory storm: the graphic below covers it
-      }
-      if (shape.kind === "point") {
-        const marker = stormMarker({
-          text: this._blocks[shape.index]?.text ?? "",
-          geometry: { type: "point", coordinates: shape.points[0] },
-        });
-        L.circleMarker([shape.points[0][1], shape.points[0][0]], {
-          radius: 7,
-          color: shape.severe ? "#ff5c5c" : "#ffb45c",
-          fillColor: shape.severe ? "#ff5c5c" : "#ffb45c",
-          fillOpacity: 0.9,
-          weight: 2,
-        })
-          .bindTooltip(marker?.label ?? "storm")
-          .on("click", () => this._select(shape.index))
+    // The published warning shapes (work doc #48): regions first —
+    // gale areas, corridor bands, CAP polygons, storm quadrant rings —
+    // colored by the severity the console's own highlighter derives
+    // from the warning text; ours and third-party ones share the
+    // visual language. The dashed bbox honesty cue and the console
+    // click-through stay ours-only (properties they carry).
+    for (const region of this._regions) {
+      for (const ring of region.rings) {
+        L.polygon(
+          ring.map(([lon, lat]) => [lat, lon]),
+          {
+            color: region.severe ? "#ff5c5c" : "#ffb45c",
+            weight: region.severe ? 2 : 1.5,
+            dashArray: region.dashed ? "4 6" : undefined,
+            fillOpacity: 0.12,
+          },
+        )
+          .bindTooltip(region.label, { sticky: true })
+          .on("click", () => this._selectResource(region))
           .addTo(this._overlayGroup);
-        continue;
       }
-      const style = {
-        color: shape.severe ? "#ff5c5c" : "#ffb45c",
-        weight: shape.severe ? 2 : 1.5,
-        dashArray: shape.dashed ? "4 6" : undefined,
-        fillOpacity: 0.12,
-      };
-      const layer =
-        shape.kind === "line"
-          ? L.polyline(
-              shape.points.map(([lon, lat]) => [lat, lon]),
-              style,
-            )
-          : L.polygon(
-              shape.points.map(([lon, lat]) => [lat, lon]),
-              style,
-            );
-      if (shape.label) {
-        // Sticky: the tooltip opens at the pointer (or the tap) — a
-        // hemisphere-sized warning area's own anchor sits far outside
-        // the viewport, and a centroid-anchored tooltip would open
-        // where nobody is looking
-        layer.bindTooltip(shape.label, { sticky: true });
+    }
+    // The point-anchored notes on top: GDACS hazards, storm
+    // declarations, region-less warnings. A note whose region draws
+    // stays hidden (the href pairing — no double render); an advisory
+    // storm's note yields to the graphic below, which covers it
+    const stormTexts = new Set(
+      (this._storms ?? []).map((storm) => this._blocks[storm.index]?.text),
+    );
+    for (const pin of this._noteMarkers) {
+      if (pin.ours && stormTexts.has(pin.description)) {
+        continue; // The cyclone graphic below covers this block
       }
-      layer
-        .on("click", () => this._select(shape.index))
-        .addTo(this._overlayGroup);
-    }
-    for (const cap of this._caps) {
-      const style = {
-        color: cap.severity === "extreme" ? "#ff5c5c" : "#ffb45c",
-        weight: 2,
-        dashArray: cap.kind === "bbox" ? "4 6" : undefined,
-        fillOpacity: 0.08,
-      };
-      const layer =
-        cap.kind === "bbox"
-          ? L.polygon(
-              cap.points.map(([lon, lat]) => [lat, lon]),
-              style,
-            )
-          : L.polygon(
-              cap.points.map(([lon, lat]) => [lat, lon]),
-              style,
-            );
-      layer.bindTooltip(cap.label, { sticky: true }).addTo(this._overlayGroup);
-    }
-    for (const pin of this._pins) {
       L.circleMarker([pin.lat, pin.lon], {
         radius: 6,
-        color: pin.level === "red" ? "#ff5c5c" : "#ffb45c",
-        fillColor: pin.level === "red" ? "#ff5c5c" : "#ffb45c",
+        color: pin.severe ? "#ff5c5c" : "#ffb45c",
+        fillColor: pin.severe ? "#ff5c5c" : "#ffb45c",
         fillOpacity: 0.9,
         weight: 2,
       })
-        .bindTooltip(pin.label)
+        .bindTooltip(pin.label, { sticky: true })
+        .on("click", () => this._selectResource(pin))
         .addTo(this._overlayGroup);
     }
     // Cyclone graphics (work doc #47 phase 3): quadrant wind/seas
@@ -800,6 +805,25 @@ class PbMapView extends HTMLElement {
   }
 
   /**
+   * Click-through for a published resource (work doc #48): only our
+   * own notes and regions name console cards, and the match is the
+   * block's text — the description the resource carries verbatim.
+   * Third-party resources have no console to scroll to; their tooltip
+   * is the whole interaction.
+   *
+   * @param {{ours: boolean, description: string}} resource
+   */
+  _selectResource(resource) {
+    if (!resource?.ours) {
+      return;
+    }
+    const index = this._consoleIndex?.get(resource.description);
+    if (index != null) {
+      this._select(index);
+    }
+  }
+
+  /**
    * One resize tick (dead-reckoning's pattern): recompute the
    * container size, then run the fit that was skipped while the
    * layout was unsettled.
@@ -832,9 +856,17 @@ class PbMapView extends HTMLElement {
       eventPins: this._eventPins ?? [],
       vessel: this._vessel,
       storms: this._storms ?? [],
-      shapes: this._shapes ?? [],
-      caps: this._caps ?? [],
-      pins: this._pins ?? [],
+      // Only our own resources drive the fit — third-party ones can
+      // sit in another ocean, and the fit stays anchored on the
+      // vessel's waters the way the wider set already does
+      resourcePoints: [
+        ...(this._regions ?? [])
+          .filter((region) => region.ours)
+          .flatMap((region) => region.rings.flat()),
+        ...(this._noteMarkers ?? [])
+          .filter((pin) => pin.ours)
+          .map((pin) => [pin.lon, pin.lat]),
+      ],
     }).filter(
       (point) => Number.isFinite(point[0]) && Number.isFinite(point[1]),
     );

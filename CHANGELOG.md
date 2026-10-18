@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- Warning shapes on the chart plotter (work doc #48): the METAREA and CAP warnings already publish as georeferenced notes, but the notes schema carries a single point — the gale area, the corridor band and the CAP polygon collapsed to their nearest-vertex marker. The plugin now registers a `regions` resource provider alongside the server's built-in one (the resources API merges providers, so user-created regions are untouched) and publishes a region beside each shaped warning's note: bounding boxes as ring polygons (antimeridian-crossing boxes split into two spec-clean rectangles), parsed polygons as-is, trough axis bands expanded into the same corridor rings the briefing map draws, and tropical-cyclone advisories as the MultiPolygon of their present wind/seas quadrant rings. Each paired note links to its region via `href` — the exact link Freeboard's region panel lists related notes by — and provenance (issuer, zone, subject, derivation) rides the feature properties. GDACS hazards stay note-only (points); axis lines without a stated band and text-only storm declarations have no area on the map either.
+- The briefing's warnings map draws the published resources (work doc #47 session): the hand-drawn warning-shapes layer — bulletin block shapes, CAP polygons, GDACS pins — is replaced by the same `/resources/notes` and `/resources/regions` the plotter sees, so the map and Freeboard render one set of warnings and any third-party resource provider's notes and regions appear for free. Severity coloring re-derives from the warning text with the console's own highlighter (ours and third-party alike); the dashed-bbox honesty cue and the console click-through stay ours-only, matched by the block text the resources carry verbatim; a note whose region draws stays hidden so a shaped warning renders once. What stays payload-driven on purpose: the route ribbon, the timeline event pins, the cyclone graphic (per-ring thresholds and the forecast track are not representable in the regions schema) and the muted wider-area set, which keeps its muting and stays off other plotters. Third-party resources never drive the fit — the view stays anchored on the vessel's waters.
+
+### Fixed
+- The METAREA notes pass pruned the whole shared notes store, erasing GDACS hazard notes, CAP notes and any client-written notes on every bulletin publish. All three feeds now prune scoped to their own id prefixes (`metarea-`, `hazard-`, `cap-`), so notes from the other feeds and notes written by other clients survive every pass.
+
 ## [0.13.0] - 2026-10-18
 
 ### Fixed

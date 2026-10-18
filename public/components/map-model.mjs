@@ -587,92 +587,105 @@ export function trackLine(waypoints, referenceLon = null) {
   );
 }
 
+/** The plugin's own provenance marker on published resources. */
+const OUR_PLUGIN = "signalk-passage-briefing";
+
 /**
- * The draw spec for one CAP alert: the authoritative native geometry
- * (polygon ring or zero-radius bbox) — unlike bulletin shapes these
- * draw solid: the sender published the area.
+ * Draw specs for the published region resources (work doc #48): the
+ * warning shapes the plugin (or any resource provider) published as
+ * native Polygon/MultiPolygon features. Severity colors re-derive
+ * from the description text with the console's own highlighter — the
+ * same visual language for our warnings and third-party ones. Our
+ * resources carry provenance in feature.properties: the dashed-bbox
+ * honesty cue rides `geometryType`, and `ours` gates the console
+ * click-through.
  *
- * @param {{event?: string, headline?: string, severity?: string,
- *   geometry?: {type: string, coordinates: number[]|number[][]}}} alert
- * @returns {{kind: string, points: number[][], label: string,
- *   severity: string}|null}
+ * @param {Object<string, object>} regions - resources/regions listing
+ * @param {number|null} referenceLon - The map's longitude frame
+ * @returns {Array<{id: string, kind: "region", rings: number[][][],
+ *   label: string, severe: boolean, dashed: boolean, ours: boolean,
+ *   description: string}>}
  */
-export function capShape(alert, referenceLon = null) {
-  const geometry = alert?.geometry;
-  if (!geometry) {
-    return null;
+export function regionShapes(regions, referenceLon = null) {
+  const specs = [];
+  for (const [id, region] of Object.entries(regions ?? {})) {
+    const geometry = region?.feature?.geometry;
+    const rings = [];
+    if (geometry?.type === "Polygon") {
+      const points = unwrapFrame(geometry.coordinates ?? [], referenceLon);
+      if (points.length > 0) {
+        rings.push(points);
+      }
+    } else if (geometry?.type === "MultiPolygon") {
+      for (const polygon of geometry.coordinates ?? []) {
+        const points = unwrapFrame(polygon?.[0] ?? [], referenceLon);
+        if (points.length > 0) {
+          rings.push(points);
+        }
+      }
+    }
+    if (rings.length === 0) {
+      continue;
+    }
+    const properties = region.feature.properties ?? {};
+    const ours = properties.sourcePlugin === OUR_PLUGIN;
+    specs.push({
+      id,
+      kind: "region",
+      rings,
+      label:
+        region.name ?? region.description?.split("\n")[0]?.slice(0, 90) ?? "",
+      severe: isSevereText(region.description),
+      dashed: ours && properties.geometryType === "bbox",
+      ours,
+      description: region.description ?? "",
+    });
   }
-  let points;
-  if (geometry.type === "bbox") {
-    const [minLon, minLat, maxLon, maxLat] = geometry.coordinates;
-    points = unwrapFrame(
-      [
-        [minLon, minLat],
-        [maxLon, minLat],
-        [maxLon, maxLat],
-        [minLon, maxLat],
-        [minLon, minLat],
-      ],
-      referenceLon,
-    );
-  } else {
-    points = unwrapFrame(geometry.coordinates ?? [], referenceLon);
-  }
-  if (points.length === 0) {
-    return null;
-  }
-  return {
-    kind: geometry.type === "bbox" ? "bbox" : "polygon",
-    points,
-    label: alert.headline ?? alert.event ?? "Official alert",
-    severity: String(alert.severity ?? "").toLowerCase(),
-  };
+  return specs;
 }
 
 /**
- * The pin for one GDACS event: a point with the alert-level color
- * the timeline uses for its severity.
+ * Marker specs for the published note resources (work doc #48): the
+ * point-anchored warnings — GDACS hazards, storm declarations, CAP
+ * centroids. A note whose region is drawn stays hidden (the href
+ * pairing), so a shaped warning does not render twice.
  *
- * @param {{lat: number, lon: number, alertLevel?: string, title?:
- *   string, link?: string|null}} event
- * @returns {{lon: number, lat: number, level: string, label: string,
- *   url: string|null}|null}
+ * @param {Object<string, object>} notes - resources/notes listing
+ * @param {Set<string>} drawnRegionIds - ids of regions on the map
+ * @param {number|null} referenceLon - The map's longitude frame
+ * @returns {Array<{id: string, kind: "note", lon: number, lat: number,
+ *   label: string, severe: boolean, ours: boolean, description: string,
+ *   url: string|null}>}
  */
-export function hazardPin(event, referenceLon = null) {
-  if (!Number.isFinite(event?.lat) || !Number.isFinite(event?.lon)) {
-    return null;
+export function notePins(notes, drawnRegionIds, referenceLon = null) {
+  const pins = [];
+  for (const [id, note] of Object.entries(notes ?? {})) {
+    const { latitude, longitude } = note?.position ?? {};
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      continue; // A placement-less note matches no near-me query
+    }
+    const href = typeof note.href === "string" ? note.href : "";
+    const regionId = href.startsWith("/resources/regions/")
+      ? href.slice("/resources/regions/".length)
+      : null;
+    if (regionId && drawnRegionIds.has(regionId)) {
+      continue; // Its region draws the extent; no second marker
+    }
+    const properties = note.properties ?? {};
+    pins.push({
+      id,
+      kind: "note",
+      lon: unwrapFrame([[longitude, latitude]], referenceLon)[0][0],
+      lat: latitude,
+      label:
+        note.title ?? note.description?.split("\n")[0]?.slice(0, 90) ?? "note",
+      severe: isSevereText(note.description),
+      ours: properties.sourcePlugin === OUR_PLUGIN,
+      description: note.description ?? "",
+      url: note.url ?? null,
+    });
   }
-  return {
-    lon: unwrapFrame([[event.lon, event.lat]], referenceLon)[0][0],
-    lat: event.lat,
-    level: String(event.alertLevel ?? "").toLowerCase(),
-    label: event.title ?? "GDACS event",
-    url: event.link ?? null,
-  };
-}
-
-/**
- * The cyclone marker spec for a storm-declaration block: the
- * analysed position plus the movement text, so the map can pin the
- * system the way the console names it.
- *
- * @param {{text: string, geometry?: {type: string, coordinates:
- *   number[]}}|null} block
- * @returns {{lon: number, lat: number, label: string}|null}
- */
-export function stormMarker(block) {
-  if (block?.geometry?.type !== "point") {
-    return null;
-  }
-  const [lon, lat] = block.geometry.coordinates;
-  const name = block.text.match(
-    /TROPICAL\s+(?:DEPRESSION|CYCLONE|STORM)\s+([A-Z0-9]+)/i,
-  );
-  return {
-    lon,
-    lat,
-    label: name ? `Tropical cyclone ${name[1]}` : block.text.slice(0, 60),
-  };
+  return pins;
 }
 
 /**
@@ -900,6 +913,11 @@ export function fitPoints(specs = {}) {
     ),
     ...(specs.caps ?? []).flatMap((cap) => cap.points),
     ...(specs.pins ?? []).map((pin) => [pin.lon, pin.lat]),
+    // Published resources (work doc #48): only our own — third-party
+    // regions and notes can sit in another ocean, and the fit stays
+    // anchored on the vessel's waters the way the wider set already
+    // does
+    ...(specs.resourcePoints ?? []),
   ];
 }
 

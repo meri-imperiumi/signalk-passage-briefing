@@ -7,6 +7,7 @@ const { readFile } = require("node:fs/promises");
 
 const cap = require("../plugin/cap-source.js");
 const { createNotesStore } = require("../plugin/notes-store.js");
+const { createRegionsStore } = require("../plugin/regions-store.js");
 const { publishCapAlertNotes } = require("../plugin/notes-publisher.js");
 
 const readFixture = (name) =>
@@ -219,6 +220,7 @@ describe("CAP source (work doc #24)", () => {
   test("notes: polygon geometry preserved, scoped prune", async () => {
     const dir = mkdtempSync(join(tmpdir(), "cap-notes-"));
     const store = createNotesStore(dir);
+    const regionsStore = createRegionsStore(dir);
     const alerts = [
       {
         id: "TSU-TEST-1|2026-10-04T03:00:00Z",
@@ -241,24 +243,54 @@ describe("CAP source (work doc #24)", () => {
         },
       },
     ];
-    const result = await publishCapAlertNotes({ store, alerts });
+    const result = await publishCapAlertNotes({ store, regionsStore, alerts });
     assert.equal(result.published.length, 1);
     const listed = await store.list();
     const note = listed[result.published[0]];
     assert.equal(note.properties.category, "cap-alert");
-    assert.equal(note.properties.area.geometry.type, "polygon");
-    // The polygon survives note publication intact
-    assert.equal(note.properties.area.geometry.coordinates.length, 5);
+    // The native polygon rides the paired region (work doc #48); the
+    // note links to it
+    assert.equal(result.regionsPublished.length, 1);
+    const rid = result.regionsPublished[0];
+    assert.ok(rid.startsWith("cap-area-"));
+    assert.equal(note.href, `/resources/regions/${rid}`);
+    const region = await regionsStore.get(rid);
+    assert.equal(region.feature.geometry.type, "Polygon");
+    assert.equal(region.feature.geometry.coordinates.length, 5);
+    assert.equal(region.feature.properties.category, "cap-alert");
     assert.ok(note.position.latitude != null);
 
-    // Alert drops out: note pruned, foreign notes untouched
+    // Alert drops out: note, region and href-linked pairing prune;
+    // foreign notes and regions untouched
     await store.set("metarea-foreign", { title: "foreign" });
-    await publishCapAlertNotes({ store, events: [], alerts: [] });
+    await regionsStore.set("metarea-area-foreign", {
+      name: "foreign",
+      feature: {
+        geometry: {
+          type: "Polygon",
+          coordinates: [
+            [
+              [0, 0],
+              [1, 0],
+              [1, 1],
+              [0, 0],
+            ],
+          ],
+        },
+      },
+    });
+    await publishCapAlertNotes({ store, regionsStore, events: [], alerts: [] });
     const after = await store.list();
+    const afterRegions = await regionsStore.list();
     assert.ok(after["metarea-foreign"], "foreign note untouched");
+    assert.ok(afterRegions["metarea-area-foreign"], "foreign region untouched");
     assert.ok(
       !Object.keys(after).some((id) => id.startsWith("cap-")),
       "stale cap notes pruned",
+    );
+    assert.ok(
+      !Object.keys(afterRegions).some((id) => id.startsWith("cap-area-")),
+      "stale cap regions pruned",
     );
   });
 

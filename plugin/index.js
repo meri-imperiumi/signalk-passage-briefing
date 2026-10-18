@@ -60,7 +60,12 @@ const { registerPlotterExtension } = require("./brief-ext.js");
 const { registerStatusTileExamples } = require("./statustilesexamples.js");
 const { createNotesStore, registerNotesProvider } = require("./notes-store.js");
 const {
+  createRegionsStore,
+  registerRegionsProvider,
+} = require("./regions-store.js");
+const {
   clearNotes,
+  clearRegions,
   publishNotes,
   publishHazardNotes,
   publishCapAlertNotes,
@@ -316,6 +321,8 @@ module.exports = (app) => {
   let teardownPlotterExt = null;
   let teardownStatusTiles = null;
   let teardownNotesProvider = null;
+  let regionsStore = null;
+  let teardownRegionsProvider = null;
   let notesStore = null;
   /** Route-list cache (bergie session perf pass): the resources
    * listing is seconds-slow per call and the list changes rarely —
@@ -956,15 +963,23 @@ module.exports = (app) => {
     }
     const result = await publishNotes({
       store: notesStore,
+      regionsStore,
       bulletin,
       zone,
       synopticChartFor: () => chart,
       ref: waypoints.length > 0 ? [waypoints[0].lon, waypoints[0].lat] : null,
     });
-    if (result.published.length > 0 || result.pruned.length > 0) {
+    if (
+      result.published.length > 0 ||
+      result.pruned.length > 0 ||
+      result.regionsPublished.length > 0 ||
+      result.regionsPruned.length > 0
+    ) {
       app.debug?.(
         `Notes ${trigger}: ${result.published.length} published, ` +
-          `${result.pruned.length} expired`,
+          `${result.pruned.length} expired, ` +
+          `${result.regionsPublished.length} regions published, ` +
+          `${result.regionsPruned.length} regions expired`,
       );
     }
   }
@@ -1187,12 +1202,20 @@ module.exports = (app) => {
     if (notesStore) {
       const result = await publishCapAlertNotes({
         store: notesStore,
+        regionsStore,
         alerts: payload.capAlerts,
       });
-      if (result.published.length > 0 || result.pruned.length > 0) {
+      if (
+        result.published.length > 0 ||
+        result.pruned.length > 0 ||
+        result.regionsPublished.length > 0 ||
+        result.regionsPruned.length > 0
+      ) {
         app.debug?.(
           `CAP notes: ${result.published.length} published, ` +
-            `${result.pruned.length} expired`,
+            `${result.pruned.length} expired, ` +
+            `${result.regionsPublished.length} regions published, ` +
+            `${result.regionsPruned.length} regions expired`,
         );
       }
     }
@@ -2796,9 +2819,10 @@ module.exports = (app) => {
       modelsPromise.catch(() => {});
 
       // Notes lifecycle (work doc #12): when publication is disabled
-      // the store clears, so chart plotters stop seeing our warnings
+      // the stores clear, so chart plotters stop seeing our warnings
       if (!publishNotesEnabled) {
         clearNotes(notesStore).catch(() => {});
+        clearRegions(regionsStore).catch(() => {});
       }
 
       app.subscriptionmanager.subscribe(
@@ -2859,11 +2883,19 @@ module.exports = (app) => {
 
       // The server has no built-in notes provider: the plugin
       // registers as the notes resource provider (work doc #12) and
-      // serves the bulletin warnings plus any client-written notes
+      // serves the bulletin warnings plus any client-written notes.
+      // Regions (work doc #48) ride beside the built-in provider: the
+      // resources API merges providers per type, so user-created
+      // regions survive untouched
       notesStore = createNotesStore(app.getDataDirPath());
       teardownNotesProvider = registerNotesProvider(app, {
         id: PLUGIN_ID,
         store: notesStore,
+      });
+      regionsStore = createRegionsStore(app.getDataDirPath());
+      teardownRegionsProvider = registerRegionsProvider(app, {
+        id: PLUGIN_ID,
+        store: regionsStore,
       });
       // Acknowledge put clears the tile's NEW badge
       if (typeof app.registerPutHandler === "function") {
@@ -2912,6 +2944,10 @@ module.exports = (app) => {
       if (teardownNotesProvider) {
         teardownNotesProvider();
         teardownNotesProvider = null;
+      }
+      if (teardownRegionsProvider) {
+        teardownRegionsProvider();
+        teardownRegionsProvider = null;
       }
       if (teardownStatusTiles) {
         teardownStatusTiles();
