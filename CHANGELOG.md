@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-18
+
 ### Fixed
 - The Parasailor window sailed straight through the plan's own rig changes: the deployment advisor computed its windows on the raw rig trajectory before twilight anchoring rewrote the rows, so a Parasailor deployed for a 53-hour window stayed "up" on the timeline through a motoring stretch and a dawn re-rig the anchored schedule had announced — its take-down landing 32 hours after the engine started. The deployment pass now re-runs on the anchored schedule: the advisor's gates gained the plan's own rig as a first-class gate (canvas down = no downwind sail flies over a motoring stretch; the anchored schedule's rig changes end the window whatever the wind says — one rig state per hour: downwind sail, white sails, or no sails and motoring), and the deployment events, comfort windows and pole advisories all read the same anchored rig the timeline announces. The take-down lands where the crew actually changes the rig — at the dawn re-rig, named for what it is.
 
