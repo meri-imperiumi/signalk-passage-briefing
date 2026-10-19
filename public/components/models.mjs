@@ -1919,7 +1919,18 @@ export function mergeTimeline(exceptions, payload = null) {
     });
   }
 
-  return items.sort((a, b) => {
+  // Nothing before the departure belongs to the passage's timeline
+  // (work doc #34 session): browsing tomorrow's departure variant must
+  // not carry today's energy surplus — payload-stamped items (energy
+  // events, hazards, sky events) convert to hours-from-departure and
+  // land negative when the departure is in the future. The departure
+  // itself sits at hour zero and stays. Timeless items (no resolvable
+  // hour) are not passage-scheduled either way and stay.
+  const upcoming = items.filter(
+    (item) => item.hoursFromNow == null || item.hoursFromNow >= 0,
+  );
+
+  return upcoming.sort((a, b) => {
     if (a.hoursFromNow == null || b.hoursFromNow == null) {
       return a.hoursFromNow == null && b.hoursFromNow == null
         ? 0

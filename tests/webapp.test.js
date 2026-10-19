@@ -1524,6 +1524,59 @@ test("webapp view models", async (t) => {
       assert.equal(timeline[1].severity, "warn");
     },
   );
+  await t.test(
+    "mergeTimeline drops entries from before the departure (work doc #34 variants)",
+    () => {
+      // Browsing tomorrow's departure variant: today's energy surplus
+      // sits before the anchor and is not a passage event
+      const timeline = mergeTimeline(
+        {
+          passageSummary: {
+            departure: {
+              assumed: true,
+              time: "2026-10-04T06:00:00.000Z",
+              reason: "next_dawn",
+            },
+          },
+        },
+        {
+          metadata: { fetchedAt: "2026-10-03T07:28:57.000Z" },
+          energyEvents: [
+            {
+              type: "surplus",
+              timestamp: "2026-10-03T20:28:57.000Z",
+              endTimestamp: "2026-10-04T01:28:57.000Z",
+              netWh: 1938,
+              status: "surplus",
+              timeToEmpty: null,
+            },
+            {
+              type: "surplus",
+              timestamp: "2026-10-04T20:28:57.000Z",
+              endTimestamp: "2026-10-05T01:28:57.000Z",
+              netWh: 1200,
+              status: "surplus",
+              timeToEmpty: null,
+            },
+          ],
+        },
+      );
+      const energy = timeline.filter((item) => item.kind === "energy");
+      assert.equal(energy.length, 1, "only the post-departure surplus");
+      assert.match(energy[0].detail, /\+1\.2 kWh/);
+      assert.ok(
+        Math.abs(energy[0].hoursFromNow - 14.5) < 0.1,
+        `surplus at +${energy[0].hoursFromNow}h`,
+      );
+      // Nothing in the merged list sits before its departure
+      assert.ok(
+        timeline.every(
+          (item) => item.hoursFromNow == null || item.hoursFromNow >= 0,
+        ),
+      );
+    },
+  );
+
   await t.test("delayed departure is a timeline event; underway is not", () => {
     const base = { fetchedAt: "2026-10-04T18:00:00.000Z" };
     // Night at the mooring: next first light tomorrow ~06:00Z
