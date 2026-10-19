@@ -45,8 +45,10 @@
     "node": ">=22.12.0"
   },
   "dependencies": {
+    "@mapbox/vector-tile": "^3.0.0",
     "@openwaters/almanac": "^0.10.0",
     "@openwaters/maritime-zones": "^0.2.1",
+    "pbf": "^5.1.2",
     "satellite.js": "^7.1.0"
   },
   "devDependencies": {

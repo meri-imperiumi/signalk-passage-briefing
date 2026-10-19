@@ -89,6 +89,11 @@ strong.sev {
           <div><div class="label">Motor hours</div><div class="value-small" id="motor">—</div></div>
           <div><div class="label">Fuel</div><div class="value-small" id="fuel">—</div></div>
         </div>
+        <!-- Landfall sightings (work doc #6): the gated episodes the
+             simulation sights on the horizon, the arrival coast
+             flagged final. Sits with the ETA card — first sight of
+             land is the arrival question. -->
+        <div id="landfall" hidden style="margin-top: 8px"></div>
         <departure-control id="departure-control"></departure-control>
       </section>
       <section class="sk-card theme-teal">
@@ -344,8 +349,43 @@ strong.sev {
     }
     this._motorEl.textContent = table.motorHours || "—";
     this._fuelEl.textContent = table.fuel || "—";
+    this._renderLandfall();
 
     this._renderTimeline();
+  }
+
+  /**
+   * Landfall sightings (work doc #6): one line per gated episode,
+   * the arrival landfall emphasized — first sight of land is the
+   * arrival question the ETA card answers.
+   */
+  _renderLandfall() {
+    const el = this.shadowRoot.getElementById("landfall");
+    if (!el) {
+      return;
+    }
+    const episodes = this._exceptions?.passageSummary?.landfalls ?? [];
+    el.innerHTML = "";
+    el.hidden = episodes.length === 0;
+    for (const episode of episodes) {
+      const line = document.createElement("div");
+      line.className = "value-small";
+      line.style.marginTop = episode.final === true ? "6px" : "2px";
+      if (episode.final === true) {
+        line.style.color = "var(--text-main, inherit)";
+      }
+      const stamp =
+        episode.timestamp != null ? fmtShip(episode.timestamp) : "—";
+      line.textContent = [
+        `${episode.final === true ? "Landfall" : "Sighting"}: ${episode.name}`,
+        `${episode.bearingTrue}° T`,
+        stamp,
+      ].join(" · ");
+      if (episode.advisory != null) {
+        line.title = episode.advisory;
+      }
+      el.appendChild(line);
+    }
   }
 
   /**

@@ -2383,6 +2383,9 @@ export function filterExceptions(simulationResult, simParams = {}) {
       zoneTransitions: simulationResult.zoneTransitions ?? [],
       // Offshore zone meridian crossing advisories (work doc #19)
       timeZoneChanges: simulationResult.timeZoneChanges ?? [],
+      // Landfall sightings along the simulated course (work doc #6):
+      // every gated episode, the arrival coast flagged `final`
+      landfalls: simulationResult.landfalls ?? [],
       // Meteor-shower nights evaluated along the simulated track
       // (work doc #37): the radiant gate is position-sensitive, so it
       // runs where the track lives — the payload's own `meteor`

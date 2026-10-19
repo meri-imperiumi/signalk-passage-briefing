@@ -1739,6 +1739,28 @@ export function mergeTimeline(exceptions, payload = null) {
     });
   }
 
+  // Landfall sightings (work doc #6): every gated episode along the
+  // course, the arrival coast flagged final — island chains ride the
+  // same list. The advisory string is the same text the served payload
+  // carries.
+  for (const e of summary.landfalls ?? []) {
+    push({
+      hoursFromNow: e.hoursFromNow ?? null,
+      timestamp: e.timestamp ?? null,
+      kind: "landfall",
+      severity: "info",
+      label: e.final === true ? `Landfall: ${e.name}` : `Sighting: ${e.name}`,
+      detail: [
+        e.distNm != null ? `land ${Math.round(e.distNm)} nm` : null,
+        e.bearingTrue != null ? `bearing ${e.bearingTrue}° T` : null,
+        e.elevationM != null ? `elev ${Math.round(e.elevationM)} m` : null,
+        e.advisory ?? null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    });
+  }
+
   // Night indicators for every dated item (work doc #17 session
   // feedback): interpolate the crew's position at the item's hour
   // from the simulated track and test the sun — one uniform answer
@@ -1994,6 +2016,7 @@ export const GLYPHS = {
   zone: "⚑",
   space: "✦",
   hazard: "⚠",
+  landfall: "⛰",
   line: "⌀",
   energy: "🔋",
   departure: "⚓",

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- Landfall sightings in the briefing (work doc #6): the simulation now raycasts the planned course against the corridor DEM and reports where and when topography first breaks the visual horizon — "At 14:00 assumed landfall, Neiafu visible at 230° True." — named from the on-board vector chart's Shortbread place labels. Multiple sightings per passage are episodes: island chains pass through the same list, separated by an out-of-sight gate (`landfall_min_offshore_hours`, 12 h — nothing within the horizon for that long before a sighting counts as new, and none reported until the departure land has disappeared), the arrival coast flagged final and shown with the ETA block in the strategic outlook, every episode riding the unified timeline (⛰ glyph, also on the map pins) and the tactical 24 h slice. Configuration: `landfall_enabled`, `height_of_eye_m` (3 m eye height in the 2.08·(√h+√H) horizon), `landfall_max_range_nm` (120), `landfall_min_offshore_hours` (12). The estimator (`public/landfall-estimator.mjs`) is pure with injectable elevation and gazetteer; the browser readers (`public/landfall-tiles.mjs`) fetch the corridor downloader's elevation MBTiles (Mapterhorn GLO-30 lossless-WebP Terrarium tiles, decoded natively) and the Shortbread base vector tiles (`place_labels`) over the same chart endpoints the map already uses — no new online fetches, tiles are content the boat already carries.
+
 ### Fixed
 - The tactical screen's warnings map drew timeline event pins only for the 24 h slice while the strategic map drew the whole passage's — mid-passage the pins just stopped. The map now gets the full merged timeline like the strategic screen's does, so every placeable event shows where it happens; the timeline list stays the tactical 24 h slice, and the pin↔row click-through translates between the two index spaces through the shared event objects.
 ## [0.13.3] - 2026-10-19

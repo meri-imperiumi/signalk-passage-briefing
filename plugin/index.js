@@ -203,6 +203,12 @@ const DEFAULTS = {
   k_heel: 0.35,
   k_pitch: 0.4,
   lines_of_interest_enabled: true,
+  /** Landfall estimator (work doc #6): where and when topography
+   * first breaks the visual horizon along the planned course. */
+  landfall_enabled: true,
+  height_of_eye_m: 3,
+  landfall_max_range_nm: 120,
+  landfall_min_offshore_hours: 12,
   hazard_events_enabled: true,
   hazard_min_alert_level: "orange",
   hazard_radius_offroute_nm: 500,
@@ -2580,6 +2586,37 @@ module.exports = (app) => {
             "antimeridian crossings along the planned route.",
           default: DEFAULTS.lines_of_interest_enabled,
         },
+        landfall_enabled: {
+          type: "boolean",
+          title: "Landfall sightings (visual horizon)",
+          description:
+            "Where and when topography first breaks the visual horizon " +
+            "along the planned course, named from the corridor DEM and " +
+            "its vector place names.",
+          default: DEFAULTS.landfall_enabled,
+        },
+        height_of_eye_m: {
+          type: "number",
+          title: "Landfall Height of Eye (meters)",
+          description:
+            "Observer height above the water for the visual-horizon " +
+            "distance: land at height H appears at 2.08·(√h+√H) nm.",
+          default: DEFAULTS.height_of_eye_m,
+        },
+        landfall_max_range_nm: {
+          type: "number",
+          title: "Landfall Scan Range (nm)",
+          default: DEFAULTS.landfall_max_range_nm,
+        },
+        landfall_min_offshore_hours: {
+          type: "number",
+          title: "Landfall Minimum Offshore Hours",
+          description:
+            "Land becomes a reported sighting only after this many hours " +
+            "with nothing within the visual horizon — coasting an island " +
+            "does not repeat the announcement.",
+          default: DEFAULTS.landfall_min_offshore_hours,
+        },
         hazard_events_enabled: {
           type: "boolean",
           title: "GDACS Hazard Events (earthquakes, cyclones, floods)",
@@ -2892,6 +2929,10 @@ module.exports = (app) => {
         k_heel: config.k_heel,
         k_pitch: config.k_pitch,
         lines_of_interest_enabled: config.lines_of_interest_enabled,
+        landfall_enabled: config.landfall_enabled !== false,
+        height_of_eye_m: config.height_of_eye_m,
+        landfall_max_range_nm: config.landfall_max_range_nm,
+        landfall_min_offshore_hours: config.landfall_min_offshore_hours,
         // Downwind sail inventory for the deployment advisor (work
         // doc #41): empty until the start-time read lands — the
         // advisor stays silent rather than recommending canvas the
