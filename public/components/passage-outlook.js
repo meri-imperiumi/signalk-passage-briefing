@@ -444,6 +444,9 @@ class PassageOutlook extends HTMLElement {
         if (this._briefing?.payload && this._exceptions) {
           this.maybeReliveTrim();
         }
+        // Every painted map follows the live fix (the here map centers
+        // on it; the dashboards draw the vessel marker)
+        this.feedVesselPosition(position);
       },
     });
   }
@@ -752,6 +755,9 @@ class PassageOutlook extends HTMLElement {
       this._view
         ?.querySelector("conditions-here")
         ?.setHere(this._briefing.payload, this._config ?? {});
+      this._view
+        ?.querySelector("conditions-here")
+        ?.setVesselPosition?.(this._vesselPosition ?? null);
     }
   }
 
@@ -846,6 +852,27 @@ class PassageOutlook extends HTMLElement {
       strip.append(button);
     }
     this._view.before(strip);
+  }
+
+  /**
+   * Feeds the vessel's live position to whichever surface is painted
+   * (work doc #34 session): the here map centers on it, the tactical
+   * and strategic maps draw the boat marker along the route. The maps
+   * self-throttle refits by movement, so this is safe to call per fix.
+   *
+   * @param {{lat: number, lon: number}|null} [position]
+   */
+  feedVesselPosition(position = this._vesselPosition ?? null) {
+    if (this._view == null || position == null) {
+      return;
+    }
+    for (const name of [
+      "conditions-here",
+      "tactical-dashboard",
+      "strategic-outlook",
+    ]) {
+      this._view.querySelector(name)?.setVesselPosition?.(position);
+    }
   }
 
   /**
@@ -1006,6 +1033,9 @@ class PassageOutlook extends HTMLElement {
     const here = this._view.querySelector("conditions-here");
     if (here && this._briefing?.payload) {
       here.setHere(this._briefing.payload, this._config ?? {});
+      // The here map centers on the vessel's live position, not the
+      // briefing's fetch-time waypoint (work doc #34 session)
+      here.setVesselPosition?.(this._vesselPosition ?? null);
     }
     here?.setOnline(this._status?.online === true);
     here.onRefresh = () => this.refreshHereBriefing();
@@ -1052,6 +1082,10 @@ class PassageOutlook extends HTMLElement {
       // Departure control + chip (work doc #15): shared state, both
       // views
       this.renderDeparture();
+      // The vessel marker on the view's map (work doc #34 session):
+      // the live fix rides every paint, so a recreated element is
+      // seeded too
+      this.feedVesselPosition();
     }
     this.renderDisclaimer();
   }

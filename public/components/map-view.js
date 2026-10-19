@@ -32,6 +32,7 @@
 
 /* global L */
 
+import { greatCircleNm } from "../sereno-physics.mjs";
 import {
   blockShapes,
   chartAssetsFromManifest,
@@ -63,6 +64,9 @@ class PbMapView extends HTMLElement {
     this._blocks = [];
     this._payload = null;
     this._vessel = null;
+    this._liveFix = null;
+    this._vesselMarker = null;
+    this._fitted = false;
     this._ribbonRows = [];
     this._events = [];
     this._resourceRegions = {};
@@ -106,6 +110,25 @@ class PbMapView extends HTMLElement {
           text-shadow:
             0 0 3px var(--bg-base, #080a0c),
             0 0 3px var(--bg-base, #080a0c);
+        }
+        /* The vessel herself (work doc #34 session): a live "you are
+           here" marker at navigation.position, the way
+           signalk-dead-reckoning marks the boat — a pulsing dot the
+           crew finds instantly on every map */
+        .pb-vessel {
+          background: transparent;
+          border: none;
+        }
+        .pb-vessel-dot {
+          display: block;
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
+          background: var(--color-teal, #4ec9b0);
+          border: 2px solid rgba(255, 255, 255, 0.55);
+          box-shadow:
+            0 0 6px rgba(78, 201, 176, 0.8),
+            0 0 2px rgba(78, 201, 176, 0.9);
         }
         .pb-pin.sev-warn { filter: sepia(1) saturate(4) hue-rotate(-25deg); }
         .pb-pin.sev-severe { filter: sepia(1) saturate(6) hue-rotate(-40deg); }
@@ -449,7 +472,9 @@ class PbMapView extends HTMLElement {
   setPayload(payload) {
     this._payload = payload ?? null;
     // The vessel anchors the map when no route does (here mode: the
-    // payload carries the vessel's position as its single waypoint)
+    // payload carries the vessel's position as its single waypoint).
+    // A live fix already received outranks the fetch-time waypoint —
+    // setVesselPosition keeps it current.
     const waypoints = this._payload?.waypoints ?? [];
     this._vessel =
       waypoints.length === 1 &&
@@ -457,8 +482,58 @@ class PbMapView extends HTMLElement {
       Number.isFinite(waypoints[0]?.lon)
         ? waypoints[0]
         : null;
+    if (this._liveFix != null) {
+      this._vessel = this._liveFix;
+    }
     this._render();
     this._fit();
+  }
+
+  /**
+   * The vessel's live position (work doc #34 session): the here-mode
+   * map centers on `navigation.position`, not the briefing payload's
+   * fetch-time waypoint. Refits only when the boat materially moved —
+   * a fix at anchor must not yank the view the crew is reading; the
+   * distance test is against the position the current fit was built
+   * on.
+   *
+   * @param {{lat: number, lon: number}|null} position
+   */
+  setVesselPosition(position) {
+    if (
+      !position ||
+      !Number.isFinite(position.lat) ||
+      !Number.isFinite(position.lon)
+    ) {
+      return;
+    }
+    this._liveFix = position;
+    const previous = this._vessel;
+    this._vessel = position;
+    const moved =
+      previous != null &&
+      Number.isFinite(previous.lat) &&
+      Number.isFinite(previous.lon)
+        ? greatCircleNm(previous.lat, previous.lon, position.lat, position.lon)
+        : Infinity;
+    // The direct center applies only when the vessel anchors the view
+    // (here mode, no route ribbon) — route maps keep their route fit
+    // and draw the marker along it.
+    const anchors = (this._ribbon ?? []).length === 0;
+    if (anchors && (previous == null || moved > 5 || !this._fitted)) {
+      this._fit();
+      // Belt and braces: the fit's bounds arithmetic can bail mid-reveal
+      // (hidden container, unmeasured tick), and the observer then has
+      // no size change left to refit on. The vessel center itself is
+      // always finite — land on it directly when the map is live.
+      if (!this._fitted && this.map != null && this.mapEl.clientWidth > 50) {
+        this.map.setView([position.lat, position.lon], 6);
+        this._fitted = true;
+      }
+    }
+    if (this._vesselMarker != null) {
+      this._vesselMarker.setLatLng([position.lat, position.lon]);
+    }
   }
 
   /**
@@ -792,6 +867,26 @@ class PbMapView extends HTMLElement {
         .addTo(this._overlayGroup);
       this._eventMarkers.set(pin.index, marker);
     }
+    // The vessel herself (work doc #34 session): a live "you are
+    // here" marker at navigation.position, dead-reckoning style.
+    // Drawn on every map — here mode centers on it, route mode draws
+    // it along the route.
+    if (this._vesselMarker) {
+      this._vesselMarker.remove();
+      this._vesselMarker = null;
+    }
+    if (this._vessel != null && this.map != null) {
+      this._vesselMarker = L.marker([this._vessel.lat, this._vessel.lon], {
+        interactive: false,
+        zIndexOffset: 1000,
+        icon: L.divIcon({
+          className: "pb-vessel",
+          html: '<span class="pb-vessel-dot"></span>',
+          iconSize: [14, 14],
+          iconAnchor: [7, 7],
+        }),
+      }).addTo(this.map);
+    }
   }
 
   /** Click-through: hand the console the block index. */
@@ -885,17 +980,28 @@ class PbMapView extends HTMLElement {
     // under 50 px is unmeasured — the resize tick refits once the
     // card reveals.
     if (this.mapEl.clientWidth < 50 || this.mapEl.clientHeight < 50) {
+      console.info(
+        "pb-map-view: fit deferred — container unmeasured (hidden or mid-layout)",
+      );
       this._needsFit = true;
       return;
     }
     const all = this._drawablePoints();
-    // No route: the vessel anchors the view — a couple hundred miles
-    // of water around her, a fabricated square so the span holds
-    // across screen sizes instead of leaning on a zoom level
-    const vesselBounds =
-      all.length === 1 && this._vessel ? vesselFitBounds(this._vessel) : null;
+    // The vessel anchors the view — a couple hundred miles of water
+    // around her, a fabricated square so the span holds across screen
+    // sizes instead of leaning on a zoom level. Keyed on the vessel's
+    // presence, not on what else is drawable: the here map's shapes
+    // and regions arrive asynchronously, and a fit that waits for
+    // them never runs at all — the map stays on its birth view (the
+    // 0,0 the crew stared at).
+    const vesselAnchors =
+      this._vessel != null && (this._ribbon ?? []).length === 0;
+    const vesselBounds = vesselAnchors ? vesselFitBounds(this._vessel) : null;
     const bounds = vesselBounds ?? frameBounds(all);
     if (!bounds) {
+      console.info(
+        "pb-map-view: fit skipped — nothing drawable yet (vessel and shapes pending)",
+      );
       return;
     }
     const [minLon, minLat, maxLon, maxLat] = bounds;
@@ -938,7 +1044,9 @@ class PbMapView extends HTMLElement {
       // tick refits
       this.map.setView([0, 0], 3);
       this._needsFit = true;
+      return;
     }
+    this._fitted = true;
   }
 }
 

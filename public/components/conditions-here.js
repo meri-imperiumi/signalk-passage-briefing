@@ -366,6 +366,17 @@ class ConditionsHere extends HTMLElement {
       map.setPayload(payload);
       map.setBulletin(payload?.metareaBulletin ?? null);
       map.hidden = !map.hasShapes();
+      // Seed the center with the briefing's own fix: the payload's
+      // waypoint is the position the briefing was compiled at, and a
+      // real center beats the birth view even before the stream
+      // delivers the live one (the race that stranded the map at 0,0)
+      const seeded = payload?.waypoints?.[0];
+      if (Number.isFinite(seeded?.lat) && Number.isFinite(seeded?.lon)) {
+        map.setVesselPosition({ lat: seeded.lat, lon: seeded.lon });
+      }
+      if (this._vesselPosition != null) {
+        map.setVesselPosition(this._vesselPosition);
+      }
     }
     this._map = map;
 
@@ -513,6 +524,18 @@ class ConditionsHere extends HTMLElement {
       });
       this._zonesEl.appendChild(el);
     }
+  }
+
+  /**
+   * The vessel's live position (work doc #34 session): forwards to
+   * the map so the here view centers on `navigation.position`, not
+   * the briefing payload's fetch-time waypoint.
+   *
+   * @param {{lat: number, lon: number}|null} position
+   */
+  setVesselPosition(position) {
+    this._vesselPosition = position ?? null;
+    this._map?.setVesselPosition?.(position);
   }
 
   /**

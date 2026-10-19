@@ -204,6 +204,17 @@ strong.sev {
    *
    * @param {object|null} exceptions
    */
+  /**
+   * The vessel's live position (work doc #34 session): forwards to
+   * the map so the boat marker rides the route view. The map keeps
+   * its route fit — the marker draws along it.
+   *
+   * @param {{lat: number, lon: number}|null} position
+   */
+  setVesselPosition(position) {
+    this._map?.setVesselPosition?.(position);
+  }
+
   setExceptions(exceptions) {
     this._exceptions = exceptions;
     if (!this._awsEl) {
