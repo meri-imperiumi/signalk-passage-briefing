@@ -909,6 +909,17 @@ class PassageOutlook extends HTMLElement {
       if (message.type === "result") {
         this._exceptions = message.exceptions;
         this.renderData();
+      } else if (message.type === "landfalls") {
+        // The landfall raycast finished after the briefing painted
+        // (work doc #6 session): inject into the painted summary and
+        // re-render, so the crew reads the timeline while the DEM
+        // walk is still running
+        const summary = this._exceptions?.passageSummary;
+        if (summary) {
+          summary.landfalls = message.landfalls ?? [];
+          summary.destinationName = message.destinationName ?? null;
+          this.renderData();
+        }
       } else if (message.type === "error") {
         this.showError(`Simulation failed: ${message.error}`);
       }

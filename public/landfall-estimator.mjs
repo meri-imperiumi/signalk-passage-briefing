@@ -297,6 +297,7 @@ export async function estimateLandfalls({
   const rangeSteps = Math.ceil(cfg.landfall_max_range_nm / LANDFALL_SAMPLE_NM);
 
   const scan = async (sample) => {
+    const fresh = [];
     for (let s = 1; s <= rangeSteps; s++) {
       const point = destinationPoint(
         sample.lat,
@@ -310,9 +311,21 @@ export async function estimateLandfalls({
         continue;
       }
       visited.add(key);
-      const elev = await elevation(point.lat, point.lon);
+      fresh.push(point);
+    }
+    // The reader caches per-tile promises, so a parallel batch shares
+    // tiles and fetches them concurrently — the sequential walk would
+    // await 240 lookups deep on the first corridor
+    const elevations = await Promise.all(
+      fresh.map((point) => elevation(point.lat, point.lon)),
+    );
+    for (const [index, elev] of elevations.entries()) {
       if (elev != null && elev > 0) {
-        land.push({ lat: point.lat, lon: point.lon, elevM: elev });
+        land.push({
+          lat: fresh[index].lat,
+          lon: fresh[index].lon,
+          elevM: elev,
+        });
       }
     }
   };
@@ -437,6 +450,7 @@ async function firstSightingAfter(
   const rangeSteps = Math.ceil(cfg.landfall_max_range_nm / LANDFALL_SAMPLE_NM);
   for (let i = startIndex; i < samples.length; i++) {
     const sample = samples[i];
+    const fresh = [];
     for (let s = 1; s <= rangeSteps; s++) {
       const point = destinationPoint(
         sample.lat,
@@ -447,10 +461,19 @@ async function firstSightingAfter(
       const key = `${point.lat.toFixed(3)},${point.lon.toFixed(3)}`;
       if (!visited.has(key)) {
         visited.add(key);
-        const elev = await elevation(point.lat, point.lon);
-        if (elev != null && elev > 0) {
-          land.push({ lat: point.lat, lon: point.lon, elevM: elev });
-        }
+        fresh.push(point);
+      }
+    }
+    const elevations = await Promise.all(
+      fresh.map((point) => elevation(point.lat, point.lon)),
+    );
+    for (const [index, elev] of elevations.entries()) {
+      if (elev != null && elev > 0) {
+        land.push({
+          lat: fresh[index].lat,
+          lon: fresh[index].lon,
+          elevM: elev,
+        });
       }
     }
     let best = null;

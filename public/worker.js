@@ -20,31 +20,33 @@ import { filterExceptions, simulatePassage } from "./route-sim.mjs";
  * Landfall pass (work doc #6): where and when topography first breaks
  * the visual horizon along the simulated course. Best-effort — without
  * the corridor DEM or when disabled, the briefing simply carries no
- * landfall rows. Runs after the simulation because the sightings read
- * the simulated track the timeline renders.
+ * landfall rows. Runs *after* the result is posted (work doc #6
+ * session): the raycast walks a corridor of tiles and takes seconds,
+ * and the crew reads the timeline while it works — the landfalls
+ * arrive as their own message and inject into the painted briefing.
  *
  * @param {object} result - Simulation result
  * @param {object} params - Worker params (config subset)
- * @returns {Promise<object>} The result with `landfalls` attached
+ * @returns {Promise<{landfalls: object[], destinationName: string|null}>}
  */
-async function withLandfalls(result, params) {
+async function computeLandfalls(result, params) {
   const { estimateLandfalls, destinationName } = await import(
     "./landfall-estimator.mjs"
   );
   const { createLandfallReaders } = await import("./landfall-tiles.mjs");
   const readers = await createLandfallReaders();
-  result.landfalls = await estimateLandfalls({
+  const landfalls = await estimateLandfalls({
     track: result.hourlyComfort ?? [],
     elevation: readers?.elevation ?? (async () => null),
     placeName: readers?.placeName ?? null,
     config: params.config ?? {},
   });
   // The arrival row greets by name when the gazetteer knows the place
-  result.destinationName = await destinationName({
+  const name = await destinationName({
     track: result.hourlyComfort ?? [],
     placeName: readers?.placeName ?? null,
   });
-  return result;
+  return { landfalls, destinationName: name };
 }
 
 self.onmessage = (event) => {
@@ -55,18 +57,31 @@ self.onmessage = (event) => {
   const run = async () => {
     const params = message.params ?? {};
     const result = simulatePassage(params);
-    try {
-      await withLandfalls(result, params);
-    } catch (error) {
-      // Tile problems must not sink the briefing
-      console.warn("pb-worker: landfall pass failed", error);
-    }
+    // The briefing paints now; the landfall raycast is seconds of tile
+    // walking and injects when it lands
+    result.landfalls = [];
+    result.destinationName = null;
     self.postMessage({
       type: "result",
       id: message.id,
       result,
       exceptions: filterExceptions(result, params),
     });
+    try {
+      const { landfalls, destinationName } = await computeLandfalls(
+        result,
+        params,
+      );
+      self.postMessage({
+        type: "landfalls",
+        id: message.id,
+        landfalls,
+        destinationName,
+      });
+    } catch (error) {
+      // Tile problems must not sink the briefing
+      console.warn("pb-worker: landfall pass failed", error);
+    }
   };
   run().catch((error) => {
     self.postMessage({ type: "error", id: message.id, error: error.message });
