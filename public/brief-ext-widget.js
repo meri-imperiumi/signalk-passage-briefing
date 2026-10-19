@@ -6,10 +6,12 @@
  * host's multiplexed Signal K relay, and renders brief freshness.
  * The pure state machine lives in `brief-ext-model.js`.
  *
- * Tap → open the full brief. The v1 widget→host open-panel request
- * is not settled, so the documented fallback applies: open the brief
- * webapp URL in a new browser context (the webapp renders from the
- * cached payload, so it shows the same brief offline).
+ * Short tap → the full briefing over the chart: a floating window on
+ * hosts with the `windows` capability (work doc #52 — the host's
+ * sandbox blocks pop-ups and all top-frame navigation, so the old
+ * "open the webapp in a new context" fallback was never reachable),
+ * falling back to a host panel under `panels.iframe`; a host with
+ * neither keeps the tile as the glanceable mini summary it is.
  * Long-press → host config/remove dialog (pointer events inside the
  * iframe are invisible to the host, so the widget detects the
  * gesture itself). Night mode (optional capability) shifts the
@@ -31,11 +33,11 @@ const STREAM_PATHS = [
   "navigation.briefing.ageHours",
 ];
 
-// Tap-to-open the full webapp is not possible from this iframe: the
-// host sandbox blocks pop-ups and all top-frame navigation (verified
-// on board), so the tile is a pure mini summary — the crew opens the
-// briefing from the host app list or a host panel. The meta endpoint
-// still runs on the same server, so the summary fetches directly.
+// The meta endpoint runs on the same server, so the freshness
+// summary fetches directly. The full briefing is the host's to show
+// (short tap → ui.openWindow / ui.openPanel): the sandbox blocks
+// pop-ups and all top-frame navigation, so this iframe could never
+// navigate to the webapp itself.
 const BRIEF_META_URL = "/plugins/signalk-passage-briefing/api/brief-meta";
 
 const template = document.createElement("template");
@@ -152,8 +154,9 @@ class BriefExtWidget extends HTMLElement {
     this.values = {};
     this.connected = false;
 
-    // Long-press → host config/remove dialog; short tap → open the
-    // brief webapp (fallback until the v1 open-panel request lands).
+    // Long-press → host config/remove dialog; short tap → the full
+    // brief in a floating window (or a host panel where the host has
+    // no windows).
     /** @type {number|null} */
     this.pressTimer = null;
     /** @type {boolean} */
@@ -185,6 +188,40 @@ class BriefExtWidget extends HTMLElement {
     if (this.pressTimer) {
       clearTimeout(this.pressTimer);
       this.pressTimer = null;
+      // A short tap (the gesture the long-press did not claim) opens
+      // the full briefing; the long-press keeps its config dialog.
+      if (!this.longPressed) this.openBrief();
+    }
+  }
+
+  /**
+   * Opens the full briefing over the chart: a floating window on a
+   * `windows` host (single — one briefing at a time — with the
+   * host-side remembered geometry under the "brief" restore key), a
+   * host panel where only `panels.iframe` is offered, and nothing on
+   * a host with neither. Plain `call`s: the wire format is the
+   * contract — the vendored 0.11.0 client predates the `windows`
+   * sugar, which adds nothing over the method call.
+   *
+   * @returns {void}
+   */
+  openBrief() {
+    const client = this.client;
+    if (!client) return;
+    if (client.hasCapability("windows")) {
+      client
+        .call("ui.openWindow", {
+          panel: "brief-panel",
+          single: true,
+          restoreKey: "brief",
+        })
+        .catch(() => {});
+      return;
+    }
+    if (client.hasCapability("panels.iframe")) {
+      client
+        .call("ui.openPanel", { panel: "brief-panel" })
+        .catch(() => {});
     }
   }
 

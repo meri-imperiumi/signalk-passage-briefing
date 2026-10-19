@@ -38,10 +38,13 @@ const MIME = {
 };
 
 /**
- * Builds the extension manifest (Plotter Extensions API v1). The
- * `panels.iframe` capability is declared optional pending the v1
- * widget→host open-panel settlement; without it the tile falls back
- * to opening the brief webapp URL in a new browser context.
+ * Builds the extension manifest (Plotter Extensions API v1). The tile
+ * is the glanceable surface; the full briefing opens over the chart —
+ * a floating window on hosts with the `windows` capability (work doc
+ * #52), a host panel under `panels.iframe`, and neither where the
+ * host offers both absent (the tile stays glanceable). `windows` is
+ * optional: a host without it maps the button's `toggleWindow` action
+ * to `togglePanel` per the spec, or ignores the button entirely.
  *
  * @param {string} assetBase - server-relative URL prefix for assets
  * @param {string} version - plugin version for display metadata
@@ -55,7 +58,7 @@ function buildManifest(assetBase, version) {
     version,
     apiVersion: "1",
     requires: ["widgets", "signalk.stream"],
-    optional: ["nightMode", "panels.iframe", "signalk.put"],
+    optional: ["nightMode", "panels.iframe", "signalk.put", "windows"],
     widgets: [
       {
         id: "passage-brief-tile",
@@ -65,6 +68,38 @@ function buildManifest(assetBase, version) {
         url: `${assetBase}/brief-ext-widget.html?v=${version}`,
         size: "1x1",
         lifecycle: "whileEnabled",
+      },
+    ],
+    panels: [
+      {
+        id: "brief-panel",
+        title: "Passage Brief",
+        type: "iframe",
+        // The briefing webapp in its embed mode (work doc #8's
+        // ?embed=1 compact chrome), opening on the reading screen.
+        // The ?v= rides the query string ahead of the hash so a
+        // plugin update cache-busts the host's iframe too.
+        url: `${assetBase}/index.html?embed=1&v=${version}#/strategic`,
+      },
+    ],
+    buttons: [
+      {
+        id: "open-brief-window",
+        title: "Passage Brief",
+        slot: "mapToolbar",
+        icon: "menu_book",
+        action: {
+          type: "toggleWindow",
+          panel: "brief-panel",
+          title: "Passage Brief",
+          geometry: {
+            anchor: "bottom-right",
+            offset: { x: 16, y: 16 },
+            width: "60%",
+            height: "80%",
+          },
+          restoreKey: "brief",
+        },
       },
     ],
   };

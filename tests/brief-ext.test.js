@@ -43,6 +43,57 @@ describe("plotter-extension manifest & provider (doc #8)", () => {
     assert.ok(w.url.startsWith(`${ASSET_BASE}/`));
   });
 
+  test("manifest contributes the briefing panel (work doc #52)", () => {
+    const m = buildManifest(ASSET_BASE, "1.2.3");
+    assert.equal(m.panels.length, 1);
+    const [p] = m.panels;
+    assert.equal(p.id, "brief-panel");
+    assert.equal(p.type, "iframe");
+    // The webapp in its embed mode (work doc #8), opening on the
+    // reading screen; the cache-buster rides ahead of the hash.
+    assert.equal(
+      p.url,
+      `${ASSET_BASE}/index.html?embed=1&v=1.2.3#/strategic`,
+    );
+    // Windows is an optional capability: hosts without it degrade.
+    assert.ok(m.optional.includes("windows"));
+    assert.ok(m.optional.includes("panels.iframe"));
+  });
+
+  test("manifest contributes a toggleWindow toolbar button", () => {
+    const m = buildManifest(ASSET_BASE, "1.2.3");
+    assert.equal(m.buttons.length, 1);
+    const [b] = m.buttons;
+    assert.equal(b.slot, "mapToolbar");
+    assert.equal(b.action.type, "toggleWindow");
+    assert.equal(b.action.panel, "brief-panel");
+    assert.equal(b.action.restoreKey, "brief");
+    assert.equal(b.action.single, undefined);
+    assert.deepEqual(b.action.geometry, {
+      anchor: "bottom-right",
+      offset: { x: 16, y: 16 },
+      width: "60%",
+      height: "80%",
+    });
+  });
+
+  test("widget tap chain: window, then panel, then nothing", () => {
+    // The widget runs in a browser iframe; its fallback chain is
+    // pinned structurally (the DR host tests' pattern).
+    const src = fs.readFileSync(
+      path.join(PUBLIC_DIR, "brief-ext-widget.js"),
+      "utf8",
+    );
+    assert.match(src, /hasCapability\("windows"\)/);
+    assert.match(src, /ui\.openWindow/);
+    assert.match(src, /single: true/);
+    assert.match(src, /restoreKey: "brief"/);
+    assert.match(src, /hasCapability\("panels\.iframe"\)/);
+    assert.match(src, /ui\.openPanel/);
+    // The long-press config gesture is untouched by the tap upgrade.
+    assert.match(src, /ui\.toggleConfigPanel/);
+  });
+
   test("provider serves the manifest and empties on teardown", async () => {
     const providers = [];
     const mounts = [];
