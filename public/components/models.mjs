@@ -1763,6 +1763,30 @@ export function mergeTimeline(exceptions, payload = null) {
     });
   }
 
+  // The arrival (the payoff moment the ETA card numbers): the
+  // track's final row is the nominal arrival, so the milestone lands
+  // on the same schedule the rest of the timeline reads. Only when
+  // the plan actually reached the destination — a horizon-cap end is
+  // no arrival, and the ETA card's percentiles already say why.
+  const trackRows = summary.track ?? [];
+  const lastRow = trackRows[trackRows.length - 1] ?? null;
+  if (summary.arrived === true && lastRow?.hoursFromNow != null) {
+    push({
+      hoursFromNow: lastRow.hoursFromNow,
+      timestamp: lastRow.timestamp ?? null,
+      kind: "arrival",
+      severity: "info",
+      label:
+        summary.destinationName != null
+          ? `Arrival: ${summary.destinationName}`
+          : "Arrival",
+      detail:
+        lastRow.distanceFromStartNm != null
+          ? `${Math.round(lastRow.distanceFromStartNm)} nm from departure`
+          : "",
+    });
+  }
+
   // Night indicators for every dated item (work doc #17 session
   // feedback): interpolate the crew's position at the item's hour
   // from the simulated track and test the sun — one uniform answer
@@ -2030,6 +2054,7 @@ export const GLYPHS = {
   space: "✦",
   hazard: "⚠",
   landfall: "⛰",
+  arrival: "🏁",
   line: "⌀",
   energy: "🔋",
   departure: "⚓",

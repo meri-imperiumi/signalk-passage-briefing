@@ -1633,6 +1633,7 @@ export function simulateRun({
     });
   }
 
+  const arrived = arrivedHours != null;
   if (arrivedHours == null) {
     arrivedHours = hours; // Never arrived: report the max horizon
   }
@@ -1663,6 +1664,7 @@ export function simulateRun({
   });
 
   return {
+    arrived,
     etaHours: arrivedHours,
     eta: new Date(startTime.getTime() + arrivedHours * 3600000).toISOString(),
     motoringHours,
@@ -2137,6 +2139,7 @@ export function simulatePassage({
   const poleNotes = poleAdvisories(nominal.hourly ?? []);
 
   return {
+    arrived: nominal.arrived === true,
     eta: {
       p10: pct(0),
       p50: pct(0.5),
@@ -2391,6 +2394,12 @@ export function filterExceptions(simulationResult, simParams = {}) {
       // runs where the track lives — the payload's own `meteor`
       // entries would double-report against a fixed position
       meteorEvents,
+      // Whether the plan reached its destination inside the horizon:
+      // an "Arrival" that is really the horizon cap would be a lie
+      arrived: simulationResult.arrived === true,
+      // The destination's gazetteer name for the arrival row (work
+      // doc #34 session); null without the vector base layer
+      destinationName: simulationResult.destinationName ?? null,
       // The assumed departure the schedule anchors to (work doc #15)
       departure: simulationResult.departure ?? null,
       // The simulated track, compact: the timeline's night indicators
@@ -2401,6 +2410,7 @@ export function filterExceptions(simulationResult, simParams = {}) {
       // same colors the tactical sparkline paints
       track: (simulationResult.hourlyComfort ?? []).map((row) => ({
         hoursFromNow: row.hoursFromNow,
+        timestamp: row.timestamp ?? null,
         lat: row.lat,
         lon: row.lon,
         // Distance made good at the row: the route ribbon maps the

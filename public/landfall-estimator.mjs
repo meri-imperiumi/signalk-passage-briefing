@@ -165,6 +165,9 @@ export function visualHorizonNm(eyeHeightM, targetHeightM) {
  */
 export function tileFor(lat, lon, zoom) {
   const n = 2 ** zoom;
+  // Normalize first: an unwrapped route frame (Tonga at 185°E) must
+  // not produce out-of-range tile x on the antimeridian's far side
+  lon = ((((lon + 180) % 360) + 360) % 360) - 180;
   const x = Math.floor(((lon + 180) / 360) * n);
   const latRad = Math.max(-85.05112878, Math.min(85.05112878, lat)) * DEG;
   const y = Math.floor(((1 - Math.asinh(Math.tan(latRad)) / Math.PI) / 2) * n);
@@ -477,6 +480,28 @@ async function firstSightingAfter(
     }
   }
   return null;
+}
+
+/**
+ * The destination's name from the gazetteer — the arrival row greets
+ * by the place it lands at, the same nearest-match the sightings use
+ * (work doc #34 session). `null` without a gazetteer; the timeline
+ * then says plain "Arrival".
+ *
+ * @param {object} params
+ * @param {Array<{lat: number, lon: number}>} params.track - The
+ *   simulated track; its last row is the destination
+ * @param {(lat: number, lon: number) => Promise<{name: string,
+ *   kind?: string}|null>} [params.placeName] - Gazetteer lookup
+ * @returns {Promise<string|null>}
+ */
+export async function destinationName({ track, placeName = null }) {
+  const last = track?.[track.length - 1] ?? null;
+  if (last == null || placeName == null) {
+    return null;
+  }
+  const place = await placeName(last.lat, last.lon);
+  return place?.name ?? null;
 }
 
 /**

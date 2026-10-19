@@ -211,6 +211,28 @@ describe("landfall estimator", () => {
     assert.equal(LANDFALL_DEFAULTS.landfall_max_range_nm, 120);
     assert.equal(LANDFALL_DEFAULTS.landfall_min_offshore_hours, 12);
   });
+
+  test("destination name from the track's last row", async () => {
+    const { destinationName } = await estimatorPromise;
+    const track = [
+      { lat: -18.6, lon: -173.98 },
+      { lat: -35.3, lon: 174.1 },
+    ];
+    assert.equal(
+      await destinationName({
+        track,
+        placeName: async (lat, lon) =>
+          lat < -30 ? { name: "Opua", kind: "town" } : { name: "Neiafu" },
+      }),
+      "Opua",
+    );
+    // No gazetteer or empty track: null, the timeline says plain Arrival
+    assert.equal(await destinationName({ track, placeName: null }), null);
+    assert.equal(
+      await destinationName({ track: [], placeName: async () => null }),
+      null,
+    );
+  });
 });
 
 describe("landfall tile readers", () => {
@@ -320,6 +342,39 @@ describe("landfall tile readers", () => {
       { fetchImpl: async () => ({ ok: false, status: 404 }), decodeTile },
     );
     assert.equal(await exhausted(-18.65, -173.98), null);
+  });
+
+  test("elevation reader: the fallback stops at the coarsest honest zoom", async () => {
+    // The seam gap: no tiles z12..z7, but the corridor's world-size
+    // z2 tile exists and carries resampled land — the reader must
+    // return no data rather than read a 170 km-wide pixel as land
+    const { createElevationReader } = await tilesPromise;
+    const layer = {
+      name: "elevation",
+      url: "/t/{z}/{x}/{y}",
+      minZoom: 0,
+      maxZoom: 12,
+    };
+    const requested = [];
+    const fetchImpl = async (url) => {
+      requested.push(String(url));
+      if (/[/]t[/](0|1|2)[/]/.test(String(url))) {
+        return { ok: true, arrayBuffer: async () => new ArrayBuffer(8) };
+      }
+      return { ok: false, status: 404 };
+    };
+    const decodeTile = async () => ({
+      width: 64,
+      height: 64,
+      elevationAt: () => 1024, // The corridor-resampled "land"
+    });
+    const elevation = createElevationReader(layer, { fetchImpl, decodeTile });
+    assert.equal(await elevation(-24.2, -179.7), null);
+    // The walk stopped at z8: z7..z0 never fetched
+    const zooms = requested.map((url) =>
+      Number(url.match(/[/]t[/](\d+)[/]/)[1]),
+    );
+    assert.deepEqual(zooms, [12, 11, 10, 9, 8]);
   });
 
   test("nearest named place in a hand-built MVT place tile", async () => {

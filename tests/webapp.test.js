@@ -1577,6 +1577,72 @@ test("webapp view models", async (t) => {
     },
   );
 
+  await t.test(
+    "arrival is a timeline event at the track's end (work doc #34 session)",
+    () => {
+      const track = [
+        {
+          hoursFromNow: 0,
+          timestamp: "2026-10-04T06:00:00.000Z",
+          lat: -18.6,
+          lon: -173.98,
+          distanceFromStartNm: 0,
+        },
+        {
+          hoursFromNow: 90,
+          timestamp: "2026-10-08T00:00:00.000Z",
+          lat: -20.0,
+          lon: -174.4,
+          distanceFromStartNm: 540,
+        },
+      ];
+      const timeline = mergeTimeline(
+        {
+          passageSummary: {
+            arrived: true,
+            etaP50: "2026-10-08T00:00:00.000Z",
+            departure: {
+              assumed: true,
+              time: "2026-10-04T06:00:00.000Z",
+              reason: "next_dawn",
+            },
+            track,
+          },
+        },
+        { metadata: { fetchedAt: "2026-10-03T07:28:57.000Z" } },
+      );
+      const arrival = timeline.find((item) => item.kind === "arrival");
+      assert.ok(arrival, "arrival row exists");
+      assert.equal(arrival.label, "Arrival");
+      assert.equal(arrival.hoursFromNow, 90);
+      assert.match(arrival.detail, /540 nm from departure/);
+      // The pin anchors at the destination itself, not an interpolation
+      assert.ok(
+        Math.abs(arrival.position.lat - -20.0) < 1e-9 &&
+          Math.abs(arrival.position.lon - -174.4) < 1e-9,
+      );
+
+      // A plan that never arrived inside the horizon has no arrival row:
+      // the horizon cap is not a destination
+      const unarrived = mergeTimeline(
+        {
+          passageSummary: {
+            arrived: false,
+            etaP50: "2026-10-08T00:00:00.000Z",
+            departure: {
+              assumed: true,
+              time: "2026-10-04T06:00:00.000Z",
+              reason: "next_dawn",
+            },
+            track,
+          },
+        },
+        { metadata: { fetchedAt: "2026-10-03T07:28:57.000Z" } },
+      );
+      assert.ok(!unarrived.some((item) => item.kind === "arrival"));
+    },
+  );
+
   await t.test("delayed departure is a timeline event; underway is not", () => {
     const base = { fetchedAt: "2026-10-04T18:00:00.000Z" };
     // Night at the mooring: next first light tomorrow ~06:00Z

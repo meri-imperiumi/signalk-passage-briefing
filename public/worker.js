@@ -28,7 +28,9 @@ import { filterExceptions, simulatePassage } from "./route-sim.mjs";
  * @returns {Promise<object>} The result with `landfalls` attached
  */
 async function withLandfalls(result, params) {
-  const { estimateLandfalls } = await import("./landfall-estimator.mjs");
+  const { estimateLandfalls, destinationName } = await import(
+    "./landfall-estimator.mjs"
+  );
   const { createLandfallReaders } = await import("./landfall-tiles.mjs");
   const readers = await createLandfallReaders();
   result.landfalls = await estimateLandfalls({
@@ -36,6 +38,11 @@ async function withLandfalls(result, params) {
     elevation: readers?.elevation ?? (async () => null),
     placeName: readers?.placeName ?? null,
     config: params.config ?? {},
+  });
+  // The arrival row greets by name when the gazetteer knows the place
+  result.destinationName = await destinationName({
+    track: result.hourlyComfort ?? [],
+    placeName: readers?.placeName ?? null,
   });
   return result;
 }

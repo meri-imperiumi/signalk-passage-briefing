@@ -31,6 +31,15 @@ import { VectorTile } from "./vendor/mvt/vector-tile.js";
 /** The charts resource the webapp's map already reads. */
 const CHARTS_URL = "/signalk/v1/api/resources/charts";
 
+/** Coarsest zoom the landfall lookups fall back to. Below this the
+ * corridor's world-size tiles are resamples whose pixel covers tens
+ * to hundreds of kilometers — a "1024 m land" reading hundreds of
+ * miles offshore on the antimeridian's seam (the first live false
+ * positive) came from exactly that fall-through. A coverage hole must
+ * suppress a sighting, never invent one, so the chain stops where a
+ * pixel is still nautically meaningful (~1.5 km at these latitudes). */
+const LANDFALL_MIN_ZOOM = 8;
+
 /**
  * Terrarium decoding: RGB → meters above sea level. Sea level is
  * exactly (128, 0, 0) → 0.
@@ -184,7 +193,10 @@ export function createElevationReader(
       return null;
     }
     const topZoom = Math.min(layer.maxZoom ?? 12, 12);
-    const floorZoom = Math.min(layer.minZoom ?? 0, topZoom);
+    const floorZoom = Math.min(
+      Math.max(LANDFALL_MIN_ZOOM, layer.minZoom ?? 0),
+      topZoom,
+    );
     for (let z = topZoom; z >= floorZoom; z--) {
       const { x, y } = tileFor(lat, lon, z);
       const key = `${z}/${x}/${y}`;
@@ -296,7 +308,10 @@ export function createPlaceNameReader(layer, fetchImpl = fetch) {
       return null;
     }
     const topZoom = Math.min(layer.maxZoom ?? 14, 12);
-    const floorZoom = Math.min(layer.minZoom ?? 0, topZoom);
+    const floorZoom = Math.min(
+      Math.max(LANDFALL_MIN_ZOOM, layer.minZoom ?? 0),
+      topZoom,
+    );
     for (let z = topZoom; z >= floorZoom; z--) {
       const { x, y } = tileFor(lat, lon, z);
       const key = `${z}/${x}/${y}`;
