@@ -365,8 +365,14 @@ test("map model", async (t) => {
 });
 
 test("ribbon segments and event pins (work doc #47)", async (t) => {
-  const { eventPins, ribbonSegments, routeRibbon, fitPoints, vesselFitBounds } =
-    await import("../public/components/map-model.mjs");
+  const {
+    eventPins,
+    ribbonSegments,
+    ribbonSpec,
+    routeRibbon,
+    fitPoints,
+    vesselFitBounds,
+  } = await import("../public/components/map-model.mjs");
 
   await t.test("ribbonSegments run-length groups the plan's regimes", () => {
     const track = [
@@ -561,6 +567,74 @@ test("ribbon segments and event pins (work doc #47)", async (t) => {
     assert.equal(routeRibbon(null, []), null);
     assert.equal(routeRibbon([{ lat: 1, lon: 2 }], []), null);
   });
+
+  await t.test(
+    "ribbonSpec draws the route geometry, rows only without it",
+    () => {
+      // The one-line rule the view renders by: the payload's real
+      // geometry colorized by the plan when it exists, the simulated
+      // rows only without it (here mode, pre-compile). The selection
+      // lives in the model so the row fallback cannot clobber the
+      // route line again — the 2026-10 discard regression had the
+      // view compute the route ribbon and then overwrite it with the
+      // rows, drawing the simplified sim-track line that drifts off
+      // the route instead of the route itself
+      const waypoints = [
+        { lat: -18.6, lon: -174, distanceFromStartNm: 0 },
+        { lat: -18.8, lon: -174.4, distanceFromStartNm: 30 },
+      ];
+      const track = [
+        {
+          distanceFromStartNm: 0,
+          lat: -18.6,
+          lon: -174,
+          comfortLevel: "pleasant",
+          slatting: false,
+          motoring: false,
+          night: false,
+        },
+      ];
+      const spec = ribbonSpec(waypoints, track);
+      assert.deepEqual(
+        spec[0].points[0],
+        [-174, -18.6],
+        "route geometry drives the line",
+      );
+      assert.equal(spec[0].comfortLevel, "pleasant");
+      // No route geometry: the row ribbon survives
+      const rowsOnly = ribbonSpec([], track);
+      assert.deepEqual(rowsOnly, ribbonSegments(track));
+      assert.equal(rowsOnly.length, 1);
+      // Null payloads (pre-compile views) degrade to the rows too
+      assert.deepEqual(ribbonSpec(null, track), ribbonSegments(track));
+    },
+  );
+
+  await t.test(
+    "ribbonSpec unwraps the route into the reference frame across the antimeridian",
+    () => {
+      // The Tonga→New Zealand passage straddles ±180°: with the map
+      // framed on the boat (first waypoint -175), the plan's eastern
+      // points must draw as their western-copy equivalents so route
+      // and warnings share one world copy
+      const waypoints = [
+        { lat: -19.05, lon: -175.4, distanceFromStartNm: 0 },
+        { lat: -20.3, lon: -179.9, distanceFromStartNm: 300 },
+        { lat: -21.5, lon: 175.2, distanceFromStartNm: 600 },
+        { lat: -22.4, lon: 173.8, distanceFromStartNm: 900 },
+      ];
+      const spec = ribbonSpec(waypoints, [], -175.4);
+      const lons = spec[0].points.map(([lon]) => lon);
+      assert.ok(
+        lons.every((lon, i) => i === 0 || lon < lons[i - 1] + 180),
+        `one continuous frame: ${JSON.stringify(lons)}`,
+      );
+      assert.ok(
+        lons.at(-1) < -180,
+        `New Zealand lands in the western copy: ${lons.at(-1)}`,
+      );
+    },
+  );
 
   await t.test(
     "fitPoints frames the route, then the vessel, then the warnings",

@@ -44,8 +44,7 @@ import {
   OSM_LAYER,
   parseChartLayers,
   regionShapes,
-  ribbonSegments,
-  routeRibbon,
+  ribbonSpec,
   stormGraphic,
   stormRingColor,
   vesselFitBounds,
@@ -159,7 +158,14 @@ class PbMapView extends HTMLElement {
       // that far anyway
       minZoom: 2,
       attributionControl: false,
-      worldCopyJump: true,
+      // worldCopyJump stays OFF on purpose: every overlay is unwrapped
+      // into the boat's own world copy (work doc #47), which on a
+      // Tonga→New Zealand passage is the western one beyond the
+      // antimeridian. The jump silently teleports a drag across the
+      // seam back into the primary copy — tiles repeat every world so
+      // the basemap looks unchanged, but the route, pins and warning
+      // shapes do not repeat, and everything is suddenly 360°
+      // off-screen until the next data-driven fit
     });
     L.control.zoom({ position: "bottomleft" }).addTo(this.map);
     // On touch the collapsed gear is one more tap between the crew and
@@ -578,17 +584,14 @@ class PbMapView extends HTMLElement {
     // One route line (work doc #47 session): the real route geometry
     // carrying the plan's color encoding — not a plain route line
     // plus a second sim-track ribbon that drifts off it. The row
-    // ribbon survives only where no route geometry exists
-    this._ribbon =
-      (this._payload?.waypoints ?? []).filter(
-        (w) => Number.isFinite(w?.lat) && Number.isFinite(w?.lon),
-      ).length >= 2
-        ? routeRibbon(
-            this._payload.waypoints,
-            this._ribbonRows ?? [],
-            referenceLon,
-          )
-        : ribbonSegments(this._ribbonRows ?? [], referenceLon);
+    // ribbon survives only where no route geometry exists; the
+    // selection lives in the model (ribbonSpec) so no second
+    // assignment can clobber the route line again
+    this._ribbon = ribbonSpec(
+      this._payload?.waypoints ?? [],
+      this._ribbonRows ?? [],
+      referenceLon,
+    );
     this._regions = regionShapes(this._resourceRegions, referenceLon);
     this._noteMarkers = notePins(
       this._resourceNotes,
@@ -601,7 +604,6 @@ class PbMapView extends HTMLElement {
     this._consoleIndex = new Map(
       (this._blocks ?? []).map((block, index) => [block.text, index]),
     );
-    this._ribbon = ribbonSegments(this._ribbonRows ?? [], referenceLon);
     this._eventPins = eventPins(this._events ?? [], referenceLon);
     this._storms = (this._blocks ?? [])
       .map((block, index) => stormGraphic(block, index, referenceLon))

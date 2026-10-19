@@ -871,6 +871,38 @@ export function routeRibbon(waypoints, track, referenceLon = null) {
 }
 
 /**
+ * The one route line the map draws: the payload's real geometry
+ * colorized by the plan ({@link routeRibbon}) when it exists, the
+ * simulated rows ({@link ribbonSegments}) only without it (here mode
+ * and pre-compile views). The selection lives here — not in the view
+ * — so the row fallback cannot clobber the route line again (the
+ * discard regression of 2026-10: the view computed the route ribbon
+ * and then overwrote it with the rows).
+ *
+ * @param {Array<{lat: number, lon: number}>} waypoints - The viewed
+ *   route's sampled geometry (empty in here mode)
+ * @param {Array<{distanceFromStartNm: number, lat: number, lon: number,
+ *   comfortLevel: string|null, slatting: boolean, motoring: boolean,
+ *   night: boolean}>} track - summary.track rows
+ * @param {number|null} referenceLon - The map's longitude frame
+ * @returns {Array<{points: number[][], comfortLevel: string|null,
+ *   slatting: boolean, motoring: boolean, night: boolean}>}
+ */
+export function ribbonSpec(waypoints, track, referenceLon = null) {
+  const hasGeometry =
+    (waypoints ?? []).filter(
+      (w) => Number.isFinite(w?.lat) && Number.isFinite(w?.lon),
+    ).length >= 2;
+  if (!hasGeometry) {
+    return ribbonSegments(track ?? [], referenceLon);
+  }
+  return (
+    routeRibbon(waypoints, track ?? [], referenceLon) ??
+    ribbonSegments(track ?? [], referenceLon)
+  );
+}
+
+/**
  * The coordinates the map's initial fit frames (work doc #47 session:
  * the fit is the route's, not the warnings'). When route geometry
  * exists the fit frames the colorized route and the events pinned to

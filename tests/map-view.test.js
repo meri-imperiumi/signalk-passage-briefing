@@ -156,3 +156,52 @@ test("maplibreStyleFor builds a source-and-trio style for a vector chart", async
   );
   assert.ok(seamarkIdx > waterIdx, "seamarks above water fills");
 });
+
+test("the map view mounts Leaflet without view-copy teleporting", async () => {
+  // Leaflet only mounts in a browser, so the component itself has no
+  // node-test harness — these two mount/render regressions are pinned
+  // at the source level instead.
+  //
+  // worldCopyJump silently wraps a drag across the antimeridian back
+  // into the primary world copy: tiles repeat every world so the
+  // basemap looks unchanged, but the overlays are unwrapped into the
+  // boat's own copy (work doc #47) and do not repeat — on a
+  // Tonga→New Zealand passage (route astride ±180°) one pan across
+  // the seam left every route, pin and warning shape 360° off-screen
+  // until the next data-driven fit. The option must stay off.
+  const { readFileSync } = require("node:fs");
+  const { join } = require("node:path");
+  const source = readFileSync(
+    join(__dirname, "../public/components/map-view.js"),
+    "utf8",
+  );
+  assert.ok(
+    !/worldCopyJump\s*:\s*true/.test(source),
+    "worldCopyJump must not be enabled — it teleports the view off the boat's overlay frame mid-drag",
+  );
+});
+
+test("the view renders the ribbon through the model's one-line selector", async () => {
+  // The 2026-10 discard regression: the view computed the route-geometry
+  // ribbon (routeRibbon) and then overwrote it with the sim-row ribbon
+  // (ribbonSegments) — the map drew the simplified sim track that drifts
+  // off the route instead of the route itself. The selection now lives in
+  // map-model's ribbonSpec; the view must call it once and never assign
+  // _ribbon again. The only allowed assignments are the pre-mount []
+  // initializer and the render's ribbonSpec call.
+  const { readFileSync } = require("node:fs");
+  const { join } = require("node:path");
+  const source = readFileSync(
+    join(__dirname, "../public/components/map-view.js"),
+    "utf8",
+  );
+  const initializers = [...source.matchAll(/this\._ribbon\s*=\s*(\S)/g)].map(
+    (match) => match[1],
+  );
+  assert.deepEqual(
+    initializers,
+    ["[", "r"],
+    `the only _ribbon assignments must be the [] initializer and the render's ribbonSpec call (found: ${JSON.stringify(initializers)})`,
+  );
+  assert.match(source, /ribbonSpec\(/, "the selector comes from the model");
+});
