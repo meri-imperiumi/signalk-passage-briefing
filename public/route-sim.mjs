@@ -587,6 +587,52 @@ function maxOf(a, b) {
  * @returns {Array<object>} Episodes, chronological
  */
 /**
+ * Aggregates the hourly rows past the payload's last forecast step
+ * (work doc #34 session): `weatherAt` clamps silently once the plan
+ * outruns the fetched forecasts, and a missed daily window would
+ * otherwise read as living weather. Each continuous clamped stretch
+ * becomes one episode — the hour the weather plan ends, and how long
+ * the plan sails on the last fetched forecast.
+ *
+ * @param {Array<{hoursFromNow: number, timestamp: string,
+ *   forecastClamped: boolean}>} rows - Simulated hourly rows
+ * @returns {Array<{hoursFromNow: number, timestamp: string,
+ *   untilHoursFromNow: number, untilTimestamp: string, hours: number}>}
+ */
+function deriveForecastHorizonEpisodes(rows) {
+  const episodes = [];
+  let current = null;
+  for (const row of rows) {
+    if (row.forecastClamped === true) {
+      if (current == null) {
+        current = {
+          hoursFromNow: row.hoursFromNow,
+          timestamp: row.timestamp ?? null,
+          untilHoursFromNow: row.hoursFromNow,
+          untilTimestamp: row.timestamp ?? null,
+        };
+        episodes.push(current);
+      } else {
+        current.untilHoursFromNow = row.hoursFromNow;
+        current.untilTimestamp = row.timestamp ?? null;
+      }
+    } else {
+      current = null;
+    }
+  }
+  return episodes.map((episode) => {
+    const hours = episode.untilHoursFromNow - episode.hoursFromNow + 1;
+    return {
+      hoursFromNow: episode.hoursFromNow,
+      timestamp: episode.timestamp,
+      untilHoursFromNow: episode.untilHoursFromNow,
+      untilTimestamp: episode.untilTimestamp,
+      hours: Math.max(1, Math.round(hours * 10) / 10),
+    };
+  });
+}
+
+/**
  * Aggregates the hourly rows' beating stretches (work doc #49): each
  * continuous run of `beating` rows becomes one episode carrying its
  * start (the timeline anchor), span and mean VMG — the tacking leg
@@ -1555,6 +1601,10 @@ export function simulateRun({
       // The beat's VMG — the progress a tacking beat makes good toward
       // the course while in irons (work doc #49); null under sail or motor
       vmgKnots: beating ? progressKnots : null,
+      // The hour sits past the payload's last forecast step (work doc
+      // #34 session): the plan sails on the final fetched forecast —
+      // surfaced so a missed daily window is visible, not silent
+      forecastClamped: weather?.clamped === true,
       azMs2: null,
       comfortLevel: null,
       slatting: null,
@@ -2512,6 +2562,11 @@ export function filterExceptions(simulationResult, simParams = {}) {
       // sails as VMG — one episode per continuous stretch, carrying
       // the mean VMG the tacking makes good
       beatEpisodes: deriveBeatEpisodes(simulationResult.hourlyComfort ?? []),
+      // Hours past the payload's forecast horizon (work doc #34
+      // session): the missed-window tell
+      horizonEpisodes: deriveForecastHorizonEpisodes(
+        simulationResult.hourlyComfort ?? [],
+      ),
       // The destination's gazetteer name for the arrival row (work
       // doc #34 session); null without the vector base layer
       destinationName: simulationResult.destinationName ?? null,

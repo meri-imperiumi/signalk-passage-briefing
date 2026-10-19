@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- A forecast-horizon tell in the timeline (work doc #34 session): when the plan outruns the payload's fetched forecasts — a missed daily window, a late passage — `weatherAt` clamps silently past the last step and the briefing would read as living weather while sailing on the final forecast. Each continuous clamped stretch now surfaces as a ⏳ "Forecast horizon — N h on the last fetched forecast · refresh at the next window" row, warn-colored, on both screens.
+
+### Changed
+- Automatic payload fetches (the edge-triggered oneshot that fires when the internet state changes) now debounce to one per 30 minutes: a satellite link that hands over a few times in a window no longer re-pulls the whole route+here payload on metered data every time. The staleness backstop covers any skipped edge, and the crew's explicit refreshes bypass the guard (work doc #34 session).
+
 ## [0.14.0] - 2026-10-19
 
 ### Changed

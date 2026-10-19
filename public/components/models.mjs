@@ -1664,6 +1664,25 @@ export function mergeTimeline(exceptions, payload = null) {
     });
   }
 
+  // Forecast-horizon stretches (work doc #34 session): the hours the
+  // plan sails on the payload's final fetched forecast — the missed
+  // daily window the crew would otherwise read as living weather.
+  for (const h of summary.horizonEpisodes ?? []) {
+    push({
+      hoursFromNow: h.hoursFromNow ?? null,
+      timestamp: h.timestamp ?? null,
+      kind: "forecast",
+      severity: "warn",
+      label: "Forecast horizon",
+      detail: [
+        h.hours != null ? `${h.hours} h on the last fetched forecast` : null,
+        "refresh the briefing at the next window",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    });
+  }
+
   // Beating stretches (work doc #49): the in-irons legs the plan
   // sails as VMG — one episode per continuous tack-tack-tack stretch.
   for (const b of summary.beatEpisodes ?? []) {
@@ -1997,6 +2016,7 @@ export const GLYPHS = {
   hazard: "⚠",
   landfall: "⛰",
   beat: "⇄",
+  forecast: "⏳",
   arrival: "🏁",
   line: "⌀",
   energy: "🔋",

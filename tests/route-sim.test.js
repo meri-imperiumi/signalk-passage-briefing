@@ -227,6 +227,39 @@ describe("simulateRun", () => {
     );
   });
 
+  test("forecast horizon: hours past the payload surface as episodes", async () => {
+    const { simulateRun, filterExceptions } = await simPromise;
+    // 180 nm at ~6 kn ≈ 30 h, vs 24 h of forecasts: the plan outruns
+    // the payload's weather part-way and sails the rest on the final step
+    const run = simulateRun({
+      payload: buildPayload({ hours: 24 }),
+      startTime: START,
+      config: {},
+      maxHours: 72,
+    });
+    const clamped = run.hourly.filter((row) => row.forecastClamped === true);
+    assert.ok(clamped.length > 0, "rows past the horizon carry the flag");
+    // Once clamped, always clamped: the forecasts end, the hours slide on
+    const first = clamped[0].hoursFromNow;
+    assert.ok(
+      run.hourly
+        .filter((row) => row.hoursFromNow > first)
+        .every((row) => row.forecastClamped === true),
+      "clamping is monotonic",
+    );
+
+    // filterExceptions reads the composed result's `hourlyComfort`,
+    // which simulatePassage builds from the raw run's `hourly`
+    const exceptions = filterExceptions(
+      { ...run, hourlyComfort: run.hourly },
+      { config: {} },
+    );
+    const episodes = exceptions.passageSummary.horizonEpisodes;
+    assert.equal(episodes.length, 1, "one continuous clamped stretch");
+    assert.equal(episodes[0].hoursFromNow, first);
+    assert.ok(episodes[0].hours >= 1, `span ${episodes[0].hours}`);
+  });
+
   test("learns sail suggestions from the matrix, day and night bucketed", async () => {
     const { simulateRun } = await simPromise;
     const day = simulateRun({

@@ -145,6 +145,16 @@ const BRIEF_AGE_HOURS_PATH = "navigation.briefing.ageHours";
 const ROUTE_TTL_MS = 26 * 60 * 60 * 1000;
 
 /**
+ * Minimum spacing between automatic (edge-triggered) payload fetches
+ * (work doc #34 session): every online↔metered transition fires a
+ * full route+here refresh, and a satellite link that hands over a few
+ * times in a window would otherwise re-pull the whole track each
+ * time, on metered data. The staleness backstop covers any skipped
+ * edge; the crew's explicit refreshes bypass the guard entirely.
+ */
+const AUTO_FETCH_DEBOUNCE_MS = 30 * 60 * 1000;
+
+/**
  * Per-source expected refresh intervals for the source status
  * registry (work doc #23): the client flags a source as stale when
  * its last success is older than this. Weather models refresh
@@ -323,6 +333,9 @@ module.exports = (app) => {
   /** Configured route-briefing fetch horizon in days (the default
    * `forecastDays` every refresh path falls back to). */
   let simulationForecastDays = DEFAULT_FORECAST_DAYS;
+  /** Last automatic (edge-triggered) fetch instant — the oneshot
+   * debounce anchor. Explicit crew refreshes do not consult it. */
+  let lastAutoFetchAt = null;
   /** @type {NodeJS.Timeout|null} */
   let cronTimer = null;
   /** Last known values of the watched paths. */
@@ -2361,6 +2374,19 @@ module.exports = (app) => {
       soc: observations[HOUSE_SOC_PATH],
     });
     if (result.fetch === "oneshot") {
+      const now = new Date().getTime();
+      if (
+        lastAutoFetchAt != null &&
+        now - lastAutoFetchAt < AUTO_FETCH_DEBOUNCE_MS
+      ) {
+        app.debug?.(
+          `Oneshot fetch debounced (${Math.round(
+            (now - lastAutoFetchAt) / 60000,
+          )} min since the last automatic fetch)`,
+        );
+        return;
+      }
+      lastAutoFetchAt = now;
       lastFetchRun = runFetch("oneshot").catch(() => {});
     }
   }
