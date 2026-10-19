@@ -1,7 +1,7 @@
 {
   "name": "@meri-imperiumi/signalk-passage-briefing",
   "version": "0.13.3",
-  "description": "Offshore passage daily briefing webapp for Signal K",
+  "description": "Offshore passage daily briefing including weather warnings for Signal K",
   "main": "plugin/index.js",
   "scripts": {
     "format": "npx @biomejs/biome check --use-editorconfig=true --write plugin/ tests/ bin/ public/",

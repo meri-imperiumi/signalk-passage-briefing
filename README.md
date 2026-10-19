@@ -11,6 +11,7 @@ Offshore passage daily briefing webapp for Signal K: a plugin that plans and rev
 - Fetches bulletins, official structured alerts, global disaster events and synoptic charts for the waters the route actually crosses
 - Keeps working offline: everything fetches in the online window and survives the other 23 hours from the cache
 - Shows a mini summary on the chart plotter and learns from every logbook entry the crew writes
+- Publishes weather warning areas as Signal K regions and notes for chartplotter apps to visualize
 
 The plugin fetches weather along the planned route — from the server's Weather API when a provider answers, Open-Meteo otherwise; fetched online, or via a GRIB/text spool when offline offshore. It runs a step-forward isochrone simulation with a monohull comfort model, learns the crew's sail preferences from the electronic logbook, and serves a two-screen webapp: a 24-hour tactical dashboard and a strategic passage summary. See [SPEC.md](SPEC.md) for the full design.
 
