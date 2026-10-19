@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+### Fixed
+- The tactical screen's warnings map drew timeline event pins only for the 24 h slice while the strategic map drew the whole passage's — mid-passage the pins just stopped. The map now gets the full merged timeline like the strategic screen's does, so every placeable event shows where it happens; the timeline list stays the tactical 24 h slice, and the pin↔row click-through translates between the two index spaces through the shared event objects.
 ## [0.13.3] - 2026-10-19
 
 ### Fixed

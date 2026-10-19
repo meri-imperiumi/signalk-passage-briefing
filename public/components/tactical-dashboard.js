@@ -140,9 +140,10 @@ strong.sev {
       <section class="sk-card theme-teal" id="map-card" hidden>
         <h2>Warnings Map</h2>
         <!-- The warnings map (work doc #47), same as the strategic
-             screen's: the 24 h plan, its warnings and its events,
-             drawn where they happen; above the synoptic chart like
-             the strategic card -->
+             screen's: the track, its warnings and every placeable
+             timeline event — the whole passage, not just the 24 h
+             slice — drawn where they happen; above the synoptic
+             chart like the strategic card -->
         <pb-map-view id="warnings-map"></pb-map-view>
       </section>
       <synoptic-chart hidden></synoptic-chart>
@@ -168,10 +169,27 @@ strong.sev {
     this._map = this.shadowRoot.getElementById("warnings-map");
     if (this._map) {
       this._map.onBlockSelect = (index) => this._highlightBlock(index);
-      this._map.onEventSelect = (index) => this._timeline?.reveal(index);
+      // Map pin → timeline row (work doc #47): the map carries the
+      // whole passage's pins while the list holds the tactical 24 h
+      // slice, so the pin's full-list index translates to a row
+      // index through the shared event objects; off-slice pins have
+      // no row and no-op
+      this._map.onEventSelect = (index) => {
+        const sliceIndex = this._sliceIndexOf?.get(this._mapEvents?.[index]);
+        if (sliceIndex != null) {
+          this._timeline?.reveal(sliceIndex);
+        }
+      };
     }
     if (this._timeline) {
-      this._timeline.onEventSelect = (index) => this._map?.focusEvent(index);
+      // Timeline row → map pin: the row's slice index translates to
+      // the full-list index the map's pins are keyed by
+      this._timeline.onEventSelect = (index) => {
+        const fullIndex = this._fullIndexOf?.get(this._sliceEvents?.[index]);
+        if (fullIndex != null) {
+          this._map?.focusEvent(fullIndex);
+        }
+      };
     }
     if (this._exceptions) {
       this.setExceptions(this._exceptions);
@@ -403,7 +421,12 @@ strong.sev {
   /**
    * The unified timeline (work doc #18): the 24 h slice of the
    * merged view model — sail work, maneuvers, convective risk, sea
-   * state, zones, sky and hazards in one chronological list.
+   * state, zones, sky and hazards in one chronological list. The
+   * list keeps the slice, but the map paints the whole passage's
+   * placeable events (the strategic map already did): pins that
+   * stopped at 24 h read as events simply ceasing to happen. The
+   * two projections index differently, so the click-through keys
+   * translate through the shared event objects.
    */
   _renderTimeline() {
     if (!this._timeline) {
@@ -417,12 +440,17 @@ strong.sev {
       (item) => item.hoursFromNow != null && item.hoursFromNow <= 24,
     );
     this._timeline.setTimeline(slice);
-    // Two projections of the same 24 h list (work doc #47)
-    this._map?.setTimeline(slice);
+    this._sliceEvents = slice;
+    // Whole passage on the map, with the index translations both
+    // ways (slice items are the full list's own objects)
+    this._map?.setTimeline(items);
+    this._mapEvents = items;
+    this._sliceIndexOf = new Map(slice.map((item, i) => [item, i]));
+    this._fullIndexOf = new Map(items.map((item, i) => [item, i]));
     const track = this._exceptions?.passageSummary?.track ?? [];
     this._map?.setRibbon(track);
     this._hasRibbon = track.length > 0;
-    this._hasPins = eventPins(slice).length > 0;
+    this._hasPins = eventPins(items).length > 0;
     this._updateMapCard();
   }
 
