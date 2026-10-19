@@ -203,6 +203,14 @@ const DEFAULTS = {
   k_heel: 0.35,
   k_pitch: 0.4,
   lines_of_interest_enabled: true,
+  /** Departure-day variants (work doc #34): how many candidate days
+   * the route switcher offers — today, +24 h, +48 h, +72 h at 4. */
+  departure_days: 4,
+  /** Forecast horizon for route briefings (days). The departure-day
+   * variants need the horizon to reach past the *latest* candidate's
+   * arrival — a +72 h variant of a week-long passage wants ~11 days.
+   * Each extra day is fetched for every waypoint on every refresh. */
+  forecast_days: DEFAULT_FORECAST_DAYS,
   /** Landfall estimator (work doc #6): where and when topography
    * first breaks the visual horizon along the planned course. */
   landfall_enabled: true,
@@ -308,6 +316,9 @@ module.exports = (app) => {
     k_heel: DEFAULTS.k_heel,
     k_pitch: DEFAULTS.k_pitch,
   };
+  /** Configured route-briefing fetch horizon in days (the default
+   * `forecastDays` every refresh path falls back to). */
+  let simulationForecastDays = DEFAULT_FORECAST_DAYS;
   /** @type {NodeJS.Timeout|null} */
   let cronTimer = null;
   /** Last known values of the watched paths. */
@@ -1602,7 +1613,7 @@ module.exports = (app) => {
    */
   async function refreshBriefingQueued(
     routeId,
-    forecastDays = DEFAULT_FORECAST_DAYS,
+    forecastDays = simulationForecastDays,
   ) {
     if (!isOnline()) {
       sourceStatus?.record({ ...WEATHER_SOURCE, skip: true });
@@ -2685,6 +2696,27 @@ module.exports = (app) => {
             "(−6° = civil dawn).",
           default: DEFAULTS.departure_dawn_altitude_deg,
         },
+        departure_days: {
+          type: "number",
+          title: "Departure Variant Days",
+          description:
+            "How many departure days the route switcher offers while " +
+            "stationary: today plus the +24 h/+48 h/… candidates, each " +
+            "the daylight-anchored departure of its own day. The latest " +
+            "candidate also needs the forecast horizon to cover its " +
+            "arrival.",
+          default: DEFAULTS.departure_days,
+        },
+        forecast_days: {
+          type: "number",
+          title: "Forecast Horizon (days)",
+          description:
+            "How many days of weather each route briefing fetches. Every " +
+            "extra day costs a fetch per waypoint per refresh — and is " +
+            "what makes late departure variants (work doc #34) simulable " +
+            "instead of disabled beyond forecast.",
+          default: DEFAULTS.forecast_days,
+        },
         celestial_eye_height_m: {
           type: "number",
           title: "Eye Height Above Water (meters)",
@@ -2921,6 +2953,18 @@ module.exports = (app) => {
               typeof station.station === "string",
           )
         : [];
+      // Departure-day variants (work doc #34): the candidate-day count
+      // the route switcher offers, clamped to a sane range
+      const departureDays = Math.min(
+        Math.max(Math.round(Number(config.departure_days) || 4), 1),
+        7,
+      );
+      // Forecast horizon (days): the fetch weight knob. The default
+      // stays the historical 7 — a late departure variant wants more
+      simulationForecastDays = Math.min(
+        Math.max(Math.round(Number(config.forecast_days) || 7), 1),
+        16,
+      );
       simulationConfig = {
         motoring_tws_threshold: config.motoring_tws_threshold,
         drift_mode_enabled: config.drift_mode_enabled,
@@ -2933,6 +2977,7 @@ module.exports = (app) => {
         height_of_eye_m: config.height_of_eye_m,
         landfall_max_range_nm: config.landfall_max_range_nm,
         landfall_min_offshore_hours: config.landfall_min_offshore_hours,
+        departure_days: departureDays,
         // Downwind sail inventory for the deployment advisor (work
         // doc #41): empty until the start-time read lands — the
         // advisor stays silent rather than recommending canvas the
@@ -3234,7 +3279,7 @@ module.exports = (app) => {
           const days =
             typeof req.query.days === "string" && Number(req.query.days) > 0
               ? Number(req.query.days)
-              : DEFAULT_FORECAST_DAYS;
+              : simulationForecastDays;
           res.json(await refreshBriefing(routeId, days));
         } catch (error) {
           app.error(`Briefing refresh failed: ${error.message}`);

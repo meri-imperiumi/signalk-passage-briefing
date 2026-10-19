@@ -604,6 +604,12 @@ class PassageOutlook extends HTMLElement {
       underway,
       prepHours: this._config?.departure_prep_hours ?? 1.5,
       dawnAltitudeDeg: this._config?.departure_dawn_altitude_deg ?? -6,
+      // Candidate-day count from the plugin config (default 4: today,
+      // +24 h, +48 h, +72 h), clamped against a stale or odd value
+      days: Math.min(
+        Math.max(Math.round(Number(this._config?.departure_days) || 4), 1),
+        7,
+      ),
     });
     this._departureCandidates = [];
     let after = [...select.options].find((option) => option.value === route.id);
