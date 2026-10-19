@@ -10,6 +10,7 @@
  * @file components/passage-outlook.js
  */
 
+import { departureCandidates } from "../sereno-physics.mjs";
 import {
   briefingAgeHours,
   compiledLabel,
@@ -216,7 +217,7 @@ class PassageOutlook extends HTMLElement {
       location.hash = "#/strategic";
     });
     this._routeSelect.addEventListener("change", () => {
-      this.loadBriefing(this._routeSelect.value);
+      this.selectRoute(this._routeSelect.value);
     });
     window.addEventListener("hashchange", () => this.renderRoute());
 
@@ -232,6 +233,13 @@ class PassageOutlook extends HTMLElement {
     this._customDepartureTime = null;
     this._navigationState = null;
     this._simulatedDepartureMs = null;
+    // Departure-day variants (work doc #34): the browsed candidate and
+    // the enumerated candidates, both rebuilt from the active route's
+    // payload on every load
+    this._departureVariant = null;
+    this._departureCandidates = [];
+    this._routesList = [];
+    this._activeRouteId = null;
     this._departureTimer = setInterval(
       () => this.recheckDeparture(),
       10 * 60000,
@@ -285,6 +293,15 @@ class PassageOutlook extends HTMLElement {
       prepHours: this._config?.departure_prep_hours ?? 1.5,
       dawnAltitudeDeg: this._config?.departure_dawn_altitude_deg ?? -6,
     });
+    // A browsed departure-day variant (work doc #34) overrides the
+    // default anchor: the candidate's own daylight window, the crew's
+    // pick rather than an assumption. Underway the real departure is
+    // happening — the variant never overrides it
+    if (this._departureVariant != null && departure.reason !== "underway") {
+      departure.time = new Date(this._departureVariant.time);
+      departure.reason = this._departureVariant.reason;
+      departure.assumed = false;
+    }
     return {
       mode: this._departureMode,
       customTime: this._customDepartureTime,
@@ -340,6 +357,9 @@ class PassageOutlook extends HTMLElement {
     if (!next?.departure) {
       return;
     }
+    // Navigation state may have flipped (cast-off, return to mooring):
+    // the variants appear when stationary and collapse underway
+    this.renderRouteVariants();
     const timeMs = next.departure.time.getTime();
     if (
       this._simulatedDepartureMs == null ||
@@ -361,6 +381,10 @@ class PassageOutlook extends HTMLElement {
   onDepartureChange(detail) {
     this._departureMode = detail.mode;
     this._customDepartureTime = detail.customTime ?? null;
+    // The crew speaking to the departure control overrides the browsed
+    // variant (work doc #34): the variant returns when re-picked from
+    // the route switcher
+    this._departureVariant = null;
     this.simulate();
   }
 
@@ -481,6 +505,11 @@ class PassageOutlook extends HTMLElement {
       const preferred = routesList.find(
         (r) => r.active && r.id === status.activeRouteId,
       );
+      // The departure-day variants (work doc #34) nest under the
+      // active route's own option; the route list and the active id
+      // are kept so the variants can rebuild on every payload load
+      this._routesList = routesList;
+      this._activeRouteId = preferred?.id ?? null;
       if (preferred) {
         select.value = preferred.id;
         this.loadBriefing(preferred.id);
@@ -490,6 +519,123 @@ class PassageOutlook extends HTMLElement {
       }
     } catch (error) {
       this.showError(`Server unreachable: ${error.message}`);
+    }
+  }
+
+  /**
+   * Route selection from the switcher (work doc #34): a plain route id
+   * loads that route with the default departure; a `route#hours` value
+   * is a departure-day variant of the active route — same payload, the
+   * simulation anchored to the candidate day's daylight window.
+   *
+   * @param {string} value - Route id, "" for here, or `id#hours`
+   */
+  selectRoute(value) {
+    const hash = value.indexOf("#");
+    if (hash === -1) {
+      this._departureVariant = null;
+      this.loadBriefing(value);
+      return;
+    }
+    const routeId = value.slice(0, hash);
+    const hours = Number(value.slice(hash + 1));
+    const candidate = (this._departureCandidates ?? []).find(
+      (candidate) => candidate.hoursOffset === hours,
+    );
+    if (candidate == null) {
+      this._departureVariant = null;
+      this.loadBriefing(routeId);
+      return;
+    }
+    this._departureVariant = candidate;
+    this.loadBriefing(routeId);
+  }
+
+  /**
+   * Rebuilds the departure-day variant options under the active
+   * route's own entry (work doc #34, before-departure half): today,
+   * +24 h and +48 h, each the daylight-anchored window of its day.
+   * Stationary only — underway the current departure is enough — and
+   * the active route only. Candidates past the payload's forecast
+   * horizon stay listed but disabled: a variant with no weather is
+   * fiction, not a plan.
+   */
+  renderRouteVariants() {
+    const select = this._routeSelect;
+    if (!select) {
+      return;
+    }
+    for (const option of [...select.options]) {
+      if (option.dataset.variant != null) {
+        option.remove();
+      }
+    }
+    const payload = this._briefing?.payload;
+    const waypoint = payload?.waypoints?.[0];
+    const route = (this._routesList ?? []).find(
+      (candidate) => candidate.id === this._activeRouteId,
+    );
+    if (!waypoint || route == null) {
+      this._departureCandidates = [];
+      return;
+    }
+    const underway =
+      typeof this._navigationState === "string" &&
+      !["moored", "anchored"].includes(this._navigationState);
+    if (underway) {
+      // Underway there is nothing to compare (work doc #34): a browsed
+      // variant dies with the mooring line
+      this._departureVariant = null;
+    }
+    // Forecast horizon: the last hour the payload carries weather for
+    let horizonEnd = null;
+    for (const wp of payload.waypoints ?? []) {
+      for (const forecast of wp.forecasts ?? []) {
+        const t = new Date(forecast.timestamp).getTime();
+        if (Number.isFinite(t) && (horizonEnd == null || t > horizonEnd)) {
+          horizonEnd = t;
+        }
+      }
+    }
+    const candidates = departureCandidates({
+      now: new Date(payload.metadata?.fetchedAt ?? Date.now()),
+      lat: waypoint.lat,
+      lon: waypoint.lon,
+      underway,
+      prepHours: this._config?.departure_prep_hours ?? 1.5,
+      dawnAltitudeDeg: this._config?.departure_dawn_altitude_deg ?? -6,
+    });
+    this._departureCandidates = [];
+    let after = [...select.options].find((option) => option.value === route.id);
+    for (const candidate of candidates.slice(1)) {
+      const hours = candidate.dayOffset * 24;
+      const beyond =
+        horizonEnd != null && candidate.time.getTime() >= horizonEnd;
+      const option = document.createElement("option");
+      option.dataset.variant = "true";
+      option.value = `${route.id}#${hours}`;
+      option.textContent = `${route.name}, +${hours} h${beyond ? " — beyond forecast" : ""}`;
+      option.disabled = beyond;
+      after?.after(option);
+      after = option;
+      if (!beyond) {
+        this._departureCandidates.push({ ...candidate, hoursOffset: hours });
+      }
+    }
+    // Selection survives a payload refresh while the candidate day
+    // still exists; a dropped variant falls back to the plain route
+    if (this._departureVariant != null) {
+      const kept = this._departureCandidates.find(
+        (candidate) =>
+          candidate.hoursOffset === this._departureVariant.hoursOffset,
+      );
+      if (kept != null) {
+        this._departureVariant = kept;
+        select.value = `${route.id}#${kept.hoursOffset}`;
+      } else {
+        this._departureVariant = null;
+        select.value = route.id;
+      }
     }
   }
 
@@ -570,6 +716,10 @@ class PassageOutlook extends HTMLElement {
       // here" must bring the tactical/strategic tabs back, and the
       // worker's results render into the elements this creates
       this.renderRoute();
+      // The departure-day variants (work doc #34) rebuild from the
+      // fresh payload: the candidate days need the route's start
+      // position and the forecast horizon
+      this.renderRouteVariants();
       if (this._briefing.mode !== "here") {
         this.simulate();
       }

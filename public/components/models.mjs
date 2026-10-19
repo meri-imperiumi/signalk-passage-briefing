@@ -7,6 +7,7 @@
  * @module models
  */
 
+import { landfallAdvisory } from "../landfall-estimator.mjs";
 import {
   assumedDepartureTime,
   greatCircleNm,
@@ -1741,8 +1742,10 @@ export function mergeTimeline(exceptions, payload = null) {
 
   // Landfall sightings (work doc #6): every gated episode along the
   // course, the arrival coast flagged final — island chains ride the
-  // same list. The advisory string is the same text the served payload
-  // carries.
+  // same list. The advisory string is recomposed here rather than
+  // carried from the worker: the worker has no ship-time context, so
+  // its default reads UTC while every stamp around it reads the ship's
+  // clock (the 12:41-vs-01:41 +13 mismatch, first live sighting).
   for (const e of summary.landfalls ?? []) {
     push({
       hoursFromNow: e.hoursFromNow ?? null,
@@ -1752,9 +1755,8 @@ export function mergeTimeline(exceptions, payload = null) {
       label: e.final === true ? `Landfall: ${e.name}` : `Sighting: ${e.name}`,
       detail: [
         e.distNm != null ? `land ${Math.round(e.distNm)} nm` : null,
-        e.bearingTrue != null ? `bearing ${e.bearingTrue}° T` : null,
         e.elevationM != null ? `elev ${Math.round(e.elevationM)} m` : null,
-        e.advisory ?? null,
+        e.timestamp != null ? landfallAdvisory(e, fmtShip) : null,
       ]
         .filter(Boolean)
         .join(" · "),

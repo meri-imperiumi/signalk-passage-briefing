@@ -257,6 +257,74 @@ export function assumedDepartureTime({
 }
 
 /**
+ * Departure-day candidates (work doc #34, before-departure half):
+ * the daylight-anchored window of today, tomorrow and the day after —
+ * the same work doc #15 rules applied to each candidate day, so a
+ * +24 h variant is “the same decision, one day later”, anchored to
+ * that day's dawn, not to a raw clock offset. The crew browses the
+ * variants as alternate plans of the active route; underway there is
+ * nothing to compare — the passage is happening (the current departure
+ * is enough).
+ *
+ * Pure: no Signal K, no DOM — the webapp computes the candidates from
+ * the payload's first waypoint, the same place {@link
+ * assumedDepartureTime} reads.
+ *
+ * @param {object} params
+ * @param {Date} [params.now] - Reference instant
+ * @param {number} params.lat - Start position latitude
+ * @param {number} params.lon - Start position longitude
+ * @param {boolean} [params.underway=false] - Navigation state outside
+ *   the moored/anchored set — underway yields the single now-departure
+ * @param {number} [params.prepHours] - Prep delay (hours)
+ * @param {number} [params.dawnAltitudeDeg] - Dawn anchor (degrees)
+ * @param {number} [params.days=3] - Candidate days to enumerate
+ * @returns {Array<{time: Date, reason: "underway"|"daylight_prep"|
+ *   "next_dawn"|"no_dawn", dayOffset: number}>} Candidates in day
+ *   order; `dayOffset` is the 24 h step from the reference day
+ */
+export function departureCandidates({
+  now = new Date(),
+  lat,
+  lon,
+  underway = false,
+  prepHours = DEPARTURE_PREP_HOURS,
+  dawnAltitudeDeg = DEPARTURE_DAWN_ALTITUDE_DEG,
+  days = 3,
+}) {
+  if (underway) {
+    return [
+      {
+        ...assumedDepartureTime({ now, lat, lon, underway: true }),
+        dayOffset: 0,
+      },
+    ];
+  }
+  const candidates = [];
+  const seen = new Set();
+  for (let day = 0; day < Math.max(1, days); day++) {
+    const reference = new Date(now.getTime() + day * 24 * 3600000);
+    const departure = assumedDepartureTime({
+      now: reference,
+      lat,
+      lon,
+      underway: false,
+      prepHours,
+      dawnAltitudeDeg,
+    });
+    // Degenerate rules (polar no_dawn falls back to the reference
+    // instant) would list the same time thrice — one candidate says it
+    const key = departure.time.getTime();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    candidates.push({ ...departure, dayOffset: day });
+  }
+  return candidates;
+}
+
+/**
  * Floor for the encounter-period stretch factor. A boat surfing along
  * with a wave train it overtakes would otherwise drive Te to zero and
  * the acceleration to infinity; the floor caps the stretch. Value from

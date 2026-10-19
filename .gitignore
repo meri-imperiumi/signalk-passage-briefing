@@ -5,4 +5,5 @@ signalk-meshtastic/
 PROTOCOL-SPEC.md
 Sideband/
 Reticulum/
+front-detector/
 *.tgz
