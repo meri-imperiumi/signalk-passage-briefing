@@ -130,9 +130,6 @@ strong.sev {
     this._departureLine = this.shadowRoot.getElementById("departure-line");
     this._departureControl =
       this.shadowRoot.getElementById("departure-control");
-    this._departureControl?.addEventListener("departurechange", (event) =>
-      this.onDepartureChange?.(event.detail),
-    );
     this._timeline = this.shadowRoot.getElementById("timeline");
     this._bulletinEl = this.shadowRoot.getElementById("bulletin");
     // The warnings map (work doc #47): shapes click through to the
@@ -299,11 +296,6 @@ strong.sev {
       }
     }
   }
-
-  /**
-   * The root owns the departure state; the control reports changes.
-   */
-  onDepartureChange = null;
 
   /**
    * Renders from the worker's exception view.

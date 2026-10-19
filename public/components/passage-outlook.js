@@ -14,7 +14,6 @@ import { departureCandidates } from "../sereno-physics.mjs";
 import {
   briefingAgeHours,
   compiledLabel,
-  effectiveDeparture,
   fmtHours,
   fmtShip,
   nextCompileLabel,
@@ -225,12 +224,11 @@ class PassageOutlook extends HTMLElement {
     this._briefing = null;
     this._briefingKey = null;
     this._exceptions = null;
-    // Departure anchoring (work doc #15): mode + custom instant are
-    // the crew's choice, shared by both views; navigation state drives
-    // the auto anchor; the re-check catches the dawn crossing without
-    // flapping (re-simulates only when the anchor moves > 10 min)
-    this._departureMode = "auto";
-    this._customDepartureTime = null;
+    // Departure anchoring (work doc #15): the daylight anchor drives
+    // the auto departure; the route switcher's departure-day variants
+    // (work doc #34) are the crew's timing choices; the re-check
+    // catches the dawn crossing without flapping (re-simulates only
+    // when the anchor moves > 10 min)
     this._navigationState = null;
     this._simulatedDepartureMs = null;
     // Departure-day variants (work doc #34): the browsed candidate and
@@ -268,12 +266,13 @@ class PassageOutlook extends HTMLElement {
 
   /**
    * The departure state the views render and the simulation anchors
-   * to (work doc #15): effective departure from the chosen mode, with
-   * the start position from the route's first waypoint (the payload
-   * is the route's). Here mode has no departure to anchor.
+   * to (work doc #15): the daylight-anchored departure from the
+   * route's first waypoint (the payload is the route's), overridden
+   * by the browsed departure-day variant (work doc #34) when one is
+   * selected. Here mode has no departure to anchor.
    *
-   * @returns {{mode: string, customTime: string|null, departure:
-   *   {time: Date, reason: string, assumed: boolean}|null}|null}
+   * @returns {{departure: {time: Date, reason: string,
+   *   assumed: boolean}|null}|null}
    */
   departureState() {
     const payload = this._briefing?.payload;
@@ -281,31 +280,37 @@ class PassageOutlook extends HTMLElement {
     if (!waypoint) {
       return null;
     }
-    const departure = effectiveDeparture({
-      mode: this._departureMode,
-      customTime: this._customDepartureTime,
+    const underway =
+      typeof this._navigationState === "string" &&
+      !["moored", "anchored"].includes(this._navigationState);
+    const [departure] = departureCandidates({
       now: new Date(payload.metadata?.fetchedAt ?? Date.now()),
       lat: waypoint.lat,
       lon: waypoint.lon,
-      underway:
-        typeof this._navigationState === "string" &&
-        !["moored", "anchored"].includes(this._navigationState),
+      underway,
       prepHours: this._config?.departure_prep_hours ?? 1.5,
       dawnAltitudeDeg: this._config?.departure_dawn_altitude_deg ?? -6,
+      days: 1,
     });
     // A browsed departure-day variant (work doc #34) overrides the
     // default anchor: the candidate's own daylight window, the crew's
     // pick rather than an assumption. Underway the real departure is
     // happening — the variant never overrides it
     if (this._departureVariant != null && departure.reason !== "underway") {
-      departure.time = new Date(this._departureVariant.time);
-      departure.reason = this._departureVariant.reason;
-      departure.assumed = false;
+      return {
+        departure: {
+          time: new Date(this._departureVariant.time),
+          reason: this._departureVariant.reason,
+          assumed: false,
+        },
+      };
     }
     return {
-      mode: this._departureMode,
-      customTime: this._customDepartureTime,
-      departure,
+      departure: {
+        time: departure.time,
+        reason: departure.reason,
+        assumed: true,
+      },
     };
   }
 
@@ -373,25 +378,8 @@ class PassageOutlook extends HTMLElement {
   }
 
   /**
-   * The crew moved the control (work doc #15): manual modes override
-   * auto until it is put back; the simulation re-runs immediately.
-   *
-   * @param {{mode: string, customTime: string|null}} detail
-   */
-  onDepartureChange(detail) {
-    this._departureMode = detail.mode;
-    this._customDepartureTime = detail.customTime ?? null;
-    // The crew speaking to the departure control overrides the browsed
-    // variant (work doc #34): the variant returns when re-picked from
-    // the route switcher
-    this._departureVariant = null;
-    this.simulate();
-  }
-
-  /**
    * Pushes the departure state into whichever view is showing (work
-   * doc #15: the control and its chip render in both, sharing the
-   * root's state).
+   * doc #15: the chip renders in both, sharing the root's state).
    *
    * @param {object} [state]
    */

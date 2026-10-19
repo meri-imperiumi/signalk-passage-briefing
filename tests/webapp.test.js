@@ -14,7 +14,6 @@ test("webapp view models", async (t) => {
     compiledLabel,
     GLYPHS,
     comfortColor,
-    effectiveDeparture,
     etaTable,
     fmtLiters,
     fmtHours,
@@ -1698,72 +1697,6 @@ test("webapp view models", async (t) => {
     assert.ok(!underway.some((item) => item.kind === "departure"));
   });
 
-  await t.test("effectiveDeparture maps the modes", async () => {
-    const now = new Date("2026-10-04T12:00:00Z"); // Night at Tonga
-    // Auto at night: next dawn, assumed
-    const auto = effectiveDeparture({
-      mode: "auto",
-      customTime: null,
-      now,
-      lat: -21.1,
-      lon: -175.2,
-      underway: false,
-      prepHours: 1.5,
-      dawnAltitudeDeg: -6,
-    });
-    assert.equal(auto.assumed, true);
-    assert.equal(auto.reason, "next_dawn");
-    assert.ok(auto.time > now);
-
-    // Auto underway: sails from now
-    const underway = effectiveDeparture({
-      mode: "auto",
-      customTime: null,
-      now,
-      lat: -21.1,
-      lon: -175.2,
-      underway: true,
-      prepHours: 1.5,
-      dawnAltitudeDeg: -6,
-    });
-    assert.equal(underway.reason, "underway");
-    assert.equal(underway.time, now);
-
-    // Manual modes: the crew's word, never assumed
-    assert.deepEqual(
-      [
-        effectiveDeparture({
-          mode: "now",
-          customTime: null,
-          now,
-          lat: -21.1,
-          lon: -175.2,
-          underway: false,
-        }),
-        effectiveDeparture({
-          mode: "+2h",
-          customTime: null,
-          now,
-          lat: -21.1,
-          lon: -175.2,
-          underway: false,
-        }),
-        effectiveDeparture({
-          mode: "custom",
-          customTime: "2026-10-05T08:00:00.000Z",
-          now,
-          lat: -21.1,
-          lon: -175.2,
-          underway: false,
-        }),
-      ].map((r) => [r.assumed, r.reason, r.time.toISOString()]),
-      [
-        [false, "manual", "2026-10-04T12:00:00.000Z"],
-        [false, "manual", "2026-10-04T14:00:00.000Z"],
-        [false, "manual", "2026-10-05T08:00:00.000Z"],
-      ],
-    );
-  });
   await t.test(
     "departure-anchored timeline sorts on one scale (doc #15 regression)",
     () => {

@@ -157,9 +157,6 @@ strong.sev {
     this._spark = this.shadowRoot.getElementById("spark");
     this._departureControl =
       this.shadowRoot.getElementById("departure-control");
-    this._departureControl?.addEventListener("departurechange", (event) =>
-      this.onDepartureChange?.(event.detail),
-    );
     this._energyEl = this.shadowRoot.getElementById("energy");
     this._timeline = this.shadowRoot.getElementById("timeline");
     this._blocksCard = this.shadowRoot.getElementById("blocks-card");
@@ -277,11 +274,6 @@ strong.sev {
       this.setExceptions(this._exceptions);
     }
   }
-
-  /**
-   * The root owns the departure state; the control reports changes.
-   */
-  onDepartureChange = null;
 
   /**
    * Online state: the refresh button only fires while the link is up
