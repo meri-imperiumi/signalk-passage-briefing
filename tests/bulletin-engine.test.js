@@ -1210,6 +1210,79 @@ test("fixture wtpz23 (NHC hurricane forecast/advisory): quadrant radii become ge
   assert.equal(fc0.maxWindKt, 80);
 });
 
+test("NFFN storm warning: prose quadrant radii become storm fields (work doc #48 session)", () => {
+  // The RSMC NFFN format spells the wind fields out in prose — a
+  // format the NHC advisory parser never sees. The declaration's
+  // radii must ride the same storm.fields structure so the map's
+  // cyclone graphic and the published regions read both formats
+  // alike.
+  const raw = [
+    "FQPS01 NFFN 181922",
+    "PART 1 : WARNING STORM WARNING 026 ISSUED FROM RSMC NADI Oct 181922",
+    "UTC.",
+    "",
+    "TROPICAL CYCLONE WATI CENTRE 980HPA CATEGORY 2 WAS LOCATED NEAR 19.1S 160.2W AT 181800 UTC.",
+    "POSITION POOR.",
+    "CYCLONE MOVING SOUTH SOUTHEAST AT 14 KNOTS.",
+    "",
+    "EXPECT SUSTAINED WINDS OF 55 KNOTS CLOSE TO THE CENTRE WEAKENING TO",
+    "45 KNOTS BY 190600 UTC.",
+    "",
+    "EXPECT WINDS OVER 47 KNOTS WITHIN 50 NAUTICAL MILES IN NE QUADRANT",
+    "                       AND WITHIN 60 NAUTICAL MILES IN SE QUADRANT",
+    "                       AND WITHIN 50 NAUTICAL MILES IN SW QUADRANT",
+    "                       AND WITHIN 40 NAUTICAL MILES IN NW QUADRANT",
+    "",
+    "EXPECT WINDS OVER 33 KNOTS WITHIN 120 NAUTICAL MILES IN NE QUADRANT",
+    "                       AND WITHIN 130 NAUTICAL MILES IN SE QUADRANT",
+    "                       AND WITHIN 100 NAUTICAL MILES IN SW QUADRANT",
+    "                       AND WITHIN 70 NAUTICAL MILES IN NW QUADRANT",
+    "NNNN",
+  ].join("\n");
+  const bulletin = filterBulletin({
+    rawText: raw,
+    source: "api",
+    track: [[-161.2, -19.1]],
+  });
+  assert.equal(bulletin.blocks.length, 1);
+  const block = bulletin.blocks[0];
+  assert.equal(block.geometry.type, "point");
+  assert.deepEqual(block.geometry.coordinates, [-160.2, -19.1]);
+  // The storm object mirrors the advisory shape: two threshold rings
+  // centred on the declared position
+  assert.equal(block.storm.center.lat, -19.1);
+  assert.equal(block.storm.center.lon, -160.2);
+  assert.deepEqual(
+    block.storm.fields.map((f) => [f.threshold, f.radiiNm]),
+    [
+      [47, { ne: 50, se: 60, sw: 50, nw: 40 }],
+      [33, { ne: 120, se: 130, sw: 100, nw: 70 }],
+    ],
+  );
+  for (const field of block.storm.fields) {
+    assert.equal(field.geometry.type, "polygon");
+    // Closed great-circle ring around the declared centre
+    assert.equal(field.geometry.coordinates.length, 73);
+    assert.deepEqual(
+      field.geometry.coordinates[0],
+      field.geometry.coordinates.at(-1),
+    );
+  }
+
+  // A plain declaration without radii stays storm-less: the point
+  // note is all it has
+  const plain = filterBulletin({
+    rawText: [
+      "FQPS01 NFFN 271800",
+      "TROPICAL CYCLONE WATI CENTRE 980HPA CATEGORY 2 WAS LOCATED NEAR 19.1S 160.2W AT 180600 UTC.",
+      "NNNN",
+    ].join("\n"),
+    source: "api",
+    track: [[-160.2, -19.1]],
+  });
+  assert.equal(plain.blocks[0].storm, undefined);
+});
+
 test("fixture wtpz23 r28: degenerate zero-radius quadrant collapses onto the center", () => {
   const storm = parseAdvisory(readFixture("wtpz23-knhc-tcmep3-r28.txt"));
   // The last outlook carries 50 KT with 0SE 0SW 0NW: only the NE arc

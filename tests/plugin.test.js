@@ -1457,6 +1457,159 @@ describe("plugin", () => {
     plugin.stop();
   });
 
+  test("publication track: a here page load keeps the route's warning regions", async () => {
+    // The regression behind "regions is empty": each trigger published
+    // AND pruned against its own filter — a here-mode page load
+    // (position-only track) wiped the route's warnings. The resources
+    // are one canonical set: the union of the vessel position and the
+    // active route (work doc #48).
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const TGFTP_TEXT = [
+      "FQPS01 NFFN 271800",
+      "ZCZC GA14",
+      "NAVAREA XIV 114/26",
+      // Contains the vessel at anchor (21.1S 175.2W)
+      "GALE WARNING.",
+      "IN THE AREA SOUTH OF 20S AND WEST OF 170W, EXPECT SOUTHEAST WINDS 20",
+      "TO 25 KNOTS. ROUGH SEAS.",
+      "",
+      "PARTS 2 AND 3 : SYNOPSIS AND FORECAST VALID UNTIL OCT 181800 UTC.",
+      "",
+      // Intersects only the route's far end (35.3S in 174E)
+      "TROUGH T1 30S 172E 33S 173E 35S 174E. T SLOW MOVING. POOR VISIBILITY",
+      "IN SQUALLY THUNDERSTORMS WITHIN 150 NAUTICAL MILES OF T1.",
+      "NNNN",
+    ].join("\n");
+
+    const app = createMockApp();
+    app.getSelfPath = (path) =>
+      path === "navigation.position"
+        ? { latitude: -21.1, longitude: -175.2 }
+        : path === "navigation.course.activeRoute"
+          ? { value: { href: "/resources/routes/r1" } }
+          : null;
+    app.resourcesApi = {
+      async getResource(resType, resId) {
+        if (resType === "routes" && resId === "r1") {
+          return {
+            name: "Tonga to Opua",
+            feature: {
+              geometry: {
+                coordinates: [
+                  [-175.2, -21.1],
+                  [174.3, -35.3],
+                ],
+              },
+            },
+          };
+        }
+        throw new Error("not found");
+      },
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const call = async (path, query = {}) => {
+      const r = app.getRoutes().find((x) => x.path === path);
+      const res = {
+        code: null,
+        payload: null,
+        status(c) {
+          this.code = c;
+          return this;
+        },
+        json(p) {
+          this.payload = p;
+        },
+      };
+      await r.handler({ query }, res);
+      return res;
+    };
+
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "online" }] },
+      ],
+    });
+    const openMeteoFetch = mockOpenMeteo();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      if (String(url).includes("tgftp.nws.noaa.gov")) {
+        return { ok: true, text: async () => TGFTP_TEXT };
+      }
+      return openMeteoFetch(url);
+    };
+    try {
+      // The refresh compiles the route (activeRoute wins) and the
+      // publication pass covers position + route: BOTH blocks' regions
+      const refresh = await call("/api/briefing/refresh", { route: "r1" });
+      assert.equal(refresh.code, null);
+      const regionsProvider = app
+        .getResourceProviders()
+        .find((p) => p.type === "regions");
+      const listed = await regionsProvider.methods.listResources({});
+      const areaIds = Object.keys(listed).filter((id) =>
+        id.startsWith("metarea-area-"),
+      );
+      assert.equal(
+        areaIds.length,
+        2,
+        "route and vessel warnings both published",
+      );
+
+      // A here-mode page load re-filters the console to the position
+      // alone — and must NOT prune the route's warning regions
+      const here = await call("/api/briefing", { route: "" });
+      assert.equal(here.payload.mode, "here");
+      const afterServe = await regionsProvider.methods.listResources({});
+      const afterAreaIds = Object.keys(afterServe).filter((id) =>
+        id.startsWith("metarea-area-"),
+      );
+      assert.equal(
+        afterAreaIds.length,
+        2,
+        "here page load must not wipe the route's regions",
+      );
+
+      // A RESTARTED plugin (fresh process, no compile ever ran) must
+      // still publish the served briefing's track: the cached route
+      // payload's waypoints are the publication track hint on serve
+      const fetchRestore = originalFetch;
+      globalThis.fetch = async (url) => openMeteoFetch(url);
+      try {
+        plugin.stop();
+        const second = pluginFactory(app);
+        second.start({});
+        second.registerWithRouter(app.router);
+        const served = await call("/api/briefing", { route: "r1" });
+        assert.equal(served.payload.mode, "route");
+        // The restarted plugin registered its own provider instance —
+        // the latest one serves the store
+        const restartRegions = app
+          .getResourceProviders()
+          .filter((p) => p.type === "regions")
+          .at(-1);
+        const afterRestart = await restartRegions.methods.listResources({});
+        const restartAreaIds = Object.keys(afterRestart).filter((id) =>
+          id.startsWith("metarea-area-"),
+        );
+        assert.equal(
+          restartAreaIds.length,
+          2,
+          "a restarted plugin's cached page load republishes the route's regions",
+        );
+        second.stop();
+      } finally {
+        globalThis.fetch = fetchRestore;
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    plugin.stop();
+  });
+
   test("space events: attached to here briefings, degraded when endpoints fail", async () => {
     const { mockOpenMeteo } = require("./openmeteo-mock.js");
     // Forecast rows inside the 24h forward window relative to now

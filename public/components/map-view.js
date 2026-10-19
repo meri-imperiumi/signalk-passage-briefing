@@ -62,7 +62,6 @@ class PbMapView extends HTMLElement {
       this.attachShadow({ mode: "open" });
     }
     this._blocks = [];
-    this._wider = [];
     this._payload = null;
     this._vessel = null;
     this._ribbonRows = [];
@@ -432,22 +431,10 @@ class PbMapView extends HTMLElement {
   }
 
   /**
-   * Wider-area severe warnings (work doc #47): severe geometric
-   * blocks from the same bulletins that the track filter discarded —
-   * drawn muted, zoomable context the console never shows. They sit
-   * outside the fit on purpose: the map stays anchored on the
-   * vessel's waters, the crew pans to the rest.
-   *
-   * @param {Array<object>} blocks - wider blocks from the payload
-   */
-  setWider(blocks) {
-    this._wider = blocks ?? [];
-    this._render();
-  }
-
-  /**
    * Briefing payload: the compiled track plus the CAP alerts and
-   * GDACS events that ride it.
+   * GDACS events that ride it. The wider-area warnings no longer ride
+   * this path — they publish as `coverage: "wider"` regions (work doc
+   * #48) and draw from the resources like every other warning shape.
    *
    * @param {{waypoints?: Array<{lat: number, lon: number}>,
    *   capAlerts?: Array<object>, hazardEvents?: Array<object>}|null}
@@ -624,38 +611,29 @@ class PbMapView extends HTMLElement {
     }
     this._overlayGroup = L.layerGroup().addTo(this.map);
     this._eventMarkers = new Map();
-    // Wider-area severe warnings first (work doc #47): muted and
-    // beneath everything — context to pan to, not the headline
-    for (const shape of blockShapes(this._wider ?? [], referenceLon)) {
-      const layer =
-        shape.kind === "line"
-          ? L.polyline(
-              shape.points.map(([lon, lat]) => [lat, lon]),
-              {
-                color: "#7f95a1",
-                weight: 1.5,
-                dashArray: "2 6",
-                fillOpacity: 0.04,
-              },
-            )
-          : L.polygon(
-              shape.points.map(([lon, lat]) => [lat, lon]),
-              {
-                color: "#7f95a1",
-                weight: 1.5,
-                dashArray: "2 6",
-                fillOpacity: 0.04,
-              },
-            );
-      // The grey mute styling already says these are elsewhere — the
-      // tooltip just names the warning (work doc #47 session: the
-      // spatial relationship is visible on the map, the prefix read
-      // as noise)
-      layer
-        .bindTooltip(shape.label ?? "", {
-          sticky: true,
-        })
-        .addTo(this._overlayGroup);
+    // Wider-area severe warnings first (work doc #47, now via the
+    // published regions — work doc #48): muted and beneath everything
+    // — context to pan to, not the headline. They sit outside the fit
+    // on purpose: the map stays anchored on the vessel's waters.
+    for (const region of this._regions ?? []) {
+      if (region.coverage !== "wider") {
+        continue;
+      }
+      for (const ring of region.rings) {
+        L.polygon(
+          ring.map(([lon, lat]) => [lat, lon]),
+          {
+            color: "#7f95a1",
+            weight: 1.5,
+            dashArray: "2 6",
+            fillOpacity: 0.04,
+          },
+        )
+          // The grey mute styling already says these are elsewhere —
+          // the tooltip just names the warning
+          .bindTooltip(region.label, { sticky: true })
+          .addTo(this._overlayGroup);
+      }
     }
     // The colorized route first (work doc #47): underlies the warning
     // shapes — comfort tier colors, motoring dashed, night dimmed,
@@ -675,13 +653,31 @@ class PbMapView extends HTMLElement {
         },
       ).addTo(this._overlayGroup);
     }
+    // The cyclone graphics' block texts: their quadrant rings draw
+    // below with threshold colors and the forecast track, so both the
+    // regions' plain rings and the notes' point markers yield to them
+    const stormTexts = new Set(
+      (this._storms ?? []).map((storm) => this._blocks[storm.index]?.text),
+    );
     // The published warning shapes (work doc #48): regions first —
     // gale areas, corridor bands, CAP polygons, storm quadrant rings —
     // colored by the severity the console's own highlighter derives
     // from the warning text; ours and third-party ones share the
     // visual language. The dashed bbox honesty cue and the console
     // click-through stay ours-only (properties they carry).
-    for (const region of this._regions) {
+    for (const region of this._regions ?? []) {
+      if (region.coverage === "wider") {
+        continue; // Drawn muted above
+      }
+      // The cyclone graphic below draws the quadrant rings with their
+      // threshold colors and the forecast track — the region's plain
+      // rings would double it
+      if (
+        region.derived === "quadrant-rings" &&
+        stormTexts.has(region.description)
+      ) {
+        continue;
+      }
       for (const ring of region.rings) {
         L.polygon(
           ring.map(([lon, lat]) => [lat, lon]),
@@ -701,9 +697,6 @@ class PbMapView extends HTMLElement {
     // declarations, region-less warnings. A note whose region draws
     // stays hidden (the href pairing — no double render); an advisory
     // storm's note yields to the graphic below, which covers it
-    const stormTexts = new Set(
-      (this._storms ?? []).map((storm) => this._blocks[storm.index]?.text),
-    );
     for (const pin of this._noteMarkers) {
       if (pin.ours && stormTexts.has(pin.description)) {
         continue; // The cyclone graphic below covers this block
@@ -861,7 +854,13 @@ class PbMapView extends HTMLElement {
       // vessel's waters the way the wider set already does
       resourcePoints: [
         ...(this._regions ?? [])
-          .filter((region) => region.ours)
+          .filter(
+            (region) =>
+              region.ours &&
+              // Wider context sits outside the fit on purpose: the
+              // map stays anchored on the vessel's waters
+              region.coverage !== "wider",
+          )
           .flatMap((region) => region.rings.flat()),
         ...(this._noteMarkers ?? [])
           .filter((pin) => pin.ours)

@@ -638,6 +638,12 @@ export function regionShapes(regions, referenceLon = null) {
       severe: isSevereText(region.description),
       dashed: ours && properties.geometryType === "bbox",
       ours,
+      // The wider-area coverage marker (work doc #47): off-track
+      // severe warnings, drawn muted
+      coverage: ours ? (properties.coverage ?? null) : null,
+      // What the geometry was derived from — the map skips the
+      // quadrant-rings regions whose cyclone graphic already draws
+      derived: ours ? (properties.derived ?? null) : null,
       description: region.description ?? "",
     });
   }

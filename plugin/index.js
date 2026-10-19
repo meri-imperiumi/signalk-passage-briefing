@@ -940,12 +940,80 @@ module.exports = (app) => {
   /**
    * Publishes the filtered bulletin blocks as georeferenced server
    * notes (work doc #12). Local-only: not gated on the internet
-   * state, so spool-sourced warnings publish the same way.
+   * state, so spool-sourced warnings publish the same way. Also runs
+   * at serve time (trigger "serve", work doc #48): the refiltered
+   * bulletin the console renders is what the resources must carry.
    *
-   * @param {"here"|"route"} trigger
+   * @param {"here"|"route"|"serve"} trigger
    * @param {object|null} bulletin - metareaBulletin with blocks
    * @param {Array<{lat: number, lon: number}>} waypoints
    */
+  /**
+   * The publication track (work doc #48): the vessel's position first
+   * (it anchors the nearest-point note placement), then the route
+   * waters — the caller's track hint (the served briefing's own
+   * waypoints) when one exists, else the most recent route compile's.
+   * The union of the two is the set of waters the passage touches —
+   * the notes and regions the plotter sees must not depend on which
+   * view triggered the last publish, nor on whether a compile ran in
+   * this process at all (a cached-briefing page load never compiles).
+   *
+   * @param {Array<{lat: number, lon: number}>|null} [hint] - The
+   *   served briefing's waypoints when available
+   * @returns {Array<{lat: number, lon: number}>}
+   */
+  function publicationTrack(hint = null) {
+    const track = [];
+    const seen = new Set();
+    const push = (lat, lon) => {
+      const key = `${lat},${lon}`;
+      if (Number.isFinite(lat) && Number.isFinite(lon) && !seen.has(key)) {
+        seen.add(key);
+        track.push({ lat, lon });
+      }
+    };
+    const position = vesselPosition();
+    if (position) {
+      push(position.lat, position.lon);
+    }
+    for (const waypoint of hint ?? lastRouteWaypoints ?? []) {
+      push(waypoint.lat, waypoint.lon);
+    }
+    return track;
+  }
+
+  /**
+   * The canonical publication pass (work doc #48): one set of notes
+   * and regions for the plotter, filtered against the publication
+   * track — the vessel's position plus the active route — regardless
+   * of which view or fetch window triggered it. A per-trigger filter
+   * (here: position-only, route: route-only) would have each pass
+   * prune the other's warnings; the union track ends the fight. An
+   * empty result clears this feed's resources: expiry is part of the
+   * feature.
+   *
+   * @param {string} trigger - for the debug line
+   * @param {Array<{lat: number, lon: number}>|null} [hint] - The
+   *   served briefing's waypoints when available
+   */
+  async function publishWarningsFor(trigger, hint = null) {
+    if (!publishNotesEnabled) {
+      return;
+    }
+    const track = publicationTrack(hint);
+    if (track.length === 0) {
+      return;
+    }
+    const bulletin = await bulletinForTrack(track);
+    await publishNotesFor(
+      trigger,
+      // Null bulletin (nothing on our waters) publishes an empty set:
+      // the scoped prune drops this feed's stale warnings
+      bulletin ?? { blocks: [], wider: [] },
+      track,
+    );
+  }
+
   async function publishNotesFor(trigger, bulletin, waypoints) {
     if (!publishNotesEnabled || !bulletin) {
       return;
@@ -979,7 +1047,8 @@ module.exports = (app) => {
         `Notes ${trigger}: ${result.published.length} published, ` +
           `${result.pruned.length} expired, ` +
           `${result.regionsPublished.length} regions published, ` +
-          `${result.regionsPruned.length} regions expired`,
+          `${result.regionsPruned.length} regions expired, ` +
+          `${result.widerPublished.length} wider regions`,
       );
     }
   }
@@ -1113,6 +1182,16 @@ module.exports = (app) => {
    * @param {object} payload - Briefing payload, mutated in place
    * @returns {Promise<void>}
    */
+  /**
+   * Re-publishes the metarea warnings from the canonical publication
+   * track (work doc #48): the fetch-time publish ran against the
+   * track as it was when the bulletin arrived — the crew has moved
+   * since, and a page load must not wait for the next fetch window.
+   * Content-addressed ids make the re-publish idempotent, and
+   * unchanged sets write nothing.
+   *
+   * @param {{waypoints?: Array<{lat: number, lon: number}>}} payload
+   */
   async function refilterPayloadBulletin(payload) {
     if (!payload?.waypoints?.length) {
       return;
@@ -1121,6 +1200,12 @@ module.exports = (app) => {
     if (fresh) {
       payload.metareaBulletin = fresh;
     }
+    // The publication track is view-independent — the payload's own
+    // refiltered bulletin stays per-view for the console. The served
+    // briefing's waypoints ARE the route waters: a cached-payload page
+    // load publishes from them even when no compile ran in this
+    // process
+    await publishWarningsFor("serve", payload.waypoints);
   }
 
   /**
@@ -1297,7 +1382,7 @@ module.exports = (app) => {
     if (bulletin) {
       payload.metareaBulletin = bulletin;
     }
-    await publishNotesFor("here", bulletin, waypoints);
+    await publishWarningsFor("here");
     // Space weather rides the same online window (work doc #3);
     // degrades to an absent field when the endpoints fail. Phase-2
     // ephemeris events are local computation; the visibility gate
@@ -1529,6 +1614,7 @@ module.exports = (app) => {
     }
     const waypoints = sampleRoutePoints(coordinates);
     lastCompiledWaypoints = waypoints;
+    lastRouteWaypoints = waypoints;
     // Bulletins ride the same online window as the weather (SPEC §3.1
     // metareaBulletin): pulled first so this briefing carries them
     await refreshBulletinsOnline("briefing", waypoints);
@@ -1541,7 +1627,7 @@ module.exports = (app) => {
     if (bulletin) {
       payload.metareaBulletin = bulletin;
     }
-    await publishNotesFor("route", bulletin, waypoints);
+    await publishWarningsFor("route");
     // Space weather for the departure position (work doc #3):
     // fetched Phase-1 sources plus local Phase-2 ephemeris events,
     // all gated on the payload's own cloud cover; nightly moon and
@@ -1726,6 +1812,11 @@ module.exports = (app) => {
   /** Waypoints of the most recent compile (route or here): the
    * escalation's track reference between refreshes. */
   let lastCompiledWaypoints = null;
+  /** Waypoints of the most recent ROUTE compile: the publication
+   * track's route half (work doc #48) — warnings publish for the
+   * waters the plan crosses plus the vessel's position, whichever
+   * view triggered the pass. */
+  let lastRouteWaypoints = null;
 
   async function runFetch(trigger) {
     if (!isOnline()) {

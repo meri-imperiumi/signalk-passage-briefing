@@ -18,6 +18,7 @@ const {
   geometryToRegionGeometry,
   blockToRegionGeometry,
   corridorRing,
+  splitSeamRing,
   noteId,
   regionId,
   noteTitle,
@@ -228,7 +229,10 @@ test("geometryToRegionGeometry: bbox ring, seam-crossing split, polygon passthro
     ],
   });
   assert.equal(polygon.type, "Polygon");
-  assert.equal(polygon.coordinates.length, 4);
+  // GeoJSON: the coordinates wrap the ring (a bare ring here produced
+  // malformed published regions that crashed the queries)
+  assert.equal(polygon.coordinates.length, 1);
+  assert.equal(polygon.coordinates[0].length, 4);
 
   // Point and line geometry cannot become regions
   assert.equal(
@@ -253,7 +257,8 @@ test("geometryToRegionGeometry: bbox ring, seam-crossing split, polygon passthro
 });
 
 test("blockToRegionGeometry: corridor bands and storm quadrant rings", () => {
-  // An axis band expands into the corridor ring the map draws
+  // An axis band expands into the corridor ring the map draws — and
+  // a band across the dateline splits into spec-clean parts
   const corridor = blockToRegionGeometry({
     text: "TROUGH T2",
     geometry: {
@@ -265,14 +270,24 @@ test("blockToRegionGeometry: corridor bands and storm quadrant rings", () => {
       bufferNm: 120,
     },
   });
-  assert.equal(corridor.type, "Polygon");
+  assert.equal(corridor.type, "MultiPolygon");
   assert.equal(corridor.derived, "corridor");
-  const ring = corridor.coordinates[0];
-  // Closed ring, 2*n + 1 points
-  assert.equal(ring.length, 5);
-  assert.deepEqual(ring[0], ring.at(-1));
-  // The band is 2° of latitude across (120 nm / 60)
-  assert.ok(Math.abs(ring[0][1] - ring[1][1]) > 1.9);
+  // Every part is a closed ring inside the normal frame, and some
+  // edge carries the band width (2° of latitude, 120 nm / 60)
+  let bandWide = false;
+  for (const part of corridor.coordinates) {
+    const ring = part[0];
+    assert.deepEqual(ring[0], ring.at(-1));
+    for (const [lon] of ring) {
+      assert.ok(lon >= -180 && lon <= 180, `lon ${lon} in range`);
+    }
+    for (let i = 1; i < ring.length; i++) {
+      if (Math.abs(ring[i][1] - ring[i - 1][1]) > 1.9) {
+        bandWide = true;
+      }
+    }
+  }
+  assert.ok(bandWide, "the band width is preserved");
 
   // An axis without a stated band has no area — no region
   assert.equal(
@@ -354,6 +369,128 @@ test("blockToRegionGeometry: corridor bands and storm quadrant rings", () => {
     }),
     null,
   );
+});
+
+test("splitSeamRing: crossing rings publish spec-clean parts", () => {
+  // A ring entirely west of the seam stays whole
+  assert.equal(
+    splitSeamRing([
+      [0, 0],
+      [10, 0],
+      [10, 10],
+      [0, 10],
+    ]),
+    null,
+  );
+
+  // The CZ1 shape: a chain crossing the seam (166E → 180 → 170W …)
+  // splits into a west part and a normalized east part
+  const crossing = splitSeamRing([
+    [166, -4],
+    [180, -2],
+    [-170, -1],
+    [-164, -5],
+    [-159, -12],
+    [-161, -16],
+    [166, -4],
+  ]);
+  assert.equal(crossing.length, 2);
+  const westLons = crossing[0].map(([lon]) => lon);
+  const eastLons = crossing[1].map(([lon]) => lon);
+  assert.ok(Math.min(...westLons) >= -180 && Math.max(...westLons) <= 180);
+  assert.ok(Math.max(...westLons) === 180, "west part touches the seam");
+  assert.ok(Math.max(...eastLons) <= 0, "east part normalized below zero");
+  assert.ok(Math.min(...eastLons) >= -180);
+  // Both parts close
+  assert.deepEqual(crossing[0][0], crossing[0].at(-1));
+  assert.deepEqual(crossing[1][0], crossing[1].at(-1));
+
+  // A ring already carrying unfolded longitudes (CAP polygons can be
+  // written as 178..182) splits the same way
+  const unfolded = splitSeamRing([
+    [178, -20],
+    [182, -20],
+    [182, -22],
+    [178, -22],
+    [178, -20],
+  ]);
+  assert.equal(unfolded.length, 2);
+  assert.deepEqual(unfolded[1][1], [-178, -20]);
+
+  // A west-side crossing normalizes its far part upward
+  const westCross = splitSeamRing([
+    [-175, -10],
+    [-185, -10],
+    [-185, -14],
+    [-175, -14],
+    [-175, -10],
+  ]);
+  assert.equal(westCross.length, 2);
+  const normLons = westCross.map((part) => part.map(([lon]) => lon));
+  for (const part of normLons) {
+    for (const lon of part) {
+      assert.ok(lon >= -180 && lon <= 180, `lon ${lon} in range`);
+    }
+  }
+
+  // Degenerate inputs pass through as null
+  assert.equal(splitSeamRing(null), null);
+  assert.equal(splitSeamRing([[0, 0]]), null);
+});
+
+test("blockToRegionGeometry: seam-crossing shapes publish as split MultiPolygons", () => {
+  // A corridor band crossing the dateline
+  const corridor = blockToRegionGeometry({
+    text: "TROUGH T2",
+    geometry: {
+      type: "line",
+      coordinates: [
+        [178, -8],
+        [-178, -11],
+      ],
+      bufferNm: 60,
+    },
+  });
+  assert.equal(corridor.type, "MultiPolygon");
+  assert.equal(corridor.derived, "corridor");
+  assert.ok(corridor.coordinates.length >= 2);
+
+  // A cyclone's quadrant ring centred near the seam
+  const storm = blockToRegionGeometry({
+    text: "TROPICAL CYCLONE RACHEL",
+    geometry: { type: "point", coordinates: [179.5, -10] },
+    geometryType: "point",
+    storm: {
+      center: { lat: -10, lon: 179.5 },
+      fields: [
+        {
+          label: "33 KT",
+          threshold: 33,
+          kind: "wind",
+          geometry: {
+            type: "polygon",
+            coordinates: [
+              [179.5, -7.6],
+              [181.9, -10],
+              [179.5, -12.4],
+              [177.1, -10],
+              [179.5, -7.6],
+            ],
+          },
+        },
+      ],
+      forecastPoints: [],
+    },
+  });
+  assert.equal(storm.type, "MultiPolygon");
+  assert.equal(storm.derived, "quadrant-rings");
+  // The 2.4°-radius ring spans the seam: two parts, both in range
+  assert.equal(storm.coordinates.length, 2);
+  for (const poly of storm.coordinates) {
+    for (const [lon] of poly[0]) {
+      assert.ok(lon >= -180 && lon <= 180, `lon ${lon} in range`);
+    }
+  }
 });
 
 test("corridorRing matches the briefing map's expansion (work doc #47 parity)", async () => {
@@ -480,4 +617,52 @@ test("publishNotes without a regions store keeps notes point-only", async () => 
   assert.equal(result.regionsPublished.length, 0);
   const notes = await notesIn(store);
   assert.ok(!Object.values(notes).some((n) => n.href));
+});
+
+test("publishNotes: wider-area warnings publish as coverage-marked regions", async () => {
+  const store = stubStore();
+  const regionsStore = createRegionsStore(dataDir());
+  const widerBlock = {
+    text: "GALE WARNING 011. IN THE AREA SOUTH OF 25S AND WEST OF 170W, EXPECT WEST WINDS 35 KNOTS. ROUGH SEAS.",
+    subject: null,
+    geometryType: "polygon",
+    geometry: {
+      type: "polygon",
+      coordinates: [
+        [-170, -25],
+        [-170, -35],
+        [-160, -35],
+        [-160, -25],
+        [-170, -25],
+      ],
+    },
+    source: "api",
+  };
+  const bulletin = { ...BULLETIN, wider: [widerBlock] };
+  const result = await publishNotes({
+    store,
+    regionsStore,
+    bulletin,
+    zone: 14,
+  });
+  // Wider regions ride their own id arm and carry the coverage marker
+  assert.equal(result.widerPublished.length, 1);
+  const rid = result.widerPublished[0];
+  assert.ok(rid.startsWith("metarea-wide-"));
+  const region = await regionsStore.get(rid);
+  assert.equal(region.feature.properties.coverage, "wider");
+  assert.equal(region.feature.properties.category, "meteorological-warning");
+  // No notes for the wider set: the notes feed means on-track warnings
+  const notes = await notesIn(store);
+  assert.ok(!Object.keys(notes).some((id) => id.includes("wide")));
+
+  // Wider regions expire with their own pass: drop it from the set
+  const result2 = await publishNotes({
+    store,
+    regionsStore,
+    bulletin: { ...BULLETIN, wider: [] },
+    zone: 14,
+  });
+  assert.equal(result2.regionsPruned.length, 1);
+  assert.equal(await regionsStore.get(rid), null);
 });

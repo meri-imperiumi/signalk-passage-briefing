@@ -104,6 +104,64 @@ test("bboxesIntersect: normal, seam-crossing on either and both sides", () => {
   assert.ok(!bboxesIntersect([0, 0, 10, 10], [5, 20, 15, 30]));
 });
 
+test("regions match near-me queries as MultiPolygons (work doc #48 session)", () => {
+  // The cyclone's quadrant rings publish as a MultiPolygon whose
+  // parts straddle the seam — the distance query must read the union
+  // of every part's bbox, not the first polygon's (the bug that made
+  // /resources/regions?position=… return {} while the notes answered)
+  const storm = {
+    name: "STORM WARNING 026",
+    feature: {
+      geometry: {
+        type: "MultiPolygon",
+        coordinates: [
+          [
+            [
+              [161.5, -19.1],
+              [161.5, -18.5],
+              [161.9, -18.5],
+              [161.9, -19.1],
+              [161.5, -19.1],
+            ],
+          ],
+          [
+            [
+              [-158.9, -19.1],
+              [-158.9, -18.5],
+              [-158.5, -18.5],
+              [-158.5, -19.1],
+              [-158.9, -19.1],
+            ],
+          ],
+        ],
+      },
+    },
+  };
+  // The union spans both parts across the seam (float noise and all)
+  const bbox = regionBbox(storm);
+  assert.ok(Math.abs(bbox[0] + 158.9) < 1e-9);
+  assert.ok(Math.abs(bbox[2] - 161.9) < 1e-9);
+  const ref = { latitude: -21.199806566925382, longitude: -165.24202648632937 };
+  const d = regionDistanceMeters(storm, ref);
+  assert.ok(Number.isFinite(d), "MultiPolygon distance is finite");
+  assert.ok(
+    matchesQuery(storm, {
+      position: [ref.longitude, ref.latitude],
+      distance: 2695374,
+    }),
+  );
+
+  // A region without a usable ring matches nothing (NaN must not
+  // slip through the filter)
+  assert.equal(
+    matchesQuery(
+      { feature: { geometry: { type: "Polygon", coordinates: [] } } },
+      { position: [0, 0], distance: 1000 },
+    ),
+    false,
+  );
+});
+
 test("regionDistanceMeters: inside is zero, edge distance outside", () => {
   const r = {
     feature: {
@@ -274,6 +332,38 @@ test("scoped prune: only this feed's stale ids drop", async () => {
 
   await store.clear();
   assert.deepEqual(await store.list(), {});
+});
+
+test("a malformed published region cannot break the listing", async () => {
+  // A pre-fix publication could store a bare point list where the
+  // ring nesting belongs — one bad region must not poison the whole
+  // query (it silently emptied /resources/regions on the boat)
+  const store = storeWith([
+    [
+      "broken",
+      [
+        [-168, 0],
+        [-164, -4],
+        [-161, -9],
+      ],
+    ],
+    [
+      "good",
+      [
+        [-168, -21],
+        [-164, -21],
+        [-164, -22],
+        [-168, -21],
+      ],
+    ],
+  ]);
+  const listed = await store.list({
+    position: [-166, -21.5],
+    distance: 500000,
+  });
+  assert.deepEqual(Object.keys(listed), ["good"]);
+  // The unfiltered listing survives the broken entry too
+  assert.equal(Object.keys(await store.list({})).length, 2);
 });
 
 test("provider registration: serves the store, read-only, stops clean", async () => {

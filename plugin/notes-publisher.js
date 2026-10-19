@@ -20,6 +20,103 @@
 
 const { createHash } = require("node:crypto");
 
+const SEAM = 180;
+
+/**
+ * Splits a polygon ring that crosses the antimeridian into spec-clean
+ * polygons, one touching each side of the seam (work doc #48): the
+ * parsed chains carry raw coordinates (166E → 180 → 170W), and
+ * plotters that do not unwrap — Freeboard draws the raw ring — would
+ * render the seam-crossing warning across the wrong hemisphere. The
+ * ring is unfolded into a continuous frame, clipped against the seam
+ * line on both sides, and the east side normalized back into range.
+ * A ring that crosses neither seam returns unchanged (null → caller
+ * keeps its Polygon).
+ *
+ * @param {number[][]} ring - [lon, lat] points, need not be closed
+ * @returns {number[][][]|null} Array of closed rings, null when the
+ *   ring crosses no seam (caller keeps its original form)
+ */
+function splitSeamRing(ring) {
+  if (!Array.isArray(ring) || ring.length < 3) {
+    return null;
+  }
+  // Unfold into one continuous frame anchored at the first longitude
+  const unfolded = [];
+  let prev = null;
+  for (const [lon, lat] of ring) {
+    let value = lon;
+    if (prev != null) {
+      while (value - prev > 180) {
+        value -= 360;
+      }
+      while (value - prev < -180) {
+        value += 360;
+      }
+    }
+    unfolded.push([value, lat]);
+    prev = value;
+  }
+  const lons = unfolded.map(([lon]) => lon);
+  const minLon = Math.min(...lons);
+  const maxLon = Math.max(...lons);
+  if (maxLon <= SEAM && minLon >= -SEAM) {
+    return null; // No seam in the frame: the raw ring is already whole
+  }
+  const clip = (ringPoints, inside, boundary) => {
+    const out = [];
+    const closed = [...ringPoints, [...ringPoints[0]]];
+    for (let i = 1; i < closed.length; i++) {
+      const cur = closed[i];
+      const prior = closed[i - 1];
+      const curIn = inside(cur[0]);
+      const priorIn = inside(prior[0]);
+      if (curIn !== priorIn) {
+        // The edge crosses the boundary: interpolate the latitude there
+        const t = (boundary - prior[0]) / (cur[0] - prior[0]);
+        out.push([boundary, prior[1] + t * (cur[1] - prior[1])]);
+      }
+      if (curIn) {
+        out.push(cur);
+      }
+    }
+    return out;
+  };
+  const dedupe = (ringPoints) =>
+    ringPoints.filter(
+      (point, i) =>
+        i === 0 ||
+        point[0] !== ringPoints[i - 1][0] ||
+        point[1] !== ringPoints[i - 1][1],
+    );
+  const parts = [];
+  if (maxLon > SEAM) {
+    const west = dedupe(clip(unfolded, (lon) => lon <= SEAM, SEAM));
+    const east = dedupe(clip(unfolded, (lon) => lon >= SEAM, SEAM)).map(
+      ([lon, lat]) => [lon - 360, lat],
+    );
+    if (west.length >= 3) {
+      parts.push([...west, [...west[0]]]);
+    }
+    if (east.length >= 3) {
+      parts.push([...east, [...east[0]]]);
+    }
+  } else {
+    // The frame sits west of the seam: crossing -180
+    const east = dedupe(clip(unfolded, (lon) => lon >= -SEAM, -SEAM));
+    const west = dedupe(clip(unfolded, (lon) => lon <= -SEAM, -SEAM)).map(
+      ([lon, lat]) => [lon + 360, lat],
+    );
+    if (east.length >= 3) {
+      parts.push([...east, [...east[0]]]);
+    }
+    if (west.length >= 3) {
+      parts.push([...west, [...west[0]]]);
+    }
+  }
+  return parts.length > 0 ? parts : null;
+}
+
 /**
  * Converts a block's extracted geometry to a region-feature geometry
  * (work doc #48): bbox becomes a four-corner ring; a parsed polygon
@@ -87,7 +184,20 @@ function geometryToRegionGeometry(geometry) {
     if (!Array.isArray(ring) || ring.length < 3) {
       return null;
     }
-    return { type: "Polygon", coordinates: ring };
+    const parts = splitSeamRing(ring);
+    if (parts && parts.length > 1) {
+      return {
+        type: "MultiPolygon",
+        coordinates: parts.map((part) => [part]),
+      };
+    }
+    if (parts && parts.length === 1) {
+      return { type: "Polygon", coordinates: [parts[0]] };
+    }
+    // GeoJSON Polygon: the coordinates carry ONE ring — the parsed
+    // chain is the ring itself, so it wraps (a bare ring here produced
+    // malformed regions that crashed the whole listing's queries)
+    return { type: "Polygon", coordinates: [ring] };
   }
   return null;
 }
@@ -178,9 +288,21 @@ function blockToRegionGeometry(block) {
     if (rings.length === 0) {
       return null;
     }
+    // Each quadrant ring is split at the antimeridian when it crosses
+    // one — a storm near the dateline publishes spec-clean parts, not
+    // a raw ring that jumps 179E to 179W
+    const polygons = [];
+    for (const ring of rings) {
+      const parts = splitSeamRing(ring);
+      if (parts) {
+        polygons.push(...parts.map((part) => [part]));
+      } else {
+        polygons.push([ring]);
+      }
+    }
     return {
       type: "MultiPolygon",
-      coordinates: rings.map((ring) => [ring]),
+      coordinates: polygons,
       derived: "quadrant-rings",
     };
   }
@@ -189,9 +311,12 @@ function blockToRegionGeometry(block) {
     if (points.length < 2) {
       return null;
     }
+    const ring = corridorRing(points, geometry.bufferNm);
+    const parts = splitSeamRing(ring);
     return {
-      type: "Polygon",
-      coordinates: [corridorRing(points, geometry.bufferNm)],
+      type: parts && parts.length > 1 ? "MultiPolygon" : "Polygon",
+      coordinates:
+        parts && parts.length > 1 ? parts.map((part) => [part]) : [ring],
       derived: "corridor",
     };
   }
@@ -332,6 +457,21 @@ function regionId(text, issuedAt) {
   return `metarea-area-${hash.slice(0, 12)}`;
 }
 
+/**
+ * A wider-area warning's region id: the same hash base under a `wide`
+ * arm — these are the off-track severe warnings the console never
+ * shows (work doc #47), published so plotters show context our
+ * waters' filter discarded.
+ *
+ * @param {string} text
+ * @param {string} issuedAt
+ * @returns {string}
+ */
+function wideId(text, issuedAt) {
+  const hash = createHash("sha1").update(`${text}|${issuedAt}`).digest("hex");
+  return `metarea-wide-${hash.slice(0, 12)}`;
+}
+
 function noteCategory(block) {
   if (block.subject === "A" || block.source === "ukho") {
     return "navigation-warning";
@@ -339,7 +479,7 @@ function noteCategory(block) {
   return "meteorological-warning";
 }
 
-function regionProperties(block, { issuedAt, issuer, zone }) {
+function regionProperties(block, { issuedAt, issuer, zone, coverage = null }) {
   return {
     category: noteCategory(block),
     subject: block.subject ?? null,
@@ -347,6 +487,10 @@ function regionProperties(block, { issuedAt, issuer, zone }) {
     source: block.source ?? null,
     zone,
     sourcePlugin: "signalk-passage-briefing",
+    // Coverage marks the wider-area set: warnings our own track filter
+    // discarded, published as plotter context and drawn muted on the
+    // briefing map. Null for the console's on-track set.
+    ...(coverage ? { coverage } : {}),
     // Provenance (who published, when): the issuing authority parsed
     // from the bulletin header when it names its service, else the
     // plugin publishing on its own account — plus the bulletin's
@@ -370,7 +514,10 @@ function regionProperties(block, { issuedAt, issuer, zone }) {
  * @param {object} params
  * @returns {object|null} Region, null when the geometry has no extent
  */
-function buildRegion(block, { issuedAt, issuer = null, zone }) {
+function buildRegion(
+  block,
+  { issuedAt, issuer = null, zone, coverage = null },
+) {
   const geometry = blockToRegionGeometry(block);
   if (!geometry) {
     return null;
@@ -382,7 +529,7 @@ function buildRegion(block, { issuedAt, issuer = null, zone }) {
     feature: {
       geometry: featureGeometry,
       properties: {
-        ...regionProperties(block, { issuedAt, issuer, zone }),
+        ...regionProperties(block, { issuedAt, issuer, zone, coverage }),
         // Honesty marker: what the region geometry was derived from
         // (the extracted area itself, a corridor around an axis band,
         // or the advisory's present quadrant rings)
@@ -453,7 +600,8 @@ function buildNote(block, { issuedAt, issuer = null, zone, chart, ref }) {
  * @param {number[]} [params.ref] - vessel position [lon, lat] for
  *   nearest-point note placement
  * @returns {Promise<{published: string[], pruned: string[],
- *   regionsPublished: string[], regionsPruned: string[]}>}
+ *   regionsPublished: string[], regionsPruned: string[],
+ *   widerPublished: string[]}>}
  */
 async function publishNotes({
   store,
@@ -475,6 +623,8 @@ async function publishNotes({
   const kept = [];
   const regionsPublished = [];
   const regionsKept = [];
+  const widerPublished = [];
+  const widerKept = [];
   for (const block of bulletin.blocks ?? []) {
     const chart = zone != null ? synopticChartFor(zone) : null;
     const note = buildNote(block, {
@@ -508,16 +658,49 @@ async function publishNotes({
     kept.push(id);
     published.push(id);
   }
+  // The wider-area severe warnings (work doc #47): published as
+  // regions only — plotter context our track filter discarded, marked
+  // `coverage: "wider"` so clients that know the difference can draw
+  // them muted. No notes: the console's on-track set is what the
+  // notes feed means.
+  for (const block of bulletin.wider ?? []) {
+    if (!regionsStore) {
+      break;
+    }
+    const region = buildRegion(block, {
+      issuedAt: bulletin.issuedAt,
+      issuer: bulletin.issuer ?? null,
+      zone,
+      coverage: "wider",
+    });
+    if (!region) {
+      continue;
+    }
+    const rid = wideId(block.text, bulletin.issuedAt);
+    await regionsStore.set(rid, region);
+    widerKept.push(rid);
+    widerPublished.push(rid);
+  }
   // Scoped expiry: drop this feed's notes and regions that fell out
   // of the set — hazard, CAP and other-client entries are untouched
   const pruned = await prunedIds(store, kept, "metarea-");
   const regionsPruned = [];
   if (regionsStore) {
     regionsPruned.push(
-      ...(await prunedIds(regionsStore, regionsKept, "metarea-area-")),
+      ...(await prunedIds(
+        regionsStore,
+        [...regionsKept, ...widerKept],
+        "metarea-",
+      )),
     );
   }
-  return { published, pruned, regionsPublished, regionsPruned };
+  return {
+    published,
+    pruned,
+    regionsPublished,
+    regionsPruned,
+    widerPublished,
+  };
 }
 
 /** Applies a scoped prune and reports which ids it dropped. */
@@ -779,8 +962,10 @@ module.exports = {
   geometryToRegionGeometry,
   blockToRegionGeometry,
   corridorRing,
+  splitSeamRing,
   noteId,
   regionId,
+  wideId,
   buildNote,
   buildRegion,
   publishNotes,

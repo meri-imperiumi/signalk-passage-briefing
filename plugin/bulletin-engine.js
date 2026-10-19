@@ -1358,6 +1358,66 @@ function advisorySeverityLabel(maxWindKt) {
  * @returns {object|null} Structured storm, null when the text is not
  *   the advisory family
  */
+/**
+ * A tropical-cyclone declaration's quadrant wind radii (work doc #48
+ * session): the RSMC NFFN storm warnings spell the wind fields out in
+ * prose — "EXPECT WINDS OVER 47 KNOTS WITHIN 50 NAUTICAL MILES IN NE
+ * QUADRANT AND WITHIN 60 NAUTICAL MILES IN SE QUADRANT …" — a format
+ * the NHC advisory parser never sees. Each threshold's quadrant
+ * radii build the same great-circle rings the advisory fields carry,
+ * so the map's cyclone graphic and the published regions read the
+ * same parsed structure for both formats. Null when the text names no
+ * radii set.
+ *
+ * @param {string} text - Block text
+ * @param {number[][]|null} coordinates - The declaration point
+ *   ([lon, lat]) the radii centre on
+ * @returns {object|null} A partial advisory shape ({center, fields,
+ *   forecastPoints}) — the fields the map graphic and the region
+ *   publisher already consume
+ */
+function declarationStorm(text, coordinates) {
+  if (
+    !Array.isArray(coordinates) ||
+    coordinates.length !== 2 ||
+    !coordinates.every(Number.isFinite)
+  ) {
+    return null;
+  }
+  const [lon, lat] = coordinates;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return null;
+  }
+  const fields = [];
+  // One set per threshold: "OVER 47 KNOTS" followed by its quadrant
+  // radii chain — the chain breaks at the next "EXPECT ... KNOTS"
+  const setRe =
+    /OVER\s+(\d{1,3})\s*KNOTS((?:\s+AND)?\s+WITHIN\s+\d+\s*NAUTICAL\s*MILES\s+IN\s+(?:NE|SE|SW|NW)\s+QUADRANT)+/gi;
+  const quadRe =
+    /WITHIN\s+(\d+)\s*NAUTICAL\s*MILES\s+IN\s+(NE|SE|SW|NW)\s+QUADRANT/gi;
+  for (const setMatch of text.matchAll(setRe)) {
+    const threshold = Number.parseInt(setMatch[1], 10);
+    const radiiNm = { ne: 0, se: 0, sw: 0, nw: 0 };
+    for (const quadMatch of setMatch[0].matchAll(quadRe)) {
+      radiiNm[quadMatch[2].toLowerCase()] = Number.parseInt(quadMatch[1], 10);
+    }
+    const geometry = quadrantRing({ lat, lon, radiiNm });
+    if (geometry) {
+      fields.push({
+        label: `${threshold} KT`,
+        threshold,
+        kind: "wind",
+        radiiNm,
+        geometry,
+      });
+    }
+  }
+  if (fields.length === 0) {
+    return null;
+  }
+  return { center: { lat, lon }, fields, forecastPoints: [] };
+}
+
 function parseAdvisory(text) {
   if (
     typeof text !== "string" ||
@@ -1578,11 +1638,20 @@ function filterBulletin({
       if (!geometry && !hasSevereKeyword(blockText)) {
         return null;
       }
+      // A storm declaration whose text spells out quadrant wind
+      // radii carries the same parsed fields the advisory family
+      // does — the cyclone's wind rings become map graphic and
+      // published region, not just a point (work doc #48 session)
+      const storm =
+        geometry?.type === "point"
+          ? declarationStorm(blockText, geometry.coordinates)
+          : null;
       return {
         text: blockText,
         subject: subject ?? null,
         geometryType: geometry ? geometry.type : null,
         geometry: geometry ?? null,
+        ...(storm ? { storm } : {}),
         source,
       };
     })

@@ -207,6 +207,7 @@ test("map model", async (t) => {
             properties: {
               sourcePlugin: "signalk-passage-briefing",
               geometryType: "bbox",
+              derived: "extracted",
             },
           },
         },
@@ -217,6 +218,35 @@ test("map model", async (t) => {
       assert.equal(ours[0].dashed, true);
       assert.equal(ours[0].ours, true);
       assert.equal(ours[0].rings.length, 1);
+      assert.equal(ours[0].coverage, null);
+      assert.equal(ours[0].derived, "extracted");
+
+      // The wider-area coverage marker and the derivation marker ride
+      // our properties; third-party resources carry neither
+      const wider = regionShapes({
+        "metarea-wide-abc": {
+          name: "GALE WARNING 011",
+          description: "GALE WARNING 011. EXPECT WEST WINDS 35 KNOTS.",
+          feature: {
+            geometry: {
+              type: "Polygon",
+              coordinates: [
+                [0, 0],
+                [0, 1],
+                [1, 1],
+                [0, 0],
+              ],
+            },
+            properties: {
+              sourcePlugin: "signalk-passage-briefing",
+              coverage: "wider",
+              derived: "extracted",
+            },
+          },
+        },
+      });
+      assert.equal(wider[0].coverage, "wider");
+      assert.equal(wider[0].derived, "extracted");
 
       // Third-party: no provenance, no dashes, no console click-through
       const third = regionShapes({

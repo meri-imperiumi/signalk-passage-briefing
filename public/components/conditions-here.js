@@ -365,7 +365,6 @@ class ConditionsHere extends HTMLElement {
       map.onBlockSelect = (index) => this._highlightWarning(index);
       map.setPayload(payload);
       map.setBulletin(payload?.metareaBulletin ?? null);
-      map.setWider(payload?.metareaBulletin?.wider ?? []);
       map.hidden = !map.hasShapes();
     }
     this._map = map;

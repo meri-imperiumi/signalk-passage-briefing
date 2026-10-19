@@ -255,8 +255,10 @@ describe("CAP source (work doc #24)", () => {
     assert.ok(rid.startsWith("cap-area-"));
     assert.equal(note.href, `/resources/regions/${rid}`);
     const region = await regionsStore.get(rid);
-    assert.equal(region.feature.geometry.type, "Polygon");
-    assert.equal(region.feature.geometry.coordinates.length, 5);
+    // The fixture polygon (178..182E) crosses the seam: it publishes
+    // as two spec-clean parts
+    assert.equal(region.feature.geometry.type, "MultiPolygon");
+    assert.equal(region.feature.geometry.coordinates.length, 2);
     assert.equal(region.feature.properties.category, "cap-alert");
     assert.ok(note.position.latitude != null);
 

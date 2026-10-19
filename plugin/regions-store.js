@@ -65,7 +65,14 @@ function ringBbox(ring) {
   let minLat = Infinity;
   let maxLat = -Infinity;
   let prev = null;
-  for (const [lon, lat] of ring) {
+  for (const point of ring) {
+    // Malformed entries (a pre-fix publication could store a bare
+    // point list where the ring nesting belongs) skip instead of
+    // crashing the whole listing
+    if (!Array.isArray(point) || point.length < 2) {
+      continue;
+    }
+    const [lon, lat] = point;
     // Unfold each longitude against its predecessor so a ring across
     // the antimeridian spans one continuous frame
     let value = lon;
@@ -94,9 +101,30 @@ function ringBbox(ring) {
   return [normalizeLon(minLon), minLat, normalizeLon(maxLon), maxLat];
 }
 
-/** The geometry bbox of a published region's Polygon feature. */
+/** The geometry bbox of a published region: the union over every
+ * polygon part (Polygon or MultiPolygon), null without geometry. */
 function regionBbox(region) {
-  return ringBbox(region?.feature?.geometry?.coordinates?.[0] ?? null);
+  const geometry = region?.feature?.geometry;
+  const rings = [];
+  if (geometry?.type === "Polygon") {
+    rings.push(geometry.coordinates?.[0]);
+  } else if (geometry?.type === "MultiPolygon") {
+    for (const polygon of geometry.coordinates ?? []) {
+      rings.push(polygon?.[0]);
+    }
+  }
+  const boxes = rings
+    .map(ringBbox)
+    .filter((box) => box?.every(Number.isFinite));
+  if (boxes.length === 0) {
+    return null;
+  }
+  return [
+    Math.min(...boxes.map((box) => box[0])),
+    Math.min(...boxes.map((box) => box[1])),
+    Math.max(...boxes.map((box) => box[2])),
+    Math.max(...boxes.map((box) => box[3])),
+  ];
 }
 
 /** Longitude distance from a west-east box edge pair, seam-aware. */
@@ -214,7 +242,12 @@ function matchesQuery(region, params) {
       return false;
     }
     const d = regionDistanceMeters(region, ref);
-    if (d == null || (params.distance != null && d > Number(params.distance))) {
+    // NaN distances (degenerate geometry) match nothing
+    if (
+      d == null ||
+      !Number.isFinite(d) ||
+      (params.distance != null && d > Number(params.distance))
+    ) {
       return false;
     }
   }
@@ -280,6 +313,13 @@ class RegionsStore {
 
   async set(id, region) {
     await this.load();
+    // Identical rewrites save nothing: the serve-time publish runs on
+    // every page load, and an unchanged warning set must not touch
+    // the disk each time
+    const prev = this.regions[id];
+    if (prev && JSON.stringify(prev) === JSON.stringify(region)) {
+      return;
+    }
     this.regions[id] = region;
     await this.save();
   }
@@ -301,12 +341,16 @@ class RegionsStore {
   async prune(keepIds, prefix) {
     await this.load();
     const keep = new Set(keepIds);
+    let removed = false;
     for (const id of Object.keys(this.regions)) {
       if (id.startsWith(prefix) && !keep.has(id)) {
         delete this.regions[id];
+        removed = true;
       }
     }
-    await this.save();
+    if (removed) {
+      await this.save();
+    }
   }
 
   async clear() {

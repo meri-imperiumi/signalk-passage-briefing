@@ -144,6 +144,13 @@ class NotesStore {
 
   async set(id, note) {
     await this.load();
+    // Identical rewrites save nothing: the serve-time publish runs on
+    // every page load, and an unchanged warning set must not touch
+    // the disk each time
+    const prev = this.notes[id];
+    if (prev && JSON.stringify(prev) === JSON.stringify(note)) {
+      return;
+    }
     this.notes[id] = note;
     await this.save();
   }
@@ -164,12 +171,16 @@ class NotesStore {
   async prune(keepIds, prefix) {
     await this.load();
     const keep = new Set(keepIds);
+    let removed = false;
     for (const id of Object.keys(this.notes)) {
       if (id.startsWith(prefix) && !keep.has(id)) {
         delete this.notes[id];
+        removed = true;
       }
     }
-    await this.save();
+    if (removed) {
+      await this.save();
+    }
   }
 
   async clear() {
