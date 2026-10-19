@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-10-19
+
 ### Fixed
 - Every map overlay — route, timeline pins, warning regions, notes, cyclone graphics — vanished mid-pan when the view crossed the antimeridian: `worldCopyJump` silently teleports a drag across the ±180° seam back into the primary world copy, where the basemap repeats (tiles wrap every world) but the overlays do not — they are unwrapped into the boat's own world copy (work doc #47), which on a Tonga→New Zealand passage lies west of the seam, so one pan across it left everything drawn 360° off-screen until the next data-driven fit. The option stays off now; overlays slide naturally with the pan instead of disappearing from a map that looks unchanged.
 - The map drew the simplified simulated track instead of the route's own geometry: the "one route line" refactor computed the colorized route ribbon and then a leftover assignment overwrote it with the sim-row ribbon (shipped in v0.12.8), so the drawn line drifted a mile or two off the actual route — the exact drift the refactor was meant to remove. The row-or-route selection moved into the model (`ribbonSpec`) and the view renders it in one assignment.
