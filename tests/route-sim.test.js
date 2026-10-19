@@ -192,7 +192,11 @@ describe("simulateRun", () => {
     const run = simulateRun({
       payload: buildPayload(),
       startTime: START,
-      config: { motoring_tws_threshold: 20, drift_mode_enabled: true },
+      config: {
+        motoring_tws_threshold: 20,
+        motoring_speed_threshold: 20,
+        drift_mode_enabled: true,
+      },
       maxHours: 48,
     });
     assert.equal(run.etaHours, 48);
@@ -206,7 +210,11 @@ describe("simulateRun", () => {
     const run = simulateRun({
       payload: buildPayload(),
       startTime: START,
-      config: { motoring_tws_threshold: 20, drift_mode_enabled: false },
+      config: {
+        motoring_tws_threshold: 20,
+        motoring_speed_threshold: 20,
+        drift_mode_enabled: false,
+      },
     });
     // 180 nm at 4.5 kn ≈ 40 h, burning 1.8 l/h
     assert.ok(run.etaHours > 35 && run.etaHours < 45, `eta ${run.etaHours}`);
@@ -251,7 +259,11 @@ describe("simulateRun", () => {
       payload: buildPayload({ tws: 10 }),
       startTime: START,
       matrix: MATRIX,
-      config: { motoring_tws_threshold: 20, drift_mode_enabled: true },
+      config: {
+        motoring_tws_threshold: 20,
+        motoring_speed_threshold: 20,
+        drift_mode_enabled: true,
+      },
       maxHours: 3,
     });
     assert.ok(driftRun.sailEvents.length >= 1);
@@ -261,7 +273,11 @@ describe("simulateRun", () => {
       payload: buildPayload({ tws: 10 }),
       startTime: START,
       matrix: MATRIX,
-      config: { motoring_tws_threshold: 20, drift_mode_enabled: false },
+      config: {
+        motoring_tws_threshold: 20,
+        motoring_speed_threshold: 20,
+        drift_mode_enabled: false,
+      },
       maxHours: 3,
     });
     assert.ok(motorRun.sailEvents.length >= 1);
@@ -761,33 +777,46 @@ describe("simulatePassage", () => {
 });
 
 describe("polar lookup", () => {
-  test("canonical table: bilinear interpolation and TWA folding", async () => {
-    const { polarSpeedKnots } = await polarPromise;
-    assert.equal(polarSpeedKnots(null, 10, 0), 0); // In irons
-    const stw = polarSpeedKnots(null, 10, (45 * Math.PI) / 180);
-    assert.ok(stw > 5 && stw < 6.5, `stw ${stw}`);
+  test("vendored PCHIP: nodes pass through, zeros never fabricate speed", async () => {
+    const { polarEngine } = await polarPromise;
+    const engine = polarEngine(null);
+    // Head to wind is in irons: the modeled pinch boundary, not a zero
+    const inIrons = engine.speedAt(10, 0);
+    assert.equal(inIrons.speedKnots, null);
+    assert.equal(inIrons.state, "in_irons");
+    // Beam reach: near the table's own node
+    const beam = engine.speedAt(10, Math.PI / 2);
+    assert.ok(
+      beam.speedKnots > 5.5 && beam.speedKnots < 7,
+      `${beam.speedKnots}`,
+    );
+    assert.equal(beam.state, "in_range");
     // Symmetric across the bow
-    assert.equal(polarSpeedKnots(null, 10, (-45 * Math.PI) / 180), stw);
-    // Grid nodes pass through (within the kn→m/s roundtrip)
-    approx(polarSpeedKnots(null, 10, Math.PI / 3), 6.4, 1e-3);
+    assert.equal(engine.speedAt(10, -Math.PI / 2).speedKnots, beam.speedKnots);
     // Out-of-grid TWS clamps to hull speed
-    approx(polarSpeedKnots(null, 99, Math.PI / 2), 8.5, 1e-3);
+    approx(engine.speedAt(99, Math.PI / 2).speedKnots, 8.5, 1e-3);
   });
 
-  test("light wind scales toward zero, performance factor derates", async () => {
-    const { polarSpeedKnots } = await polarPromise;
-    // Below the table's 4 kn floor: half the wind, half the speed
-    const full = polarSpeedKnots(null, 4, Math.PI / 2);
-    const half = polarSpeedKnots(null, 2, Math.PI / 2);
-    approx(half, full / 2, 1e-3);
-    const derated = polarSpeedKnots(null, 10, Math.PI / 2, {
-      performanceFactor: 0.8,
-    });
-    approx(derated, polarSpeedKnots(null, 10, Math.PI / 2) * 0.8, 1e-3);
+  test("beat target and performance factor derating", async () => {
+    const { polarEngine } = await polarPromise;
+    const engine = polarEngine(null);
+    const beat = engine.beatAt(10);
+    assert.ok(beat != null, "the fallback table carries a beat target");
+    assert.ok(beat.twaRad > 0 && beat.twaRad < Math.PI / 2, "upwind angle");
+    assert.ok(
+      beat.vmgKnots > 0 && beat.vmgKnots < beat.speedKnots,
+      "VMG < speed",
+    );
+    const derated = engine.speedAt(10, Math.PI / 2, 0.8);
+    approx(
+      derated.speedKnots,
+      engine.speedAt(10, Math.PI / 2).speedKnots * 0.8,
+      1e-3,
+    );
   });
 
-  test("malformed table yields zero instead of sailing on fiction", async () => {
-    const { isInterpolatableTable, polarSpeedKnots } = await polarPromise;
+  test("malformed table falls back to the default engine", async () => {
+    const { polarEngine, isInterpolatableTable } = await polarPromise;
     assert.equal(isInterpolatableTable(null), false);
     assert.equal(
       isInterpolatableTable({
@@ -796,7 +825,13 @@ describe("polar lookup", () => {
       }),
       false,
     );
-    assert.equal(polarSpeedKnots({ axes: {} }, 10, 1), 0);
+    // The same fallback a missing polar gets
+    const fallback = polarEngine({ axes: {} });
+    const good = polarEngine(null);
+    assert.equal(
+      fallback.speedAt(10, Math.PI / 2).speedKnots,
+      good.speedAt(10, Math.PI / 2).speedKnots,
+    );
   });
 
   test("bearing helper", async () => {

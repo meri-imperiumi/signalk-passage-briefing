@@ -1664,6 +1664,24 @@ export function mergeTimeline(exceptions, payload = null) {
     });
   }
 
+  // Beating stretches (work doc #49): the in-irons legs the plan
+  // sails as VMG — one episode per continuous tack-tack-tack stretch.
+  for (const b of summary.beatEpisodes ?? []) {
+    push({
+      hoursFromNow: b.hoursFromNow ?? null,
+      timestamp: b.timestamp ?? null,
+      kind: "beat",
+      severity: "info",
+      label: "Beating",
+      detail: [
+        b.hours != null ? `${b.hours} h tacking` : null,
+        b.vmgKnots != null ? `VMG ${b.vmgKnots.toFixed(1)} kn` : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    });
+  }
+
   // Landfall sightings (work doc #6): every gated episode along the
   // course, the arrival coast flagged final — island chains ride the
   // same list. The advisory string is recomposed here rather than
@@ -1978,6 +1996,7 @@ export const GLYPHS = {
   space: "✦",
   hazard: "⚠",
   landfall: "⛰",
+  beat: "⇄",
   arrival: "🏁",
   line: "⌀",
   energy: "🔋",

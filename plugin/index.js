@@ -189,6 +189,10 @@ const HERE_TTL_MS = 3 * 60 * 60 * 1000;
  */
 const DEFAULTS = {
   motoring_tws_threshold: 3.5,
+  // The engine's fallback bar: achieved speed (polar on course, or
+  // VMG while beating in irons) below this and the motor comes on
+  // (work doc #49)
+  motoring_speed_threshold: 2,
   // Downwind-sail night policy (work doc #47 session): "break" is
   // the default — no downwind sail at night; dusk strikes the sail
   // and reefable white sails (poled out) carry the dark period, dawn
@@ -2542,8 +2546,21 @@ module.exports = (app) => {
       properties: {
         motoring_tws_threshold: {
           type: "number",
-          title: "Motoring TWS Threshold (knots)",
+          title: "Becalmed Wind Threshold (knots)",
+          description:
+            "True wind below which the plan drifts (drift mode on) or " +
+            "motors — the becalmed case. Above it, the engine decision " +
+            "is speed-based, not wind-based.",
           default: DEFAULTS.motoring_tws_threshold,
+        },
+        motoring_speed_threshold: {
+          type: "number",
+          title: "Motoring Speed Threshold (knots)",
+          description:
+            "The engine's fallback bar: when the achieved speed — polar " +
+            "speed on course, or VMG while beating in irons — drops " +
+            "below this, the motor comes on (work doc #49).",
+          default: DEFAULTS.motoring_speed_threshold,
         },
         downwind_night_policy: {
           type: "string",
@@ -2967,6 +2984,7 @@ module.exports = (app) => {
       );
       simulationConfig = {
         motoring_tws_threshold: config.motoring_tws_threshold,
+        motoring_speed_threshold: config.motoring_speed_threshold,
         drift_mode_enabled: config.drift_mode_enabled,
         motor_fuel_l_per_hour: config.motor_fuel_l_per_hour,
         waterline_length_m: config.waterline_length_m,

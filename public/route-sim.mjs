@@ -23,17 +23,13 @@
 
 import { meteorNightEvents } from "./components/meteors.mjs";
 import { detectLineCrossings } from "./lines-of-interest.js";
-import {
-  bearingRad,
-  DEFAULT_POLAR_TABLE,
-  parsePerformanceFactor,
-  polarSpeedKnots,
-} from "./polar.mjs";
+import { bearingRad, parsePerformanceFactor, polarEngine } from "./polar.mjs";
 import {
   apparentWindSpeedKnots,
   isNight,
   noSailsRegime,
   regimeBandOf,
+  SAILS_FILL_MIN_AWS_KNOTS,
   SAILS_MAX_AWS_KNOTS,
   serenoComfort,
   steepnessRatio,
@@ -64,6 +60,10 @@ export const HAZARD_RADIUS_NM = 5.0;
  */
 export const SIMULATION_DEFAULTS = {
   motoring_tws_threshold: 3.5,
+  // The engine's fallback bar is the achieved speed, not the wind
+  // speed: sail what the polar allows, motor when the progress —
+  // on course or VMG while beating — drops below this (work doc #49)
+  motoring_speed_threshold: 2,
   drift_mode_enabled: true,
   motor_fuel_l_per_hour: 1.8,
   waterline_length_m: 9.4,
@@ -586,6 +586,57 @@ function maxOf(a, b) {
  *   Merges the anomaly's values into the open episode
  * @returns {Array<object>} Episodes, chronological
  */
+/**
+ * Aggregates the hourly rows' beating stretches (work doc #49): each
+ * continuous run of `beating` rows becomes one episode carrying its
+ * start (the timeline anchor), span and mean VMG — the tacking leg
+ * the crew reads as "we beat off this wind for N hours".
+ *
+ * @param {Array<{hoursFromNow: number, timestamp: string, beating:
+ *   boolean, stwKnots: number}>} rows - Simulated hourly rows
+ * @returns {Array<{hoursFromNow: number, timestamp: string,
+ *   untilHoursFromNow: number, untilTimestamp: string, hours: number,
+ *   vmgKnots: number}>}
+ */
+function deriveBeatEpisodes(rows) {
+  const episodes = [];
+  let current = null;
+  for (const row of rows) {
+    if (row.beating === true) {
+      if (current == null) {
+        current = {
+          hoursFromNow: row.hoursFromNow,
+          timestamp: row.timestamp ?? null,
+          untilHoursFromNow: row.hoursFromNow,
+          untilTimestamp: row.timestamp ?? null,
+          vmgSum: row.vmgKnots ?? 0,
+          vmgCount: 1,
+        };
+        episodes.push(current);
+      } else {
+        current.untilHoursFromNow = row.hoursFromNow;
+        current.untilTimestamp = row.timestamp ?? null;
+        current.vmgSum += row.vmgKnots ?? 0;
+        current.vmgCount += 1;
+      }
+    } else {
+      current = null;
+    }
+  }
+  return episodes.map((episode) => {
+    const hours = episode.untilHoursFromNow - episode.hoursFromNow + 1;
+    const vmg = episode.vmgSum / episode.vmgCount;
+    return {
+      hoursFromNow: episode.hoursFromNow,
+      timestamp: episode.timestamp,
+      untilHoursFromNow: episode.untilHoursFromNow,
+      untilTimestamp: episode.untilTimestamp,
+      hours: Math.max(1, Math.round(hours * 10) / 10),
+      vmgKnots: Math.round(vmg * 100) / 100,
+    };
+  });
+}
+
 function mergeEpisodes(anomalies, pickPeak) {
   const episodes = [];
   for (const anomaly of anomalies) {
@@ -1160,6 +1211,9 @@ export function simulateRun({
 }) {
   const cfg = { ...SIMULATION_DEFAULTS, ...config };
   const pf = parsePerformanceFactor(performanceFactor);
+  /** The prepared polar lookup (work doc #25): constructed once, the
+   * vendored PCHIP engine queries per step. */
+  const polarLookup = polarEngine(polar);
   const track = payload?.waypoints ?? [];
   if (track.length < 2) {
     throw new Error("Payload needs at least two waypoints to simulate");
@@ -1244,6 +1298,19 @@ export function simulateRun({
     let stw = 0;
     let fuelRate = 0;
     let motoring = false;
+    // Beating in irons: the course sits below the modeled pinch
+    // boundary, the crew either tacks or motors, and the plan beats
+    // the best angle the crew's own polar supports (work doc #49).
+    // The rig then sails at the beat angle — the row's wind angle is
+    // the canvas's, not the course's — and progress along the course
+    // is the beat's VMG. Beating works into light air because the
+    // boat makes its own apparent wind, so the fill floor reads AWS
+    // at the beat angle, not TWS.
+    let beating = false;
+    let sailingTwaRad = twaRad;
+    /** Progress along the course: stw under sail or motor, VMG while
+     * beating (the through-water speed differs — the row carries it). */
+    let progressKnots = 0;
     if (canvasDown) {
       // Rig down: apparent wind ≈ true wind, the canvas-off regimes
       // read straight off TWS — one rule drives both the rows and the
@@ -1255,25 +1322,65 @@ export function simulateRun({
         stw = MOTOR_SPEED_KNOTS;
         fuelRate = cfg.motor_fuel_l_per_hour ?? MOTOR_FUEL_L_PER_HOUR;
         motoring = true;
+        progressKnots = stw;
       }
-    } else if (tws != null && tws >= cfg.motoring_tws_threshold) {
-      stw = polarSpeedKnots(polar ?? DEFAULT_POLAR_TABLE, tws, twaRad, {
-        performanceFactor: pf,
-      });
+    } else if (tws != null) {
+      // SPEC §5.1, speed-based (work doc #25/#49): sail what the polar
+      // allows; motor only when the achieved speed — polar speed on
+      // course, or VMG while beating in irons — drops below the
+      // threshold. Becalmed stays drift mode's call: the wind threshold
+      // gates the drift, the speed threshold gates the engine.
+      const { speedKnots, state } = polarLookup.speedAt(tws, twaRad, pf);
+      const beat =
+        speedKnots == null || state === "pinching"
+          ? polarLookup.beatAt(tws, pf)
+          : null;
+      const beatAws =
+        beat != null
+          ? apparentWindSpeedKnots({
+              twsKnots: tws,
+              stwKnots: beat.speedKnots,
+              twaRad: beat.twaRad,
+            })
+          : null;
+      if (speedKnots != null && speedKnots >= cfg.motoring_speed_threshold) {
+        stw = speedKnots;
+        progressKnots = stw;
+      } else if (
+        beat != null &&
+        beat.vmgKnots >= cfg.motoring_speed_threshold &&
+        beatAws >= SAILS_FILL_MIN_AWS_KNOTS
+      ) {
+        // Beat: the sails draw at the beat angle (AWS clears the fill
+        // floor) and the VMG is real progress — tack-tack-tack.
+        stw = beat.speedKnots;
+        progressKnots = beat.vmgKnots;
+        sailingTwaRad = beat.twaRad;
+        beating = true;
+      } else if (cfg.drift_mode_enabled && tws < cfg.motoring_tws_threshold) {
+        stw = 0; // Becalmed: drift with zero fuel
+        progressKnots = 0;
+      } else {
+        stw = MOTOR_SPEED_KNOTS;
+        fuelRate = cfg.motor_fuel_l_per_hour ?? MOTOR_FUEL_L_PER_HOUR;
+        motoring = true;
+        progressKnots = stw;
+      }
     } else if (cfg.drift_mode_enabled) {
       stw = 0; // Drift with zero fuel, riding the current
-      fuelRate = 0;
+      progressKnots = 0;
     } else {
       stw = MOTOR_SPEED_KNOTS;
       fuelRate = cfg.motor_fuel_l_per_hour ?? MOTOR_FUEL_L_PER_HOUR;
       motoring = true;
+      progressKnots = stw;
     }
 
-    // SOG vector = boat vector + current vector
+    // SOG vector = progress vector + current vector
     const drift = weather?.current?.drift ?? 0;
     const setDeg = weather?.current?.set ?? 0;
-    const boatN = stw * Math.cos(heading);
-    const boatE = stw * Math.sin(heading);
+    const boatN = progressKnots * Math.cos(heading);
+    const boatE = progressKnots * Math.sin(heading);
     const curN = drift * Math.cos(setDeg * DEG);
     const curE = drift * Math.sin(setDeg * DEG);
     const sog = Math.sqrt((boatN + curN) ** 2 + (boatE + curE) ** 2);
@@ -1327,7 +1434,7 @@ export function simulateRun({
       const suggested = suggestSailState(
         matrix,
         tws ?? 0,
-        Math.abs(((twaRad / DEG + 540) % 360) - 180),
+        Math.abs(((sailingTwaRad / DEG + 540) % 360) - 180),
         night,
       );
       const suggestedState = suggested?.preferredSailState ?? null;
@@ -1353,7 +1460,7 @@ export function simulateRun({
             awsKnots: apparentWindSpeedKnots({
               twsKnots: tws,
               stwKnots: stw,
-              twaRad,
+              twaRad: sailingTwaRad,
             }),
           }) != null);
       if (
@@ -1438,12 +1545,16 @@ export function simulateRun({
       distanceFromStartNm: Math.round(distanceMadeGoodNm * 10) / 10,
       headingDeg: Math.round(((heading / DEG) % 360) * 10) / 10,
       twdDeg: weather?.surface?.twd ?? null,
-      twaRad,
+      twaRad: sailingTwaRad,
       awsKnots: apparentWindSpeedKnots({
         twsKnots: tws ?? 0,
         stwKnots: stw,
-        twaRad,
+        twaRad: sailingTwaRad,
       }),
+      beating,
+      // The beat's VMG — the progress a tacking beat makes good toward
+      // the course while in irons (work doc #49); null under sail or motor
+      vmgKnots: beating ? progressKnots : null,
       azMs2: null,
       comfortLevel: null,
       slatting: null,
@@ -2397,6 +2508,10 @@ export function filterExceptions(simulationResult, simParams = {}) {
       // Whether the plan reached its destination inside the horizon:
       // an "Arrival" that is really the horizon cap would be a lie
       arrived: simulationResult.arrived === true,
+      // Beating stretches (work doc #49): the in-irons legs the plan
+      // sails as VMG — one episode per continuous stretch, carrying
+      // the mean VMG the tacking makes good
+      beatEpisodes: deriveBeatEpisodes(simulationResult.hourlyComfort ?? []),
       // The destination's gazetteer name for the arrival row (work
       // doc #34 session); null without the vector base layer
       destinationName: simulationResult.destinationName ?? null,

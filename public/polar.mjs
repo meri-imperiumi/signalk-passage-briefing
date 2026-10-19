@@ -34,9 +34,14 @@
 /**
  * Knots per m/s.
  */
+import { Polar } from "./vendor/polar/polar-math.js";
+
 const MS_TO_KN = 1.943844;
 
 const DEG = Math.PI / 180;
+
+/** The vendored polar engine, prepared once per table object. */
+const engineCache = new WeakMap();
 
 const KN_TO_MS = 0.514444;
 
@@ -64,6 +69,8 @@ const FALLBACK_STW_KN = [
  */
 export const DEFAULT_POLAR_TABLE = {
   kind: "polarTable",
+  schemaVersion: "1.0.0",
+  units: { tws: "m/s", twa: "rad", boatSpeed: "m/s" },
   axes: {
     tws: FALLBACK_TWS_KN.map((kn) => kn * KN_TO_MS),
     twa: FALLBACK_TWA_DEG.map((deg) => deg * DEG),
@@ -168,119 +175,87 @@ export function isInterpolatableTable(table) {
 }
 
 /**
- * First index whose axis value is >= target.
+ * The prepared polar lookup: the vendored polar-math engine (PCHIP
+ * over observed cells, modeled pinch/in-irons, run extrapolation —
+ * work doc #25) behind the knots boundary. Constructed once per
+ * table and cached — `prepareEntries` runs once, the simulation
+ * queries it per step.
  *
- * @param {number[]} axis - Ascending axis values
- * @param {number} target
- * @returns {number} Index in [0, axis.length]
- */
-function upperIndex(axis, target) {
-  let lo = 0;
-  let hi = axis.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (axis[mid] < target) {
-      lo = mid + 1;
-    } else {
-      hi = mid;
-    }
-  }
-  return lo;
-}
-
-/**
- * Plain bilinear interpolation inside the grid bounds.
- *
- * @param {object} table - Validated canonical table
- * @param {number} twsMs - Clamped TWS (m/s)
- * @param {number} twaRad - Clamped TWA (rad, ≥ 0 with symmetry)
- * @returns {number} Boat speed (m/s)
- */
-function bilinear(table, twsMs, twaRad) {
-  const { tws, twa } = table.axes;
-  const matrix = table.values.boatSpeedMatrix;
-  const i = upperIndex(tws, twsMs);
-  const j = upperIndex(twa, twaRad);
-  const i0 = Math.max(0, i - 1);
-  const j0 = Math.max(0, j - 1);
-  const i1 = Math.min(tws.length - 1, i0 + 1);
-  const j1 = Math.min(twa.length - 1, j0 + 1);
-
-  const tw = tws[i1] > tws[i0] ? (twsMs - tws[i0]) / (tws[i1] - tws[i0]) : 0;
-  const ta = twa[j1] > twa[j0] ? (twaRad - twa[j0]) / (twa[j1] - twa[j0]) : 0;
-
-  const s00 = matrix[i0][j0];
-  const s01 = matrix[i0][j1];
-  const s10 = matrix[i1][j0];
-  const s11 = matrix[i1][j1];
-  return (
-    s00 * (1 - tw) * (1 - ta) +
-    s01 * (1 - tw) * ta +
-    s10 * tw * (1 - ta) +
-    s11 * tw * ta
-  );
-}
-
-/**
- * Boat speed through water from a polar table at given conditions,
- * in knots. Out-of-grid and unit handling per the module docs; a null
- * table falls back to {@link DEFAULT_POLAR_TABLE}, a malformed table
- * yields 0 (the boat then drifts rather than sailing on fiction).
+ * A malformed table falls back to {@link DEFAULT_POLAR_TABLE}'s
+ * engine: the same fallback a missing polar gets, rather than sailing
+ * on nothing.
  *
  * @param {object|null} table - Canonical polar resource (or null)
- * @param {number} twsKnots - True wind speed (kn)
- * @param {number} twaRad - True wind angle (rad, signed ok)
- * @param {object} [options]
- * @param {number} [options.performanceFactor=1] - Derating
- *   multiplier from `polars.performanceFactor`, clamped to [0, 1]
- * @returns {number} Speed through water (kn)
+ * @returns {{speedAt: (twsKnots: number, twaRad: number,
+ *   performanceFactor?: number) => {speedKnots: number|null,
+ *   state: string|null}, beatAt: (twsKnots: number,
+ *   performanceFactor?: number) => {twaRad: number, speedKnots:
+ *   number, vmgKnots: number}|null}}
  */
-export function polarSpeedKnots(
-  table,
-  twsKnots,
-  twaRad,
-  { performanceFactor = 1 } = {},
-) {
-  const active = table ?? DEFAULT_POLAR_TABLE;
-  if (!isInterpolatableTable(active)) {
-    return 0;
+export function polarEngine(table) {
+  const source = table ?? DEFAULT_POLAR_TABLE;
+  let engine = engineCache.get(source);
+  if (engine !== undefined) {
+    return engine;
   }
-  if (!Number.isFinite(twsKnots) || !Number.isFinite(twaRad) || twsKnots <= 0) {
-    return 0;
+  let polar;
+  try {
+    polar = Polar.fromTable(source);
+  } catch {
+    polar = Polar.fromTable(DEFAULT_POLAR_TABLE);
   }
-  const pf = Number.isFinite(performanceFactor)
-    ? Math.min(1, Math.max(0, performanceFactor))
-    : 1;
-
-  const symmetric = active.symmetry?.portStarboardSymmetric !== false;
-  let twa = symmetric ? Math.abs(twaRad) : twaRad;
-
-  // TWS axis: below the table scales toward zero at calm, above clamps
-  let twsScale = 1;
-  let twsMs = twsKnots / MS_TO_KN;
-  const twsAxis = active.axes.tws;
-  if (twsMs < twsAxis[0]) {
-    twsScale = twsMs / twsAxis[0];
-    twsMs = twsAxis[0];
-  } else if (twsMs > twsAxis[twsAxis.length - 1]) {
-    twsMs = twsAxis[twsAxis.length - 1];
-  }
-
-  // TWA axis: pinch below the closest-winded angle, clamp on the run
-  let twaScale = 1;
-  const twaAxis = active.axes.twa;
-  if (twa < 0) {
-    twa = 0;
-  }
-  if (twa < twaAxis[0]) {
-    twaScale = twaAxis[0] > 0 ? twa / twaAxis[0] : 0;
-    twa = twaAxis[0];
-  } else if (twa > twaAxis[twaAxis.length - 1]) {
-    twa = twaAxis[twaAxis.length - 1];
-  }
-
-  const speedMs = bilinear(active, twsMs, twa);
-  return Math.max(0, speedMs * twsScale * twaScale * pf * MS_TO_KN);
+  const normalizeAngle = (twa) => Math.atan2(Math.sin(twa), Math.cos(twa));
+  engine = {
+    /**
+     * Speed through water on a course, knots — `null` when the course
+     * sits below the modeled pinch boundary (in irons): the boat
+     * cannot sail there, and the caller decides tack or motor (work
+     * doc #49). `state` is the vendored query's TWA state
+     * (`in_range` | `pinching` | `in_irons` | `extrapolated` |
+     * `below_range` | `above_range`).
+     */
+    speedAt(twsKnots, twaRad, performanceFactor = 1) {
+      const pf = Math.min(1, Math.max(0, performanceFactor));
+      const result = polar.speedAt({
+        tws: twsKnots / MS_TO_KN,
+        twa: normalizeAngle(twaRad),
+        performanceFactor: pf,
+      });
+      return {
+        speedKnots: result.value == null ? null : result.value * MS_TO_KN,
+        state: result.state?.twa ?? null,
+      };
+    },
+    /**
+     * The row's beat target — the best upwind angle and speed the
+     * crew's own data supports, with the VMG a tacking beat makes
+     * good toward a course too close to the wind. `null` when the
+     * row has no observed upwind data to derive one from.
+     */
+    beatAt(twsKnots, performanceFactor = 1) {
+      const pf = Math.min(1, Math.max(0, performanceFactor));
+      const result = polar.targetsAt({
+        tws: twsKnots / MS_TO_KN,
+        performanceFactor: pf,
+      });
+      const beat = result.value?.beat;
+      if (
+        beat == null ||
+        !Number.isFinite(beat.twa) ||
+        !Number.isFinite(beat.speed) ||
+        !Number.isFinite(beat.vmg)
+      ) {
+        return null;
+      }
+      return {
+        twaRad: beat.twa,
+        speedKnots: beat.speed * MS_TO_KN,
+        vmgKnots: beat.vmg * MS_TO_KN,
+      };
+    },
+  };
+  engineCache.set(source, engine);
+  return engine;
 }
 
 /**
