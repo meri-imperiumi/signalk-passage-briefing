@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Briefing refresh crashed with 502 `Cannot read properties of undefined (reading '1')` when the course provider reported the vessel navigating the briefed route while still heading to its first waypoint (`navigation.course.activeRoute.pointIndex` 0, forward — e.g. just after engaging a route): the progress trim read `raw[pointIndex - 1]` for a last passed waypoint that does not exist yet. Forward pointIndex 0 now trims to the vessel position with nothing trimmed off (`trimmedFromNm` 0), and without a known vessel position the full untrimmed plan serves.
+
 ## [0.13.1] - 2026-10-19
 
 ### Changed

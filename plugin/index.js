@@ -564,12 +564,25 @@ module.exports = (app) => {
     ) {
       return null; // Not past the first point, or an index we cannot use
     }
+    const target = raw[pointIndex];
+    const vessel = vesselPosition();
+    // Heading to the first waypoint (forward pointIndex 0): no leg of
+    // the plan is behind the boat, so there is no last passed waypoint
+    // to anchor the trim distance on. The plan starts at the vessel
+    // when known (nothing trimmed off, 0 nm in), else serves in full.
+    if (!reverse && pointIndex === 0) {
+      if (!vessel) {
+        return null;
+      }
+      return {
+        coordinates: [[vessel.lon, vessel.lat], ...raw],
+        trimmedFromNm: 0,
+      };
+    }
     // Travel order decides what remains: forward navigates toward
     // higher indices, reverse toward lower ones (the course provider's
     // `reverse` flag). The start point is the vessel's actual position
     // when available, else the last passed waypoint.
-    const target = raw[pointIndex];
-    const vessel = vesselPosition();
     const start = vessel
       ? [vessel.lon, vessel.lat]
       : reverse
@@ -579,7 +592,8 @@ module.exports = (app) => {
       ? raw.slice(0, pointIndex + 1).reverse()
       : raw.slice(pointIndex);
     // Distance along the stored plan from its start to the trim point:
-    // the boat sits between the target and the last passed point
+    // the boat sits between the target and the last passed point (the
+    // forward pointIndex 0 case returned above, so this is defined)
     const reference = reverse ? target : raw[pointIndex - 1];
     const anchorSlice = reverse
       ? raw.slice(0, pointIndex + 1)

@@ -2802,6 +2802,61 @@ test("route progress: briefing trims to the sailed legs (work doc #28)", async (
       revPayload.trimmedFromNm > 55 && revPayload.trimmedFromNm < 65,
       `reversed trimmedFromNm ${revPayload.trimmedFromNm}`,
     );
+
+    // Just engaged, heading to the first waypoint (pointIndex 0): no
+    // waypoint is behind the boat, so the plan starts at the vessel
+    // with nothing trimmed off. Regression: the trim used to read
+    // raw[-1] and crashed the refresh with "Cannot read properties of
+    // undefined (reading '1')" (502 on /api/briefing/refresh)
+    app.getSelfPath = (path) =>
+      path === "navigation.position"
+        ? { latitude: -0.05, longitude: 0 }
+        : path === "navigation.course.activeRoute"
+          ? {
+              href: "/resources/routes/r1",
+              pointIndex: 0,
+            }
+          : null;
+    const engagedRes = await call("/api/briefing/refresh", {
+      query: { route: "r1" },
+    });
+    assert.equal(
+      engagedRes.code,
+      null,
+      `engaged refresh: ${JSON.stringify(engagedRes.payload)}`,
+    );
+    const engaged = await call("/api/briefing", { query: { route: "r1" } });
+    const engagedPayload = engaged.payload.payload;
+    assert.ok(
+      Math.abs(engagedPayload.waypoints[0].lat + 0.05) < 0.01,
+      `engaged start ${engagedPayload.waypoints[0].lat}`,
+    );
+    assert.equal(engagedPayload.trimmedFromNm, 0);
+    // The full plan follows the boat: last waypoint is the route end
+    assert.ok(
+      Math.abs(engagedPayload.waypoints.at(-1).lat - 1.5) < 0.01,
+      `engaged end ${engagedPayload.waypoints.at(-1).lat}`,
+    );
+
+    // Same pointIndex 0 but no vessel position: no anchor for the
+    // start — the full plan serves untrimmed
+    app.getSelfPath = (path) =>
+      path === "navigation.position"
+        ? null
+        : path === "navigation.course.activeRoute"
+          ? {
+              href: "/resources/routes/r1",
+              pointIndex: 0,
+            }
+          : null;
+    await call("/api/briefing/refresh", { query: { route: "r1" } });
+    const untrimmed = await call("/api/briefing", { query: { route: "r1" } });
+    const untrimmedPayload = untrimmed.payload.payload;
+    assert.ok(
+      Math.abs(untrimmedPayload.waypoints[0].lat) < 0.01,
+      `untrimmed start ${untrimmedPayload.waypoints[0].lat}`,
+    );
+    assert.equal(untrimmedPayload.trimmedFromNm, undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
