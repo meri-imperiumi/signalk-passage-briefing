@@ -522,8 +522,15 @@ describe("fronts source: attachFronts degradation (work doc #50)", () => {
 describe("fronts source: helpers", () => {
   test("default cache root sits beside the provider's data dir", () => {
     assert.equal(
-      defaultCacheRoot("/data/plugin-data/signalk-passage-briefing"),
-      "/data/plugin-data/signalk-grib-weather-provider/cache",
+      defaultCacheRoot(
+        join("/data", "plugin-data", "signalk-passage-briefing"),
+      ),
+      join(
+        "/data",
+        "plugin-data",
+        "signalk-grib-weather-provider",
+        "cache",
+      ),
     );
   });
 });
