@@ -38,7 +38,8 @@
       "signalk-polar-management",
       "signalk-watch-schedule",
       "@meri-imperiumi/signalk-ships-time",
-      "@meri-imperiumi/signalk-corridor-tile-downloader"
+      "@meri-imperiumi/signalk-corridor-tile-downloader",
+      "signalk-grib-weather-provider"
     ]
   },
   "engines": {
