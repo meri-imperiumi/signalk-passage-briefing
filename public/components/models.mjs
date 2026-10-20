@@ -771,9 +771,9 @@ function episodeDetail(episode, parts) {
  * to one chronological shape — `{hoursFromNow, timestamp, stamp,
  * kind, severity, label, detail}` — sorted by time, undated last.
  * Kinds: `sail`, `maneuver`, `convective`, `sea`, `zone`, `space`,
- * `hazard`, `time`; new event sources become new kinds instead of
- * new blocks (work doc #1's lines of interest will ride in as
- * `line`).
+ * `hazard`, `time`, `front`; new event sources become new kinds
+ * instead of new blocks (work doc #1's lines of interest will ride
+ * in as `line`).
  * Severities: `info`, `warn`, `severe` — the renderer's colour
  * scale. The tactical dashboard renders the 24 h slice of this list,
  * the strategic outlook the whole passage.
@@ -1608,6 +1608,48 @@ export function mergeTimeline(exceptions, payload = null) {
     });
   }
 
+  // Automatic synoptic front passages (work doc #50): when the
+  // tracked front crosses the boat's scheduled position. Always
+  // informational — an automatic analysis, never an alert; the
+  // official charts the briefing fetches stay the authoritative
+  // synoptic picture. Rows carry the crossing position (the map pin
+  // sits where the route actually crosses, not the hourly track
+  // fix) and the expected wind shift context.
+  const frontsBlock = payload?.fronts ?? null;
+  for (const p of frontsBlock?.passages ?? []) {
+    const kindName =
+      p.kind === "front"
+        ? "Front"
+        : p.kind === "cold"
+          ? "Cold front"
+          : p.kind === "warm"
+            ? "Warm front"
+            : p.kind === "stationary"
+              ? "Stationary front"
+              : "Trough";
+    push({
+      hoursFromNow: relHours(p.time, fetchMs),
+      timestamp: p.time ?? null,
+      // The crossing's own interpolated position (work doc #47's
+      // rule: the pin reads against the geometry that produced it)
+      position: positionFromPair(p.lat, p.lon),
+      kind: "front",
+      severity: "info",
+      label: `${kindName} crosses the route`,
+      detail: [
+        formatCoord(p.lat, p.lon),
+        p.shiftDeg != null ? `wind shift ~${Math.round(p.shiftDeg)}°` : null,
+        p.motionDeg != null && p.speedKn != null
+          ? `moving ${Math.round(p.motionDeg)}° at ${fmtKn(p.speedKn)}`
+          : null,
+        "automatic analysis",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      provenance: frontsBlock?.provenance ?? null,
+    });
+  }
+
   // Territorial waters transitions (work doc #17): the simulation
   // timestamps the plugin's crossings against the passage schedule
   // (summary), falling back to the payload's undated transitions;
@@ -2022,6 +2064,7 @@ export const GLYPHS = {
   energy: "🔋",
   departure: "⚓",
   time: "◷",
+  front: "🌬",
 };
 
 /** The glyph for one event kind, or a plain bullet. */

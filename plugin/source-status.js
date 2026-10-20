@@ -134,6 +134,9 @@ function statusPath(dataDir) {
  *   sources record `unavailable` for paths with no value)
  * - `skip`: true — the cycle was skipped by the online gate
  * - `absent`: true — optional source not present at all
+ * - `note`: cycle detail for the expandable row (what the cycle
+ *   actually saw — a run's coverage, a missing optional layer);
+ *   replaced every cycle, cleared when a cycle passes none
  * - `now`: Date override (tests)
  *
  * @param {object} [params]
@@ -231,9 +234,15 @@ function createSourceStatus({ dataDir } = {}) {
     errorClass,
     skip,
     absent,
+    note,
     now = new Date(),
   }) => {
     const entry = define({ id, label, kind, url, expectedRefreshMs });
+    // Cycle detail for the expandable row — the "what actually
+    // happened" line (the fronts run's coverage, which optional
+    // layer is missing). Information, not failure.
+    entry.note =
+      typeof note === "string" && note.length > 0 ? note.slice(0, 300) : null;
     const stamp = (now instanceof Date ? now : new Date(now)).toISOString();
     if (absent) {
       // Optional source not installed: information, not a failure —

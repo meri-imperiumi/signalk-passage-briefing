@@ -7,7 +7,8 @@ Offshore passage daily briefing webapp for Signal K: a plugin that plans and rev
 - Simulates the passage hourly from the boat's actual position: speed from the vessel's polar, current added, ETA percentiles for the remaining route
 - Recommends sail changes hour by hour from what the crew actually did, learned from the electronic logbook
 - Rates every hour on the Sereno comfort scale and flags when light air in a residual swell will be worse than a gale
-- Renders one unified timeline: sail work, tacks and gybes, clock changes, territorial waters, official alerts, sky events, rain showers and hazards in order
+- Renders one unified timeline: sail work, tacks and gybes, clock changes, territorial waters, official alerts, sky events, rain showers, hazards and synoptic front crossings in order
+- Times the synoptic front crossings of the route from the GRIB run the weather provider has on board: automatic detection and tracking (work doc #50), rendered as informational timeline rows with the crossing position and expected wind shift
 - Fetches bulletins, official structured alerts, global disaster events and synoptic charts for the waters the route actually crosses
 - Keeps working offline: everything fetches in the online window and survives the other 23 hours from the cache
 - Shows a mini summary on the chart plotter and learns from every logbook entry the crew writes
@@ -62,6 +63,10 @@ All external fetches are online-gated and cached to the plugin data directory, s
 ## Pairing with Watch Schedule
 
 [signalk-watch-schedule](https://github.com/hoeken/signalk-watch-schedule) runs the crew's watch rotation and publishes it under `watch.*`. When a watch is running, this plugin reads the schedule at app load and moves planned sail changes (reefs, canvas work) to the *previous* watch handover — the moment both teams are awake on deck — rather than sunrise/sunset; tacks and gybes stay at their tactical times, since course work can't wait for a handover. The watch boundary wins over sunlight. Without a running watch, canvas work anchors to the next sunrise/sunset. Webapp-side only: no configuration, and the briefing works unchanged when the plugin is absent.
+
+## Pairing with GRIB Downloader and Weather Provider
+
+[signalk-grib-downloader](https://github.com/meri-imperiumi/signalk-grib-downloader) fetches GRIB runs for the boat's area (default boat-centered, or a box you draw) and [signalk-grib-weather-provider](https://github.com/macjl/signalk-grib-weather-provider) decodes them into grid caches. When a cached run reaches the boat's waters, the briefing detects the synoptic fronts, troughs and pressure centres in it, tracks each feature through the forecast steps (first ~5 days), and times the crossings of the boat's *scheduled* position — the same simulation the webapp runs — as 🌬 informational timeline rows pinned to the crossing point. Runs carrying 850 hPa fields (GFS via the downloader's default fetch) type the fronts cold, warm or stationary with the thermal front parameter method; pressure-only runs still give troughs and wind-shift fronts. This is an automatic analysis, not a forecaster's chart: it finds roughly half of the fronts a professional analysis draws, so the rows never raise alerts and the official synoptic charts remain the authoritative picture. The Data Sources checklist reports what the analysis stands on — run freshness, step window, the waters covered, typing method and crossing count — so an empty result reads as the weather's truth rather than a breakage. Everything degrades quietly: no provider caches, no run reaching the boat, or missing fields simply narrow the result. Configuration: `fronts_enabled`, `fronts_cache_root`.
 
 ## Acknowledgments
 

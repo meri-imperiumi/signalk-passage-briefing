@@ -425,6 +425,82 @@ test("webapp view models", async (t) => {
   });
 
   await t.test(
+    "front passages ride the timeline as informational front rows (doc #50)",
+    () => {
+      const timeline = mergeTimeline(null, {
+        metadata: { fetchedAt: "2026-06-21T06:00:00.000Z" },
+        fronts: {
+          schema: "fronts/v2",
+          model: "gfs-0p25",
+          run: "2026-06-21T00:00:00Z",
+          method: "trough-wind-shift",
+          caveat: "An automatic analysis …",
+          provenance: {
+            kind: "fronts",
+            label: "Automatic fronts · gfs-0p25 run 2026-06-21T00:00:00Z",
+            url: null,
+            at: "2026-06-21T06:00:00.000Z",
+          },
+          steps: [],
+          passages: [
+            {
+              time: "2026-06-21T18:00:00Z",
+              kind: "front",
+              trackId: 2,
+              lat: -33.8,
+              lon: 180.75,
+              shiftDeg: 136.9,
+              motionDeg: null,
+              speedKn: null,
+            },
+            {
+              time: "2026-06-23T02:00:00Z",
+              kind: "cold",
+              trackId: 5,
+              lat: -35.1,
+              lon: 182.2,
+              shiftDeg: null,
+              motionDeg: 169.6,
+              speedKn: 6.3,
+            },
+          ],
+        },
+      });
+      assert.equal(timeline.length, 2);
+      assert.equal(timeline[0].kind, "front");
+      assert.equal(GLYPHS.front, "🌬");
+      assert.equal(timeline[0].severity, "info");
+      assert.equal(timeline[0].label, "Front crosses the route");
+      assert.ok(
+        timeline[0].detail.includes("wind shift ~137°"),
+        timeline[0].detail,
+      );
+      assert.ok(
+        timeline[0].detail.includes("automatic analysis"),
+        timeline[0].detail,
+      );
+      // The pin sits at the crossing position, not the track's hourly fix
+      assert.deepEqual(timeline[0].position, { lat: -33.8, lon: 180.75 });
+      assert.equal(timeline[0].provenance.label.includes("gfs-0p25"), true);
+      assert.equal(timeline[1].label, "Cold front crosses the route");
+      assert.ok(
+        timeline[1].detail.includes("moving 170° at 6.3 kn"),
+        timeline[1].detail,
+      );
+    },
+  );
+
+  await t.test("no fronts block: timeline stays quiet", () => {
+    assert.deepEqual(
+      mergeTimeline(null, {
+        metadata: { fetchedAt: "2026-06-21T06:00:00.000Z" },
+      }),
+      [],
+    );
+    assert.deepEqual(mergeTimeline(null, { fronts: { passages: [] } }), []);
+  });
+
+  await t.test(
     "motoring events ride their own motorboat glyph (doc #47 session)",
     () => {
       const timeline = mergeTimeline({

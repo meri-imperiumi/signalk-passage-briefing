@@ -121,6 +121,25 @@ describe("source status registry (work doc #23)", () => {
     assert.equal(entry.consecutiveFailures, 0);
   });
 
+  test("notes carry cycle detail and clear when a cycle passes none", () => {
+    const registry = createSourceStatus({});
+    registry.record({
+      id: "fronts",
+      label: "Automatic fronts (GRIB)",
+      absent: true,
+      note: "No GRIB run in the provider caches reaches the boat's waters",
+      now: NOW,
+    });
+    assert.equal(
+      registry.list()[0].note,
+      "No GRIB run in the provider caches reaches the boat's waters",
+    );
+    registry.record({ id: "fronts", now: NOW });
+    assert.equal(registry.list()[0].note, null);
+    registry.record({ id: "fronts", note: "x".repeat(400), now: NOW });
+    assert.equal(registry.list()[0].note.length, 300);
+  });
+
   test("errorClass override records the unavailable class", () => {
     const registry = createSourceStatus({});
     registry.record({

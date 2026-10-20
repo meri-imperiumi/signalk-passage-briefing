@@ -166,9 +166,9 @@ The plugin monitors `network.internet.state`, `navigation.state`, and `electrica
 
 ### 2.3 Data Source Status Registry (work doc #23)
 
-Every ingest path records the outcome of its latest cycle in a persistent per-source registry (`plugin/source-status.js`, persisted in `source-status.json`) so a moved URL or dead host is diagnosable mid-passage instead of surfacing only as absence of data. Covered sources: the weather fetch, per-zone bulletin/UKHO pulls, the configured extra bulletin feeds, the synoptic chart rasters, the GDACS hazard feed, the local celestial ephemeris, and — checked on the one-minute ticker — the Signal K sources themselves (required subscribed paths: internet state, navigation state, house SoC; optional: active route, energy outlook, route resources, polar, ship's time, logbook).
+Every ingest path records the outcome of its latest cycle in a persistent per-source registry (`plugin/source-status.js`, persisted in `source-status.json`) so a moved URL or dead host is diagnosable mid-passage instead of surfacing only as absence of data. Covered sources: the weather fetch, per-zone bulletin/UKHO pulls, the configured extra bulletin feeds, the synoptic chart rasters, the GDACS hazard feed, the local celestial ephemeris, the automatic front detection over the weather provider's grid caches (its cycle note carries the run's freshness, coverage window, typing method and crossing count) and the landfall map sources (corridor DEM + Shortbread gazetteer presence, work doc #50 session), and — checked on the one-minute ticker — the Signal K sources themselves (required subscribed paths: internet state, navigation state, house SoC; optional: active route, energy outlook, route resources, polar, ship's time, logbook).
 
-Each entry carries `id`, `label`, `kind`, `url`, `lastAttemptAt`, `lastSuccessAt`, `lastError` (`{class, message}`), `consecutiveFailures`, `expectedRefreshMs` and `lastStatus` (`ok` / `fail` / `skip` / `absent`). Error classes are coarse and stable: `http-404`, `http-429`, `http-4xx`, `http-5xx`, `timeout`, `network`, `parse`, `unavailable`. Cycles the online gate skips record `offline-skipped` behavior via `lastStatus: "skip"` — never counted as failures. The registry serves at `GET /plugins/signalk-passage-briefing/sources` (diagnostics, not briefing content) and survives restarts.
+Each entry carries `id`, `label`, `kind`, `url`, `lastAttemptAt`, `lastSuccessAt`, `lastError` (`{class, message}`), `consecutiveFailures`, `expectedRefreshMs`, `note` (cycle detail for the expandable row — what the cycle actually saw, replaced every cycle) and `lastStatus` (`ok` / `fail` / `skip` / `absent`). Error classes are coarse and stable: `http-404`, `http-429`, `http-4xx`, `http-5xx`, `timeout`, `network`, `parse`, `unavailable`. Cycles the online gate skips record `offline-skipped` behavior via `lastStatus: "skip"` — never counted as failures. The registry serves at `GET /plugins/signalk-passage-briefing/sources` (diagnostics, not briefing content) and survives restarts.
 
 ---
 
@@ -278,7 +278,44 @@ interface UnifiedWeatherPayload {
       coordinates: any;
     };
   }[];                          // CAP alerts near the vessel or route (work doc #24)
-}
+  fronts?: {                    // automatic synoptic front analysis from the weather
+                                // provider's grid caches (work doc #50); present when a
+                                // run covers the boat's waters, absent otherwise —
+                                // informational only, never an alert source
+    schema: 'fronts/v2';
+    model: string;              // provider source name, e.g. 'gfs-0p25'
+    run: string;                // model run instant, ISO
+    method: 'thermal-front-parameter' | 'trough-wind-shift';
+                                // trough-wind-shift when the cache carries no 850 hPa fields
+    caveat: string;             // the automatic-analysis notice any render must carry
+    provenance: { kind: 'fronts'; label: string; url: null; at: string };
+    steps: {                    // per-forecast-step front lines (for later map rendering)
+      time: string;             // ISO
+      lines: {
+        kind: 'cold' | 'warm' | 'stationary' | 'front' | 'trough';
+                                // 'front': wind-shift line the pressure-only method
+                                // could not type without 850 hPa data
+        points: [number, number][];  // [lon, lat], 0.01°-rounded; longitudes may run
+                                     // past 180 so date-line lines stay continuous
+        length_km: number;
+        strength: number;       // mean TFP (K/(100 km)²) or curvature (hPa/(100 km)²)
+        shift_deg?: number;     // mean 10 m wind shift across a trough-located line
+        motion_deg?: number;    // direction the front moves towards (degrees true)
+        speed_kn?: number;      // the 850 hPa wind pushing it
+        pressure_hpa: number;
+      }[];
+    }[];
+    passages: {                 // tracked fronts crossing the boat's scheduled position
+      time: string;             // ISO, interpolated between the bracketing steps
+      kind: string;             // track kind at the crossing
+      trackId: number;
+      lat: number;              // crossing position on the schedule
+      lon: number;
+      shiftDeg: number | null;  // expected wind-shift context
+      motionDeg: number | null;
+      speedKn: number | null;
+    }[];
+  };
 
 interface TimeStepForecast {
   timestamp: string;            // ISO timestamp
@@ -611,7 +648,7 @@ Displays:
 2. Macro Sea State warnings block.
 3. Convective Warning block (CAPE / K-Index).
 4. Raw METAREA text bulletin container.
-5. `<source-status>` checklist (work doc #23): collapsed by default, summary line always visible ("12 sources, 1 FAIL"). Rows: last-attempt stamp (muted) | source label + kind | right-aligned monospace status bracket mapped by the pure `statusVerdict` view model — `[ OK ]` green, `[ WARN ]` orange (429/parse failures, or success stale beyond the source's expected refresh interval), `[ FAIL ]` red, `[ SKIP ]`/`[ N/A ]` muted. Tap expands the row's detail (URL, last success, classified error, consecutive failures). The component polls `GET /plugins/signalk-passage-briefing/sources` at a minute rate and mutates only `textContent`/class attributes; expanded state persists in `localStorage`.
+5. `<source-status>` checklist (work doc #23): collapsed by default, summary line always visible ("12 sources, 1 FAIL"). Rows: last-attempt stamp (muted) | source label + kind | right-aligned monospace status bracket mapped by the pure `statusVerdict` view model — `[ OK ]` green, `[ WARN ]` orange (429/parse failures, or success stale beyond the source's expected refresh interval), `[ FAIL ]` red, `[ SKIP ]`/`[ N/A ]` muted. Tap expands the row's detail (cycle note first — what the cycle actually saw, e.g. a run's coverage window or a missing optional layer — then URL, last success, classified error, consecutive failures). The component polls `GET /plugins/signalk-passage-briefing/sources` at a minute rate and mutates only `textContent`/class attributes; expanded state persists in `localStorage`.
 
 #### `<horizon-sparkline>` (SVG Renderer)
 

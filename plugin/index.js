@@ -75,6 +75,8 @@ const hazardAlerts = require("./hazard-alerts.js");
 const { loadHazardState, saveHazardState } = require("./hazard-state.js");
 const maritimeZones = require("./maritime-zones-source.js");
 const capSource = require("./cap-source.js");
+const frontsSource = require("./fronts-source.js");
+const landfallSource = require("./landfall-source.js");
 const {
   adaptEnergyForecast,
   energyEventsFromState,
@@ -267,6 +269,13 @@ const DEFAULTS = {
    * seed; extend via configuration. */
   bulletin_stations: [{ zone: 14, header: "FQPS01", station: "NFFN" }],
   publish_metarea_notes: true,
+  /** Automatic synoptic front passages from the weather provider's
+   * grid caches (work doc #50). Reads local caches — no downloads —
+   * and degrades to absent when the provider has nothing usable. */
+  fronts_enabled: true,
+  /** Override for the provider's cache root; empty uses the
+   * default location beside this plugin's data directory. */
+  fronts_cache_root: "",
   /** Weather source selection (work doc #16): the server's Weather
    * API when a provider answers (signalk-weather-router-plus),
    * Open-Meteo otherwise. */
@@ -298,6 +307,9 @@ module.exports = (app) => {
   let capEnabled = DEFAULTS.cap_enabled;
   let capUrls = DEFAULTS.cap_urls;
   let capMinSeverity = DEFAULTS.cap_min_severity;
+  /** Automatic front passages (work doc #50). */
+  let frontsEnabled = DEFAULTS.fronts_enabled;
+  let frontsCacheRoot = DEFAULTS.fronts_cache_root;
   /** Departure anchor config (work doc #15). */
   let departureConfig = {
     daylightAuto: DEFAULTS.departure_daylight_auto,
@@ -1780,6 +1792,38 @@ module.exports = (app) => {
     );
     attachEnergyToPayload(payload);
     await attachCapAlerts(payload, waypoints);
+    // Automatic synoptic front passages (work doc #50): detection
+    // and tracking over the weather provider's grid caches for the
+    // route area, crossings against the route simulation's own
+    // schedule. Degrades to a bare, absent block — the briefing
+    // never fails over it.
+    if (frontsEnabled) {
+      try {
+        await frontsSource.attachFronts(payload, {
+          waypoints,
+          cacheRoot: frontsCacheRoot || null,
+          dataDir: app.getDataDirPath(),
+          app,
+          config: simulationConfig,
+          recordSource: (source) => sourceStatus?.record(source),
+        });
+      } catch (error) {
+        app.debug?.(`Front passages failed: ${error.message}`);
+      }
+    }
+    // Landfall map source availability (work doc #50 session): the
+    // sightings are silently best-effort when the corridor DEM or
+    // the Shortbread gazetteer is missing — the checklist says so
+    // instead of the crew wondering.
+    if (simulationConfig.landfall_enabled !== false) {
+      try {
+        await landfallSource.recordLandfallSource(app, (source) =>
+          sourceStatus?.record(source),
+        );
+      } catch (error) {
+        app.debug?.(`Landfall source check failed: ${error.message}`);
+      }
+    }
     // The trim point, when the plan anchored to actual progress (work
     // doc #28): the payload's distances count from the boat, and this
     // says how far along the original plan that was
@@ -2713,6 +2757,26 @@ module.exports = (app) => {
             "chart notes.",
           default: DEFAULTS.hazard_max_age_hours,
         },
+        fronts_enabled: {
+          type: "boolean",
+          title: "Automatic Front Passages (GRIB)",
+          description:
+            "Detect synoptic fronts and troughs in the GRIB run the " +
+            "weather provider has on board and time their crossings of " +
+            "the planned route on the timeline. Automatic analysis, " +
+            "informational only — the official charts stay " +
+            "authoritative. Degrades to absent without GRIB caches.",
+          default: DEFAULTS.fronts_enabled,
+        },
+        fronts_cache_root: {
+          type: "string",
+          title: "GRIB Cache Root (optional)",
+          description:
+            "Where signalk-grib-weather-provider keeps its .gribcache " +
+            "trees. Empty uses the default location beside this " +
+            "plugin's data directory.",
+          default: DEFAULTS.fronts_cache_root,
+        },
         departure_daylight_auto: {
           type: "boolean",
           title: "Anchor Departure to Daylight (auto)",
@@ -2923,6 +2987,14 @@ module.exports = (app) => {
         ? config.cap_urls.filter((url) => typeof url === "string" && url)
         : [];
       capMinSeverity = config.cap_min_severity;
+      // Automatic front passages (work doc #50): on unless switched
+      // off; the cache root override points at a provider cache
+      // tree outside the default location.
+      frontsEnabled = config.fronts_enabled !== false;
+      frontsCacheRoot =
+        typeof config.fronts_cache_root === "string"
+          ? config.fronts_cache_root
+          : "";
       departureConfig = {
         daylightAuto: config.departure_daylight_auto !== false,
         prepHours: config.departure_prep_hours,
@@ -3044,6 +3116,12 @@ module.exports = (app) => {
       sourceStatus.define(WEATHER_SOURCE);
       sourceStatus.define(HAZARD_SOURCE);
       sourceStatus.define(EPHEMERIS_SOURCE);
+      if (frontsEnabled) {
+        sourceStatus.define(frontsSource.FRONTS_SOURCE);
+      }
+      if (config.landfall_enabled !== false) {
+        sourceStatus.define(landfallSource.LANDFALL_SOURCE);
+      }
       for (const [index, url] of bulletinUrls.entries()) {
         sourceStatus.define({ ...customBulletinSource(index), url });
       }

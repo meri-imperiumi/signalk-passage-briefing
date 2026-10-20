@@ -212,6 +212,9 @@ class SourceStatus extends HTMLElement {
     row.bracket.className = `bracket ${verdict.theme}`;
     // Expandable detail: enough to decide "fix the URL" vs "wait"
     const lines = [];
+    if (entry.note) {
+      lines.push(entry.note);
+    }
     if (entry.url) {
       lines.push(`URL ${entry.url}`);
     }
