@@ -255,11 +255,11 @@ describe("fetchWeatherAlongTrack", () => {
     );
     assert.equal(payload.waypoints.length, 5);
     const [step] = payload.waypoints[0].forecasts;
-    // First step is the current hour (fixture times are relative)
-    const firstTimestamp = new Date(
-      Date.now() - (Date.now() % 3600000),
-    ).toISOString();
-    assert.equal(step.timestamp, firstTimestamp);
+    // First step is the fixture's current hour: asserted against the
+    // fixture's own stamp rather than a recomputed one — a clock step
+    // between the two reads, or an hour boundary falling between mock
+    // load and assertion, made this flake on CI (CI, 2026-10-21)
+    assert.equal(step.timestamp, `${TIMES[0]}:00.000Z`);
     assert.deepEqual(step.surface, {
       tws: 12,
       twd: 45,

@@ -4,8 +4,11 @@
 
 // Hours relative to now, aligned to the hour like the real API: the
 // here/briefing window filters rows to [fetchedAt, +24h), so fixed
-// past timestamps would drop every row
-const HOUR = Date.now() - (Date.now() % 3600000);
+// past timestamps would drop every row. One clock read — a clock step
+// (NTP slew, CI runners) between two reads once landed this anchor a
+// minute off the hour, flaking every test that asserts against it.
+const NOW = Date.now();
+const HOUR = NOW - (NOW % 3600000);
 const TIMES = [0, 1].map((hours) =>
   new Date(HOUR + hours * 3600000).toISOString().slice(0, 16),
 );
