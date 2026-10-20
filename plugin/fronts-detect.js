@@ -5,8 +5,9 @@
  * tested for crossings of a (moving) position.
  *
  * The reference implementation lives in `front-detector/` (Rust);
- * this port is verified against its golden test vectors
- * (`front-detector/porting/`) — real forecast slices with the exact
+ * this port is verified against its golden test vectors — copied
+ * verbatim into `tests/fixtures/fronts/` — real forecast slices with
+ * the exact
  * output the Rust code gives for them. The method: Gaussian-smoothed
  * mean sea-level pressure gives pressure troughs (Hessian curvature
  * inside cyclonic flow) and highs/lows; 850 hPa temperature and wind

@@ -2,10 +2,13 @@
  * Golden-vector tests for the fronts detector port (work doc #50):
  * the JavaScript in plugin/fronts-detect.js must reproduce the Rust
  * reference implementation's output on real forecast slices —
- * `front-detector/porting/vectors/` holds the exact outputs the
- * reference gives for GFS and ECMWF analyses, in both the thermal
- * and the pressure-only method, plus a seven-step tracking and
- * passage case.
+ * `tests/fixtures/fronts/` holds the exact outputs the reference
+ * gives for GFS and ECMWF analyses, in both the thermal and the
+ * pressure-only method, plus a seven-step tracking and passage case.
+ * The fixtures are verbatim copies of the reference checkout's
+ * `porting/vectors/` — that checkout is not part of this repository;
+ * regenerate with `cargo run --release --example vectors` there and
+ * re-copy when the method changes.
  *
  * Comparison mirrors porting/check.mjs exactly: structure must
  * match, numbers may differ by at most 0.011 (output points are
@@ -35,7 +38,7 @@ const {
   KM_DEG,
 } = require("../plugin/fronts-detect.js");
 
-const VECTORS = join(__dirname, "..", "front-detector", "porting", "vectors");
+const VECTORS = join(__dirname, "fixtures", "fronts");
 const TOLERANCE = 0.011;
 
 /**

@@ -38,7 +38,7 @@ const {
 } = require("../plugin/fronts-source.js");
 const { detect } = require("../plugin/fronts-detect.js");
 
-const VECTORS = join(__dirname, "..", "front-detector", "porting", "vectors");
+const VECTORS = join(__dirname, "fixtures", "fronts");
 
 /** The porting suite's GFS pressure-only analysis. */
 const VECTOR = JSON.parse(
