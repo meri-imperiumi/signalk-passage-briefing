@@ -19,8 +19,9 @@
  * @file regions-store.js
  */
 
-const { readFile, writeFile } = require("node:fs/promises");
+const { readFile } = require("node:fs/promises");
 const { join } = require("node:path");
+const { writeFileAtomic } = require("./fs-atomic.js");
 
 const EARTH_RADIUS_M = 6371000;
 
@@ -285,7 +286,10 @@ class RegionsStore {
   }
 
   async save() {
-    await writeFile(this.path, JSON.stringify(this.regions, null, 2));
+    // Atomic: a page-load listing can race a publish's rewrite, and a
+    // torn read would both serve an empty plotter and cache the empty
+    // state for the store's lifetime
+    await writeFileAtomic(this.path, JSON.stringify(this.regions, null, 2));
   }
 
   async list(params = {}) {

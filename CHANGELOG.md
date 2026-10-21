@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- A serve-vs-fetch write race no longer wipes the published warnings off the chart: the bulletin cache and the notes/regions stores persisted their JSON with plain `writeFile`, which truncates the file before writing — a serve-time `bulletinForTrack` read landing under a fetch-window rewrite saw the torn file, took it for "no bulletins cached", and the publication pass that followed pruned every `metarea-*` warning region from the plotter (surfaced as the flaky publication-track test asserting `0 !== 2`). The bulletin cache, notes store and regions store now persist through a temp file plus atomic rename (`plugin/fs-atomic.js`), so a concurrent reader sees either the previous content or the complete new one, never a torn file.
+
 ### Changed
 - Meteor showers stay in the timeline under moonlight and overcast (work doc #37 session): the 2026 Orionids — peaking Oct 21 under a 74% waxing gibbous Moon, with the peak hour landing just past the 24 h here-briefing's end — were silently dropped from every briefing that week, the two gates stacked. Moonlight thins a shower rather than erasing it and a cloud forecast errs bright as often as overcast, so both now ride the description as a conditions note instead of the drop — "Moon 74% lit — expect only the brightest through moonlight", "forecast 80% cloud — skies may clear" — with the wording unchanged under a crescent Moon. The screen is the candidate nights, not the peak instant: a peak within a bracket of the briefing window's edges still owns its in-window watch (the climbing night before a peak just past the end, the just-past night after one just before the start). The radiant gate keeps dropping nights whose position never lifts the radiant over the haze line, and the aurora moon gate is untouched.
 

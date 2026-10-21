@@ -16,8 +16,9 @@
  * @file bulletin-source.js
  */
 
-const { mkdir, readFile, writeFile } = require("node:fs/promises");
+const { mkdir, readFile } = require("node:fs/promises");
 const { join } = require("node:path");
+const { writeFileAtomic } = require("./fs-atomic.js");
 const { resolveBulletinSource } = require("./bulletin-engine.js");
 
 /** Maximum cached bulletin entries across all URLs. */
@@ -63,7 +64,10 @@ async function loadBulletinCache(dataDir) {
 }
 
 /**
- * Persists the bulletin cache (newest first, pruned).
+ * Persists the bulletin cache (newest first, pruned). Atomic: the
+ * serve-time reads race the fetch-window writes on independent chains,
+ * and a torn read once read as an empty cache — wiping every published
+ * warning on the prune pass that followed.
  *
  * @param {string} dataDir
  * @param {BulletinEntry[]} entries
@@ -74,7 +78,7 @@ async function saveBulletinCache(dataDir, entries) {
     .sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt))
     .slice(0, KEEP_BULLETINS);
   await mkdir(join(dataDir, "weather"), { recursive: true });
-  await writeFile(
+  await writeFileAtomic(
     cachePath(dataDir),
     `${JSON.stringify({ entries: pruned }, null, 2)}\n`,
   );
