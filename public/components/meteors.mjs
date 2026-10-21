@@ -29,6 +29,16 @@
  * the hedge in the wording covers them without a per-shower profile
  * table.
  *
+ * Moonlight and forecast cloud no longer suppress the event (the
+ * 2026 Orionids under a 74% waxing gibbous Moon were silently
+ * dropped from every briefing that week): moonlight thins a shower
+ * rather than erasing it, and a cloud forecast errs bright as often
+ * as overcast, so both ride the description as a conditions note.
+ * The screen is the candidate nights, not the peak instant — a peak
+ * just beyond the briefing window's end still owns its in-window
+ * "climbing" night. The remaining silent gates are the radiant
+ * never clearing the haze line and the caller's own night context.
+ *
  * Kept free of DOM and dependencies so Node requires it and the
  * worker imports it.
  *
@@ -67,7 +77,9 @@ export const METEOR_SHOWERS = [
 export const MIN_RADIANT_ALTITUDE_DEG = 20;
 
 /** Moon illumination fraction at or below which the night counts as
- * dark enough (the gate compares against a crescent threshold). */
+ * dark enough — the shared crescent threshold behind the aurora
+ * gate in `celestial-ephemeris.js`. Meteors no longer drop on
+ * moonlight; the conditions note words it instead. */
 export const MAX_MOON_ILLUMINATION = 0.3;
 
 /** How far a night's anchor may sit from the nominal peak and still
@@ -96,6 +108,34 @@ export function radiantMaxAltitudeDeg(lat, dec) {
 }
 
 const DAY_MS = 86400000;
+
+/** Forecast cloud cover (percent) above which the description
+ * carries the overcast hedge — the night is still reported (forecasts
+ * err bright as often as overcast), worded honestly. */
+const CLOUD_NOTE_MIN_PERCENT = 30;
+
+/**
+ * Moon/cloud conditions for a night's description: the note rides
+ * the event instead of a drop.
+ *
+ * @param {number} illumination - Moon illumination fraction (0–1)
+ * @param {number|null} cover - Forecast cloud cover (percent), null when unknown
+ * @returns {string} Parenthesised conditions note
+ */
+function conditionsNote(illumination, cover) {
+  const moonPct = Math.round(illumination * 100);
+  const moon =
+    moonPct >= 60
+      ? `Moon ${moonPct}% lit — expect only the brightest through moonlight`
+      : moonPct >= 30
+        ? `Moon ${moonPct}% lit — moonlight thins the fainter meteors`
+        : `Moon ${moonPct}% lit`;
+  const cloud =
+    cover != null && cover > CLOUD_NOTE_MIN_PERCENT
+      ? `forecast ${Math.round(cover)}% cloud — skies may clear`
+      : null;
+  return `(${[moon, cloud].filter(Boolean).join("; ")})`;
+}
 
 /**
  * Evaluates the shower calendar against the timeline's nights.
@@ -152,7 +192,16 @@ export function meteorNightEvents({
         shower.day,
         shower.peakHourUtc,
       );
-      if (peak < from.getTime() || peak >= end) {
+      // The candidate nights, not the peak instant, are the screen:
+      // a peak within a bracket of the window edges still owns an
+      // in-window watch (the "climbing" night before a peak just
+      // past the end, the "just past" night after one just before
+      // the start) — the 24 h here-briefing must not silently drop
+      // a shower peaking hours beyond it
+      if (
+        peak < from.getTime() - CANDIDATE_AFTER_MS ||
+        peak >= end + CANDIDATE_BEFORE_MS
+      ) {
         continue;
       }
       // The nights worth evaluating: the one whose dark hours hold
@@ -186,30 +235,22 @@ export function meteorNightEvents({
         ) {
           continue;
         }
+        // Context integrity, not a visibility gate: a night the
+        // caller cannot vouch a moon reading for stays skipped
         const illumination = night.moonIllumination;
-        if (
-          !Number.isFinite(illumination) ||
-          illumination >= MAX_MOON_ILLUMINATION
-        ) {
+        if (!Number.isFinite(illumination)) {
           continue;
         }
-        if (
-          typeof cloudCoverAt === "function" &&
-          (() => {
-            const cover = cloudCoverAt(anchorIso);
-            return cover != null && cover > 30;
-          })()
-        ) {
-          continue;
-        }
+        const cover =
+          typeof cloudCoverAt === "function" ? cloudCoverAt(anchorIso) : null;
         const peakLabel = `${shower.name} peak ${new Date(peak).toISOString().slice(0, 10)}`;
-        const moonText = `(Moon ${Math.round(illumination * 100)}% lit)`;
+        const note = conditionsNote(illumination, cover);
         const description =
           wording === "peak"
-            ? `${shower.name} peak tonight: up to ~${shower.zhr} meteors/h ${moonText}`
+            ? `${shower.name} peak tonight: up to ~${shower.zhr} meteors/h ${note}`
             : wording === "climbing"
-              ? `${shower.name} — climbing toward the ${peakLabel}: up to ~${shower.zhr} meteors/h on the peak itself ${moonText}`
-              : `${shower.name} — just past the ${peakLabel}: rates easing, still worth a look ${moonText}`;
+              ? `${shower.name} — climbing toward the ${peakLabel}: up to ~${shower.zhr} meteors/h on the peak itself ${note}`
+              : `${shower.name} — just past the ${peakLabel}: rates easing, still worth a look ${note}`;
         events.push({
           kind: "meteor",
           timestamp: anchorIso,

@@ -1552,11 +1552,20 @@ describe("meteor nights along the track (work doc #37)", () => {
     const meteors = exceptions.passageSummary.meteorEvents;
     // The peak night (Dec 14) evaluates at 30°S — radiant 53° up,
     // moon 25% — and fires; the Dec 13 night at 45°S stays silent
-    // (radiant 13°), the Dec 15 night is moon-blocked
-    assert.equal(meteors.length, 1);
+    // (radiant 13°). The Dec 15 night fires too: moonlight thins
+    // rather than drops, so its 30% moon rides the wording
+    assert.equal(meteors.length, 2);
     assert.match(meteors[0].description, /Geminids peak tonight/);
     assert.match(meteors[0].description, /Moon 25% lit/);
     assert.equal(meteors[0].timestamp, "2026-12-14T09:00:00.000Z");
+    assert.match(
+      meteors[1].description,
+      /just past the Geminids peak 2026-12-14/,
+    );
+    assert.match(
+      meteors[1].description,
+      /Moon 30% lit — moonlight thins the fainter meteors/,
+    );
   });
 
   test("the same nights at a stalled position stay silent", async () => {

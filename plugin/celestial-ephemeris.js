@@ -7,8 +7,8 @@
  * source): no network, no bandwidth budget spent. The module produces
  *
  * - planetary conjunctions and oppositions during nautical night,
- * - meteor-shower peaks (static annual calendar) gated by moonlight
- *   and horizon,
+ * - meteor-shower peaks (static annual calendar) screened by the
+ *   radiant's horizon and worded for moonlight and forecast cloud,
  * - daily twilight times and moon context (`celestialNights`) for the
  *   briefing payload — the webapp timeline picks its night glyph
  *   (waxing/waning/full) from the moon phase instead of a fixed
@@ -501,8 +501,9 @@ function passesCloudGate(timestamp, cloudCoverAt) {
 }
 
 /**
- * The lunar half of the visibility gate for faint events (meteors,
- * faint auroras): moon either set or a crescent.
+ * The lunar half of the visibility gate for faint events (faint
+ * auroras): moon either set or a crescent. Meteors no longer gate on
+ * this — their moonlight rides the description instead of a drop.
  *
  * @param {Date} date - Instant
  * @param {number} lat - Degrees
@@ -647,11 +648,15 @@ function planetaryEvents({ from, hours, lat, lon, cloudCoverAt }) {
  * night-anchored, not peak-instant-anchored. Each shower's nominal
  * peak is evaluated against the nights bracketing it — the peak night
  * plus its neighbors, since real maxima drift ±1 night — at each
- * night's nautical-dusk anchor. The gates run at the anchor:
- * radiant altitude from that night's position, moonlight, and
- * forecast cloud. A shower whose catalog peak hour lands in local
- * daytime now fires for the dark nights around it instead of going
- * silently unreported (the Eta Aquariids from New Zealand).
+ * night's nautical-dusk anchor. The radiant gate drops a night whose
+ * position never lifts the radiant over the haze line; moonlight and
+ * forecast cloud are worded into the description instead of dropping
+ * the night (moonlight thins rather than erases, and forecasts err
+ * bright as often as overcast). A shower whose catalog peak hour
+ * lands in local daytime still fires for the dark nights around it
+ * (the Eta Aquariids from New Zealand), and a peak just beyond the
+ * window's end still owns its in-window climbing night (the
+ * Orionids from Tonga, October 2026).
  *
  * The per-night position comes from `positionAt` (the simulated
  * track in the route pipeline — the evaluation the worker runs

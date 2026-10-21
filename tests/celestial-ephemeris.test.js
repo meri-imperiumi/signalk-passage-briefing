@@ -151,7 +151,7 @@ describe("celestial ephemeris (doc #3 Phase 2)", () => {
     assert.match(oppositions[0].description, /Jupiter at opposition/);
   });
 
-  test("meteor peak: Perseids 2026 under a new moon fire, 2024 under a lit moon do not", () => {
+  test("meteor peak: Perseids fire under new and lit moons — the moon rides the wording", () => {
     const dark = ce.meteorEvents({
       from: new Date("2026-08-12T00:00:00Z"),
       hours: 48,
@@ -165,13 +165,55 @@ describe("celestial ephemeris (doc #3 Phase 2)", () => {
     assert.match(dark[0].description, /Moon 0% lit/);
     assert.match(dark[1].description, /just past the Perseids peak 2026-08-12/);
 
+    // A lit moon no longer silently drops the shower (the 2026
+    // Orionids under a 74% gibbous Moon never reached the briefing):
+    // the conditions ride the description instead
     const moonlit = ce.meteorEvents({
       from: new Date("2024-08-12T00:00:00Z"),
       hours: 48,
       lat: 20,
       lon: 60,
     });
-    assert.deepEqual(moonlit, []);
+    assert.equal(moonlit.length, 2);
+    assert.match(
+      moonlit[0].description,
+      /Perseids peak tonight: up to ~100 meteors\/h \(Moon 50% lit — moonlight thins the fainter meteors\)/,
+    );
+  });
+
+  test("Orionids reach the timeline under moonlight and a window-edge peak (Tonga 2026)", () => {
+    // The 2026 Orionid peak (Oct 21 21:00Z) sits past the end of
+    // the 24 h briefing compiled that morning Tonga time, under a
+    // 74% waxing gibbous Moon — both former silent drops. The
+    // shower still reaches the timeline, worded honestly
+    const events = ce.meteorEvents({
+      from: new Date("2026-10-20T19:30:00Z"),
+      hours: 24,
+      lat: -18.65,
+      lon: -173.98,
+    });
+    const orionids = events.filter(
+      (e) => e.kind === "meteor" && /Orionids/.test(e.description),
+    );
+    // The climbing night in the window plus the just-past night
+    // bracketing from beyond its end (work doc #37's night anchor)
+    assert.equal(orionids.length, 2);
+    assert.match(
+      orionids[0].description,
+      /climbing toward the Orionids peak 2026-10-21/,
+    );
+    assert.match(
+      orionids[0].description,
+      /Moon 74% lit — expect only the brightest through moonlight/,
+    );
+    assert.match(
+      orionids[1].description,
+      /just past the Orionids peak 2026-10-21/,
+    );
+    assert.match(
+      orionids[1].description,
+      /Moon 83% lit — expect only the brightest through moonlight/,
+    );
   });
 
   test("daytime peak hours fire on their dark nights from NZ (work doc #37)", () => {
@@ -210,7 +252,7 @@ describe("celestial ephemeris (doc #3 Phase 2)", () => {
     assert.deepEqual(events, []);
   });
 
-  test("cloud gate suppresses tactical events under overcast forecasts", () => {
+  test("overcast forecasts word the meteor note, other tactical events stay suppressed", () => {
     const overcast = ce.buildEphemerisEvents({
       lat: 20,
       lon: 60,
@@ -219,12 +261,19 @@ describe("celestial ephemeris (doc #3 Phase 2)", () => {
       cloudCoverAt: () => 80,
     });
     // Tactical events (visible-sky items) stay suppressed; the
-    // informational moon-phase notes are not cloud-gated (doc #35)
+    // informational moon-phase notes are not cloud-gated (doc #35).
+    // Meteors ride the forecast in their wording instead of the
+    // drop — forecasts err bright as often as overcast
     assert.deepEqual(
-      overcast.filter((e) => e.tactical),
+      overcast.filter((e) => e.tactical && e.kind !== "meteor"),
       [],
     );
-    assert.ok(!overcast.some((e) => e.kind === "meteor"));
+    const meteors = overcast.filter((e) => e.kind === "meteor");
+    assert.equal(meteors.length, 2);
+    assert.match(
+      meteors[0].description,
+      /\(Moon 0% lit; forecast 80% cloud — skies may clear\)/,
+    );
 
     const clear = ce.buildEphemerisEvents({
       lat: 20,
@@ -234,8 +283,13 @@ describe("celestial ephemeris (doc #3 Phase 2)", () => {
       cloudCoverAt: () => 10,
     });
     // The peak night and its just-past neighbor both qualify under
-    // a clear sky (work doc #37)
+    // a clear sky (work doc #37), worded without a cloud hedge
     assert.equal(clear.filter((e) => e.kind === "meteor").length, 2);
+    assert.ok(
+      clear
+        .filter((e) => e.kind === "meteor")
+        .every((e) => !/cloud/.test(e.description)),
+    );
   });
 
   test("cloudCoverLookup interpolates hourly cloud cover", () => {
