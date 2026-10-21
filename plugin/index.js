@@ -124,6 +124,12 @@ const DEPTH_PATH = "environment.depth.belowSurface";
  */
 const ACTIVE_ROUTE_PATH = "navigation.course.activeRoute";
 
+/**
+ * Self path of the vessel's position (here mode consumes it, and the
+ * position-arrival retry below watches its deltas).
+ */
+const POSITION_PATH = "navigation.position";
+
 const WATCHED_PATHS = [
   INTERNET_STATE_PATH,
   NAVIGATION_STATE_PATH,
@@ -132,6 +138,7 @@ const WATCHED_PATHS = [
   ENERGY_FORECAST_PATH,
   DEPTH_PATH,
   ...Object.values(ENERGY_OUTLOOK_PATHS),
+  POSITION_PATH,
 ];
 
 /** Flat paths the plotter tile consumes (work doc #8). */
@@ -348,6 +355,13 @@ module.exports = (app) => {
   /** Last automatic (edge-triggered) fetch instant — the oneshot
    * debounce anchor. Explicit crew refreshes do not consult it. */
   let lastAutoFetchAt = null;
+  /** Set when a fetch died on a missing vessel position (issue #3):
+   * at power-on the internet link is up before the GPS receivers have
+   * a fix, so the oneshot fires into a position-less server — and
+   * being edge-triggered on the internet state alone, never retries.
+   * The first position delta after the failure re-runs the fetch
+   * (trigger "position"). */
+  let positionFetchPending = false;
   /** @type {NodeJS.Timeout|null} */
   let cronTimer = null;
   /** Last known values of the watched paths. */
@@ -1419,6 +1433,9 @@ module.exports = (app) => {
   async function refreshHereQueued() {
     const position = vesselPosition();
     if (!position) {
+      // Arm the position-arrival retry (issue #3): a missing fix is a
+      // transient condition, not a terminal one.
+      positionFetchPending = true;
       throw new Error("No vessel position available");
     }
     const waypoints = [
@@ -1876,7 +1893,7 @@ module.exports = (app) => {
    * refresh — with no route left, conditions-here stays fresh (work
    * doc #7).
    *
-   * @param {"oneshot"|"cron"} trigger
+   * @param {"oneshot"|"cron"|"position"} trigger
    */
   /** The most recent fetch run's promise: fire-and-forget callers
    * (the delta feed's oneshot, the cron tick) don't await it, but the
@@ -2409,6 +2426,20 @@ module.exports = (app) => {
       for (const { path, value } of update.values || []) {
         if (WATCHED_PATHS.includes(path)) {
           observations[path] = value;
+        }
+        if (
+          path === POSITION_PATH &&
+          positionFetchPending &&
+          isOnline() &&
+          typeof value?.latitude === "number" &&
+          typeof value?.longitude === "number"
+        ) {
+          // The missing fix has arrived (issue #3): re-run the fetch
+          // the failed attempt stood in for. One retry per failure —
+          // a second failure re-arms through refreshHereQueued.
+          positionFetchPending = false;
+          lastAutoFetchAt = Date.now();
+          lastFetchRun = runFetch("position").catch(() => {});
         }
       }
     }

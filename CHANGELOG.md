@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- A power-on race no longer leaves the plugin stuck on "Here refresh failed (oneshot): No vessel position available" (issue #3): the internet link comes up before the GPS receivers have a fix, so the edge-triggered oneshot fired into a position-less server, failed, and — the oneshot firing only on internet-state changes, the staleness backstop requiring something already cached — never retried even after the fix arrived. A missing vessel position is now treated as the transient condition it is: the first `navigation.position` delta after such a failure re-runs the fetch (trigger "position"), so the plugin recovers on its own the moment the fix lands.
 - The plotter extension's 1×1 tile no longer draws its own border: hosts like Freeboard frame widgets with rounded corners, so the square ring — red in the "new brief" state — clashed with the host chrome. The new-brief state still reads from the red label accent and the NEW badge.
 
 ## [0.15.0] - 2026-10-21

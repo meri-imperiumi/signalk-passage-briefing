@@ -116,6 +116,7 @@ describe("plugin", () => {
       "electrical.energy.prediction.surplus.from",
       "electrical.energy.prediction.surplus.to",
       "electrical.energy.prediction.timeToEmpty",
+      "navigation.position",
     ]);
   });
 
@@ -1937,6 +1938,97 @@ describe("plugin", () => {
       readFileSync(join(app.dataDir, "weather", "last-route"), "utf8"),
       "r2",
     );
+
+    plugin.stop();
+  });
+
+  test("position arrival retries a oneshot that failed without a fix (issue #3)", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const app = createMockApp();
+    // Power-on race: the internet link is up before the GPS receivers
+    // have a fix, so the server has no vessel position yet.
+    let fixed = false;
+    app.getSelfPath = (path) =>
+      path === "navigation.position" && fixed
+        ? { latitude: -21.1, longitude: -175.2 }
+        : null;
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    const feed = app.getDeltaHandlers()[0];
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockOpenMeteo();
+    try {
+      // Internet comes up: the oneshot fires into the position-less
+      // server and fails.
+      feed({
+        updates: [
+          { values: [{ path: "network.internet.state", value: "online" }] },
+        ],
+      });
+      await waitFor(() =>
+        app
+          .getErrors()
+          .some((m) =>
+            /Here refresh failed \(oneshot\): No vessel position available/.test(
+              String(m),
+            ),
+          ),
+      );
+      assert.ok(
+        app
+          .getErrors()
+          .some((m) =>
+            /Here refresh failed \(oneshot\): No vessel position available/.test(
+              String(m),
+            ),
+          ),
+      );
+
+      // The fix arrives: the position delta re-runs the fetch.
+      fixed = true;
+      feed({
+        updates: [
+          {
+            values: [
+              {
+                path: "navigation.position",
+                value: { latitude: -21.1, longitude: -175.2 },
+              },
+            ],
+          },
+        ],
+      });
+      await waitFor(() => /\(position\)/.test(app.getStatus()));
+      assert.match(
+        app.getStatus(),
+        /Conditions here cached at .* \(position\)/,
+      );
+      assert.ok(
+        existsSync(join(app.dataDir, "weather", "here.json")),
+        "here payload cached by the retry",
+      );
+
+      // One retry per failure: further position deltas re-fetch
+      // nothing (the flag is consumed by the first retry).
+      const afterRetry = app.getStatus();
+      feed({
+        updates: [
+          {
+            values: [
+              {
+                path: "navigation.position",
+                value: { latitude: -21.1, longitude: -175.2 },
+              },
+            ],
+          },
+        ],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(app.getStatus(), afterRetry);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
 
     plugin.stop();
   });
