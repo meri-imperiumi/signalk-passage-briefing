@@ -51,10 +51,7 @@ describe("plotter-extension manifest & provider (doc #8)", () => {
     assert.equal(p.type, "iframe");
     // The webapp in its embed mode (work doc #8), opening on the
     // reading screen; the cache-buster rides ahead of the hash.
-    assert.equal(
-      p.url,
-      `${ASSET_BASE}/index.html?embed=1&v=1.2.3#/strategic`,
-    );
+    assert.equal(p.url, `${ASSET_BASE}/index.html?embed=1&v=1.2.3#/strategic`);
     // Windows is an optional capability: hosts without it degrade.
     assert.ok(m.optional.includes("windows"));
     assert.ok(m.optional.includes("panels.iframe"));

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- The plotter extension's 1×1 tile no longer draws its own border: hosts like Freeboard frame widgets with rounded corners, so the square ring — red in the "new brief" state — clashed with the host chrome. The new-brief state still reads from the red label accent and the NEW badge.
+
 ## [0.15.0] - 2026-10-21
 
 ### Added

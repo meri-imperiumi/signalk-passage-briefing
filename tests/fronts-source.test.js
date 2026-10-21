@@ -525,12 +525,7 @@ describe("fronts source: helpers", () => {
       defaultCacheRoot(
         join("/data", "plugin-data", "signalk-passage-briefing"),
       ),
-      join(
-        "/data",
-        "plugin-data",
-        "signalk-grib-weather-provider",
-        "cache",
-      ),
+      join("/data", "plugin-data", "signalk-grib-weather-provider", "cache"),
     );
   });
 });

@@ -50,7 +50,6 @@ template.innerHTML = /* html */ `
       height: 100%;
       padding: 6px 8px;
       background: var(--bg-panel, #111414);
-      border: 1px solid rgba(255, 255, 255, 0.1);
       font-family: ui-monospace, "Fira Code", monospace;
       color: var(--text-main, #ffffff);
       cursor: default;
@@ -60,7 +59,6 @@ template.innerHTML = /* html */ `
     :host(.ok) { --tile-accent: var(--color-teal, #4f9ea8); }
     :host(.new) {
       --tile-accent: var(--color-red, #c94b4b);
-      border-color: var(--color-red, #c94b4b);
     }
     :host(.muted) { --tile-accent: var(--color-grey, #666677); }
 
@@ -219,9 +217,7 @@ class BriefExtWidget extends HTMLElement {
       return;
     }
     if (client.hasCapability("panels.iframe")) {
-      client
-        .call("ui.openPanel", { panel: "brief-panel" })
-        .catch(() => {});
+      client.call("ui.openPanel", { panel: "brief-panel" }).catch(() => {});
     }
   }
 
