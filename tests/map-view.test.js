@@ -181,6 +181,74 @@ test("the map view mounts Leaflet without view-copy teleporting", async () => {
   );
 });
 
+test("the chart switcher is closed by default and dismissible (issue #4)", async () => {
+  // Leaflet only mounts in a browser, so the component itself has no
+  // node-test harness — the switcher's behavioral regressions are
+  // pinned at the source level instead.
+  //
+  // Stock L.control.layers failed the boat three ways (issue #4):
+  // non-collapsed mode — what coarse pointers got — renders
+  // permanently expanded with no dismiss at all; the collapsed one
+  // only closes on a map tap; and with dozens of charts the panel
+  // covered the map. The replacement must keep the panel closed by
+  // default on every pointer and offer a real toggle.
+  const { readFileSync } = require("node:fs");
+  const { join } = require("node:path");
+  const source = readFileSync(
+    join(__dirname, "../public/components/map-view.js"),
+    "utf8",
+  );
+  assert.ok(
+    !/L\.control\.layers\(/.test(source),
+    "stock L.control.layers must stay replaced by the purpose-built chart switcher",
+  );
+  assert.ok(
+    !/matchMedia\(["'`]pointer/.test(source),
+    "the switcher must not key its default state on the pointer type — closed everywhere",
+  );
+  assert.match(
+    source,
+    /_panel\.hidden = true/,
+    "the switcher panel must start closed",
+  );
+  assert.match(
+    source,
+    /aria-expanded/,
+    "the toggle must expose open state for assistive tech",
+  );
+});
+
+test("chart selection is replace-only — no unselect state (issue #4)", async () => {
+  // The stock control's click handler removed every layer whose input
+  // read unchecked while the first-mounted chart — never registered —
+  // stayed mounted underneath: picks stacked invisible bases and the
+  // displayed chart had no row at all, so the crew could end up with
+  // no way back. The switcher's invariants, pinned at source level:
+  const { readFileSync } = require("node:fs");
+  const { join } = require("node:path");
+  const source = readFileSync(
+    join(__dirname, "../public/components/map-view.js"),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /addChart\(layer, name\);\s*if \(first\)/,
+    "every candidate chart — the first mount included — must register in the switcher",
+  );
+  assert.match(
+    source,
+    /map\.removeLayer\(previous\)/,
+    "a base leaves the map only as part of selecting its replacement",
+  );
+  // Dozens of configured charts (issue #4's photo) must scroll a
+  // bounded list, not cover the map
+  assert.match(
+    source,
+    /max-height:\s*min\(/,
+    "the chart list must be height-bounded so dozens of charts stay navigable",
+  );
+});
+
 test("the view renders the ribbon through the model's one-line selector", async () => {
   // The 2026-10 discard regression: the view computed the route-geometry
   // ribbon (routeRibbon) and then overwrote it with the sim-row ribbon

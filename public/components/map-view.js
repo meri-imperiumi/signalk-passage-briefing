@@ -54,6 +54,163 @@ import { comfortColor } from "./models.mjs";
 import { SK_BASE_CSS } from "./sk-base-css.js";
 
 /**
+ * The warnings map's chart switcher control class, built lazily (the
+ * module must import cleanly without Leaflet; see _mount's guard).
+ */
+let ChartSwitcherClass = null;
+
+/**
+ * Builds the chart switcher control class once Leaflet is known
+ * present (first map mount).
+ *
+ * Replaces stock `L.control.layers`, which failed the boat on three
+ * counts (issue #4, 2026-10):
+ *
+ * 1. Dismissal — the non-collapsed control (what coarse pointers
+ *    got) renders permanently expanded with no close affordance at
+ *    all, and the collapsed one only closes on a map tap. Here: the
+ *    panel is closed by default on every pointer, and the toggle is
+ *    a real button — the same tap opens and closes.
+ *
+ * 2. Unselection — the stock input handler removes every layer whose
+ *    input reads unchecked while a chart missing from the list stays
+ *    mounted (the first-mounted chart was never even registered), so
+ *    picks stacked invisible bases and the displayed chart had no
+ *    row at all; zoom-range-disabled radios ("Z8-16&18" charts)
+ *    swallow taps on top. Here: selection is an explicit replace —
+ *    picking a chart removes the previous base and mounts the pick;
+ *    there is no unselect target, one chart is always active, and
+ *    tapping the active chart just closes the list.
+ *
+ * 3. Scale — dozens of configured charts (issue #4's photo) rendered
+ *    an unbounded panel over the map. Here the list scrolls under a
+ *    bounded height and long names ellipsize; rows are plain
+ *    buttons, so registration cost is flat and nothing rebuilds on
+ *    layer events.
+ *
+ * Every candidate — the initially mounted chart and the OSM fallback
+ * included — registers here, so the active chart always has a row
+ * and the crew can always switch back.
+ */
+function ensureChartSwitcher() {
+  if (ChartSwitcherClass) {
+    return ChartSwitcherClass;
+  }
+  ChartSwitcherClass = L.Control.extend({
+    options: { position: "bottomleft" },
+
+    initialize(options) {
+      L.Util.setOptions(this, options);
+      this._charts = [];
+      this._active = null;
+      this._buildDom();
+    },
+
+    onAdd(map) {
+      this._map = map;
+      // The panel must not read as a map gesture: clicks, taps and
+      // scrolls stay inside the control
+      L.DomEvent.disableClickPropagation(this._root);
+      L.DomEvent.disableScrollPropagation(this._root);
+      return this._root;
+    },
+
+    /** Builds the closed-by-default DOM (works before and after
+     * mounting — charts register before the control joins the map). */
+    _buildDom() {
+      this._root = L.DomUtil.create("div", "pb-chart-switcher");
+      this._toggle = L.DomUtil.create(
+        "button",
+        "pb-chart-switcher-toggle",
+        this._root,
+      );
+      this._toggle.type = "button";
+      this._toggle.textContent = "Charts";
+      this._toggle.setAttribute("aria-expanded", "false");
+      L.DomEvent.on(this._toggle, "click", this._onToggle, this);
+      this._panel = L.DomUtil.create(
+        "div",
+        "pb-chart-switcher-panel",
+        this._root,
+      );
+      this._panel.hidden = true;
+      this._list = L.DomUtil.create(
+        "div",
+        "pb-chart-switcher-list",
+        this._panel,
+      );
+      L.DomEvent.on(this._root, "keydown", (event) => {
+        if (event.key === "Escape") {
+          this._collapse();
+        }
+      });
+    },
+
+    /**
+     * Registers a chart (or the OSM fallback). Registration mounts
+     * nothing — only `select` does.
+     *
+     * @param {object} layer - Leaflet layer (tile or MapLibre GL)
+     * @param {string} name - display name
+     */
+    addChart(layer, name) {
+      const row = L.DomUtil.create("button", "pb-chart-option", this._list);
+      row.type = "button";
+      row.title = name;
+      row.textContent = name;
+      row.setAttribute("aria-pressed", "false");
+      L.DomEvent.on(row, "click", () => this.select(layer));
+      this._charts.push({ layer, name, row });
+    },
+
+    /**
+     * The one selection operation: make `layer` the active base,
+     * replacing whatever was active — never leaving the map
+     * baseless.
+     *
+     * @param {object} layer - a layer previously passed to addChart
+     */
+    select(layer) {
+      if (!this._charts.some((chart) => chart.layer === layer)) {
+        return;
+      }
+      const previous = this._active;
+      this._active = layer;
+      const map = this._map;
+      if (map) {
+        if (previous && previous !== layer && map.hasLayer(previous)) {
+          map.removeLayer(previous);
+        }
+        if (!map.hasLayer(layer)) {
+          map.addLayer(layer);
+        }
+      }
+      for (const { layer: entry, row } of this._charts) {
+        const active = entry === layer;
+        row.classList.toggle("pb-chart-option-active", active);
+        row.setAttribute("aria-pressed", active ? "true" : "false");
+      }
+      this._collapse();
+    },
+
+    _onToggle() {
+      if (this._panel.hidden) {
+        this._panel.hidden = false;
+        this._toggle.setAttribute("aria-expanded", "true");
+      } else {
+        this._collapse();
+      }
+    },
+
+    _collapse() {
+      this._panel.hidden = true;
+      this._toggle.setAttribute("aria-expanded", "false");
+    },
+  });
+  return ChartSwitcherClass;
+}
+
+/**
  * The custom element (browser only).
  */
 class PbMapView extends HTMLElement {
@@ -133,6 +290,55 @@ class PbMapView extends HTMLElement {
         .pb-pin.sev-warn { filter: sepia(1) saturate(4) hue-rotate(-25deg); }
         .pb-pin.sev-severe { filter: sepia(1) saturate(6) hue-rotate(-40deg); }
         .pb-pin:focus { outline: none; }
+        /* Chart switcher (issue #4): closed by default, one always-on
+           selection, bounded scrollable list for dozens of charts */
+        .pb-chart-switcher-panel {
+          margin-top: 6px;
+          background-color: var(--bg-panel, #111414);
+          border: 1px solid rgba(102, 198, 219, 0.3);
+          width: min(260px, 72vw);
+        }
+        .pb-chart-switcher-list {
+          max-height: min(240px, 52vh);
+          overflow-y: auto;
+          overscroll-behavior: contain;
+        }
+        .pb-chart-option {
+          display: block;
+          width: 100%;
+          min-height: 40px;
+          padding: 8px 10px;
+          border: none;
+          border-top: 1px solid rgba(102, 198, 219, 0.15);
+          text-align: left;
+          text-transform: none;
+          letter-spacing: normal;
+          font-size: 0.75rem;
+          font-weight: 400;
+          /* Long chart names (issue #4: "Gilbert Islands Overview_1.
+             ArcGIS.Imagery.Z10 2021…") ellipsize instead of blowing
+             the panel across the map */
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .pb-chart-option:first-child {
+          border-top: none;
+        }
+        .pb-chart-option[aria-pressed="true"],
+        .pb-chart-option.pb-chart-option-active {
+          background-color: var(--theme-color, var(--color-teal));
+          color: var(--bg-base, #080a0c);
+        }
+        .pb-chart-switcher-toggle {
+          min-height: 40px;
+          padding: 8px 12px;
+          font-size: 0.75rem;
+        }
+        .pb-chart-switcher-toggle[aria-expanded="true"] {
+          background-color: var(--theme-color, var(--color-teal));
+          color: var(--bg-base, #080a0c);
+        }
       </style>
       <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
       <link rel="stylesheet" href="vendor/maplibre-gl/maplibre-gl.css">
@@ -191,14 +397,11 @@ class PbMapView extends HTMLElement {
       // off-screen until the next data-driven fit
     });
     L.control.zoom({ position: "bottomleft" }).addTo(this.map);
-    // On touch the collapsed gear is one more tap between the crew and
-    // their charts — render the layer list expanded on coarse pointers
-    const coarse =
-      typeof matchMedia === "function" &&
-      matchMedia("(pointer: coarse)").matches;
-    this._basemaps = L.control.layers(null, null, {
+    // Closed by default on every pointer, dismissible with one tap
+    // (issue #4) — see ensureChartSwitcher for why this is not stock
+    // L.control.layers
+    this._chartSwitcher = new (ensureChartSwitcher())({
       position: "bottomleft",
-      collapsed: !coarse,
     });
     let osmFallbackLayer = null;
     // The corridor tile downloader's offline mirror (work doc #47
@@ -230,41 +433,35 @@ class PbMapView extends HTMLElement {
         // Basemap hierarchy (work doc #47 session): the offline
         // corridor mirror leads when it mounts; then the configured
         // charts; OSM online is the universal base and the
-        // always-switchable fallback
-        const bases = [];
+        // always-switchable fallback. Only the first candidate mounts
+        // here — every one registers in the switcher (issue #4: the
+        // active chart must have a row, or the crew loses their way
+        // back to it)
         const mounted = [];
         let first = null;
-        const addBase = (label, layer) => {
-          let name = label;
-          // The control is keyed by display name — dedupe so two
-          // charts sharing a name don't clobber each other's radio
-          for (let n = 2; bases.includes(name); n++) name = `${label} (${n})`;
-          bases.push(name);
-          mounted.push(layer);
-          return name;
-        };
         const tryAdd = (layer, name) => {
-          if (!first) {
-            first = layer;
-            try {
-              layer.addTo(this.map);
-            } catch (error) {
-              // A degenerate map state must not take the basemap
-              // (and the promise chain) down: retry once the next
-              // fit has run
-              console.warn("pb-map-view: basemap add failed", error);
-              this._pendingBasemap = layer;
-            }
-          } else {
-            this._basemaps.addBaseLayer(layer, name);
+          this._chartSwitcher.addChart(layer, name);
+          if (first) {
+            return;
+          }
+          first = layer;
+          mounted.push(layer);
+          try {
+            layer.addTo(this.map);
+            this._chartSwitcher.select(layer);
+          } catch (error) {
+            // A degenerate map state must not take the basemap
+            // (and the promise chain) down: retry once the next
+            // fit has run
+            console.warn("pb-map-view: basemap add failed", error);
+            this._pendingBasemap = layer;
           }
         };
         let vectorMounted = false;
         if (assets) {
           if (typeof L.maplibreGL === "function") {
             const mirror = L.maplibreGL({ style: assets.style });
-            const name = addBase("Open Waters chart", mirror);
-            tryAdd(mirror, name);
+            tryAdd(mirror, "Open Waters chart");
             vectorMounted = true;
           } else {
             console.warn(
@@ -283,8 +480,7 @@ class PbMapView extends HTMLElement {
             const layer = L.maplibreGL({
               style: maplibreStyleFor(chart),
             });
-            const name = addBase(chart.name, layer);
-            tryAdd(layer, name);
+            tryAdd(layer, chart.name);
           }
         }
         for (const chart of rasterCharts) {
@@ -295,34 +491,31 @@ class PbMapView extends HTMLElement {
             maxNativeZoom: chart.maxZoom,
           });
           this._watchTileLayer(layer, chart.name);
-          const name = addBase(chart.name, layer);
-          tryAdd(layer, name);
+          tryAdd(layer, chart.name);
         }
         // The online fallback stays switchable even when configured
         // charts exist — a dead chart tile URL is one tap away from
         // a working map (dead-reckoning's "blank chart reads as
         // broken" feedback, 2026-09). The same layer instance is
         // registered here and reused by the auto-recovery below, so
-        // switching back to a chart actually removes the fallback —
-        // an unregistered slip-underneath layer would be
-        // unswitchable, which is how a phone ends up parked on
-        // OpenStreetMap
+        // the switcher's active row always matches what the map shows
         if (mounted.length > 0) {
           osmFallbackLayer = L.tileLayer(OSM_LAYER.url, {
             attribution: OSM_LAYER.attribution,
             maxZoom: OSM_LAYER.maxZoom,
           });
-          this._basemaps.addBaseLayer(osmFallbackLayer, OSM_LAYER.name);
+          this._chartSwitcher.addChart(osmFallbackLayer, OSM_LAYER.name);
         }
         // Auto-recovery: a configured raster chart whose tiles all
         // fail (dead tile server, stale MBTiles) leaves a grey canvas
-        // beneath the overlays — slip the OSM fallback underneath
-        // so the crew sees a chart regardless. The fallback is the
-        // registered layer above: selecting a chart in the layer
-        // list removes it again. Only for raster charts — the
-        // offline mirror needs no recovery, and without any chart
-        // OSM already is the base (a second copy would be an
-        // unregistered, unswitchable duplicate)
+        // beneath the overlays — select the OSM fallback so the crew
+        // sees a chart regardless. A real selection, not a
+        // slip-underneath: the dead chart comes off the map, the
+        // switcher shows the fallback active (issue #4: control state
+        // must match the map), and switching back is one tap. Only
+        // for raster charts — the offline mirror needs no recovery,
+        // and without any chart OSM already is the base (a second
+        // copy would be an unregistered, unswitchable duplicate)
         if (first && first._pbTileErrors !== undefined && mounted.length > 0) {
           setTimeout(() => {
             if (
@@ -331,11 +524,9 @@ class PbMapView extends HTMLElement {
               this.map
             ) {
               console.warn(
-                "pb-map-view: configured chart yields no tiles — OSM fallback slipped underneath",
+                "pb-map-view: configured chart yields no tiles — OSM fallback selected",
               );
-              (osmFallbackLayer ?? L.tileLayer(OSM_LAYER.url))
-                .addTo(this.map)
-                .bringToBack();
+              this._chartSwitcher.select(osmFallbackLayer);
             }
           }, 6000);
         }
@@ -343,7 +534,7 @@ class PbMapView extends HTMLElement {
         // fallback exists
         if (mounted.length > 0) {
           try {
-            this._basemaps.addTo(this.map);
+            this._chartSwitcher.addTo(this.map);
           } catch (_error) {
             // Layer switching is a convenience, not a requirement
           }
@@ -394,9 +585,11 @@ class PbMapView extends HTMLElement {
     if (!this._pendingBasemap) {
       return;
     }
+    const layer = this._pendingBasemap;
     try {
-      this._pendingBasemap.addTo(this.map);
+      layer.addTo(this.map);
       this._pendingBasemap = null;
+      this._chartSwitcher.select(layer);
     } catch (_error) {
       // Still degenerate: the next fit's resize tick retries
     }
