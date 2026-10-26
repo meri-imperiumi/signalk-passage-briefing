@@ -13,9 +13,8 @@
  * @file notes-store.js
  */
 
-const { readFile } = require("node:fs/promises");
 const { join } = require("node:path");
-const { writeFileAtomic } = require("./fs-atomic.js");
+const { writeFileAtomic, readFileAtomic } = require("./fs-atomic.js");
 
 const EARTH_RADIUS_M = 6371000;
 
@@ -109,7 +108,7 @@ class NotesStore {
       return;
     }
     try {
-      this.notes = JSON.parse(await readFile(this.path, "utf8"));
+      this.notes = JSON.parse(await readFileAtomic(this.path));
     } catch {
       this.notes = {};
     }
@@ -117,9 +116,13 @@ class NotesStore {
   }
 
   async save() {
-    // Atomic: a page-load listing can race a publish's rewrite, and a
-    // torn read would both serve an empty notes feed and cache the
-    // empty state for the store's lifetime
+    // Atomic AND ordered: concurrent publish passes (serve-time and
+    // refresh-time) run on independent chains, and each save rewrites
+    // the whole file. fs-atomic serializes the rewrites and the loads
+    // per path, so a stale snapshot cannot rename last and resurrect
+    // ids another pass just pruned, and a listing cannot race an
+    // in-flight rename of the state this store just mutated (CI flake,
+    // publication track test, October 2026)
     await writeFileAtomic(this.path, JSON.stringify(this.notes, null, 2));
   }
 

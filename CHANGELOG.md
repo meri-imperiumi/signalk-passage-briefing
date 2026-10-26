@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Concurrent briefing publishes no longer leave stale warnings in the stores (surfaced as the publication-track test's flaky `4 !== 2` on CI, regression from the 0.15.2 offline compiles): a serve-time publish and a refresh-window publish now genuinely overlap, and the notes/regions stores' whole-file snapshots raced twice over — two writes could rename out of order so the stale snapshot landed last and resurrected ids the other pass had just pruned, and a fresh store instance loading its first listing could read the file mid-rename and serve the pre-prune set. `writeFileAtomic` now serializes writes per target path (snapshots land in mutation order), and the stores load through a new `readFileAtomic` that rides the same chain, so a listing can never observe a file older than this process's own settled mutations.
+
 ## [0.15.2] - 2026-10-26
 
 ### Fixed

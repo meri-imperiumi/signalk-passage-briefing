@@ -2608,7 +2608,7 @@ module.exports = (app) => {
       soc: observations[HOUSE_SOC_PATH],
     });
     if (result.fetch === "oneshot") {
-      const now = new Date().getTime();
+      const now = Date.now();
       if (
         lastAutoFetchAt != null &&
         now - lastAutoFetchAt < AUTO_FETCH_DEBOUNCE_MS
@@ -3340,7 +3340,7 @@ module.exports = (app) => {
         (delta) => feedDelta(delta),
       );
 
-      const tickerCount = 0;
+      const _tickerCount = 0;
       cronTimer = setInterval(() => {
         const result = stateMachine.tick(new Date());
         if (result.fetch === "cron") {
