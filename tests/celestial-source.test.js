@@ -305,6 +305,70 @@ describe("celestial & space weather (doc #3 Phase 1)", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("fetchSpaceEvents window follows the requested horizon (doc #54)", async () => {
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = async (url) => {
+        if (String(url).includes("swpc.noaa.gov")) {
+          return { ok: true, json: async () => kpFixture() };
+        }
+        throw new Error("network down");
+      };
+      const base = {
+        lat: -50,
+        lon: 170,
+        now: new Date("2026-09-27T06:00:00Z"),
+        nightFn: NIGHT,
+        moonGateFn: () => true,
+        cloudCoverAt: () => 10,
+        ephemeris: false,
+      };
+      // The fixture's Kp-8 row sits 78 h out: outside the default
+      // 24 h window, inside a 120 h passage horizon
+      const day = await cs.fetchSpaceEvents({ ...base });
+      assert.equal(day.filter((e) => e.kind === "aurora").length, 0);
+      const passage = await cs.fetchSpaceEvents({ ...base, hours: 120 });
+      const auroras = passage.filter((e) => e.kind === "aurora");
+      assert.equal(auroras.length, 1);
+      assert.equal(auroras[0].timestamp, "2026-09-30T00:00:00.000Z");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("offline compile answers ephemeris-only without network (doc #55)", async () => {
+    const records = [];
+    let networkTouched = false;
+    const events = await cs.fetchSpaceEvents({
+      lat: -50,
+      lon: 170,
+      now: new Date("2026-09-27T06:00:00Z"),
+      nightFn: NIGHT,
+      online: false,
+      dataDir: undefined,
+      spaceTrack: { identity: "user", password: "pass" },
+      reentryEnabled: true,
+      launchEnabled: true,
+      recordSource: (source, error, flags) =>
+        records.push({ source, error, flags }),
+      fetchImpl: async () => {
+        networkTouched = true;
+        throw new Error("network must not be touched");
+      },
+    });
+    assert.equal(networkTouched, false);
+    assert.ok(Array.isArray(events));
+    // The skipped fetched sources record checklist skips, not errors
+    assert.deepEqual(
+      records.find((r) => r.source === "reentry"),
+      { source: "reentry", error: null, flags: { skip: true } },
+    );
+    assert.deepEqual(
+      records.find((r) => r.source === "launch"),
+      { source: "launch", error: null, flags: { skip: true } },
+    );
+  });
 });
 
 function approx(actual, expected, epsilon = 1e-9) {

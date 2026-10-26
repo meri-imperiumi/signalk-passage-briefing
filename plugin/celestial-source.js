@@ -406,6 +406,14 @@ async function fetchSpaceEvents({
   moonGateFn,
   ephemeris: withEphemeris = true,
   includeMeteors = true,
+  /** Forward window for the locally computed sources (work doc
+   * #54): route compiles pass the plan's reachable horizon so the
+   * payload never stops at 24 h on a week-long passage. */
+  hours = 24,
+  /** When false (offline compile, work doc #55) the fetched sources
+   * — SWPC, JPL, CelesTrak, Space-Track, Launch Library — are not
+   * attempted at all; the ephemeris still answers, from local math. */
+  online = true,
   dataDir,
   spaceTrack,
   reentryEnabled = true,
@@ -422,7 +430,7 @@ async function fetchSpaceEvents({
         lat,
         lon,
         from: now,
-        hours: 24,
+        hours,
         cloudCoverAt,
         includeMeteors,
       });
@@ -435,7 +443,11 @@ async function fetchSpaceEvents({
   // the vessel's own account, refined by CelesTrak elements, gated to
   // what the vessel could actually see. Degrades independently; the
   // source answers silently when unconfigured (absent, not failed).
-  if (reentryEnabled) {
+  // Offline the fetch is not attempted (work doc #55): the checklist
+  // records a skip, same as the other online-gated sources.
+  if (reentryEnabled && !online) {
+    recordSource?.("reentry", null, { skip: true });
+  } else if (reentryEnabled) {
     if (spaceTrack?.identity && spaceTrack?.password) {
       try {
         const events = await reentrySource.fetchReentryEvents({
@@ -465,7 +477,10 @@ async function fetchSpaceEvents({
 
   // Visible-launch notes (work doc #36): Launch Library 2 schedule,
   // gated to the twilight-launch geometry. Degrades independently.
-  if (launchEnabled) {
+  // Offline the fetch is not attempted (work doc #55).
+  if (launchEnabled && !online) {
+    recordSource?.("launch", null, { skip: true });
+  } else if (launchEnabled) {
     try {
       const events = await launchSource.fetchLaunchEvents({
         dataDir,
@@ -503,18 +518,24 @@ async function fetchSpaceEvents({
     }
   };
 
-  const [kpJson, cometJson, tles] = await Promise.all([
-    grab(SWPC_KP_URL),
-    fetchComets({ fetchImpl, timeoutMs }),
-    withEphemeris
-      ? satelliteSource.fetchTrackedTLEs({ fetchImpl, timeoutMs })
-      : Promise.resolve(null),
-  ]);
-  const kpEntries = kpJson ? parseKpForecast(kpJson, { from: now }) : [];
+  // Fetched sources ride the online gate (work doc #55): an offline
+  // compile skips the network entirely — the grabs would only burn
+  // their timeouts against a dead link — and answers ephemeris-only.
+  const [kpJson, cometJson, tles] = online
+    ? await Promise.all([
+        grab(SWPC_KP_URL),
+        fetchComets({ fetchImpl, timeoutMs }),
+        withEphemeris
+          ? satelliteSource.fetchTrackedTLEs({ fetchImpl, timeoutMs })
+          : Promise.resolve(null),
+      ])
+    : [null, null, null];
+  const kpEntries = kpJson ? parseKpForecast(kpJson, { from: now, hours }) : [];
   const comets = cometJson ? parseComets(cometJson) : [];
   // Satellite passes: local SGP4 propagation of the fetched elements,
   // gated like every other Phase-2 event; a bad element set degrades
-  // to no events, never a failed briefing
+  // to no events, never a failed briefing. The pass window follows
+  // the compile's horizon (work doc #54).
   if (tles) {
     try {
       localEvents = [
@@ -524,7 +545,7 @@ async function fetchSpaceEvents({
           lat,
           lon,
           from: now,
-          hours: 24,
+          hours,
           cloudCoverAt,
         }),
       ];

@@ -1176,22 +1176,34 @@ module.exports = (app) => {
     }
   }
 
-  async function attachHazardEvents(payload, vessel, waypoints) {
+  async function attachHazardEvents(
+    payload,
+    vessel,
+    waypoints,
+    { online = true } = {},
+  ) {
     if (!hazardEventsEnabled) {
       return;
     }
-    try {
-      const result = await hazardSource.refreshHazards({
-        dataDir: app.getDataDirPath(),
-        timeoutMs: 15000,
-        onFailure: (error) => sourceStatus?.record({ ...HAZARD_SOURCE, error }),
-      });
-      // A cycle without a recorded failure means the feed answered
-      if (result.fetched) {
-        sourceStatus?.record(HAZARD_SOURCE);
+    // Offline the feed is not polled (work doc #55): the cached
+    // events still attach — the fetch would only burn its timeout
+    // against a dead link and clutter the checklist with network
+    // errors for a situation it already knows about.
+    if (online) {
+      try {
+        const result = await hazardSource.refreshHazards({
+          dataDir: app.getDataDirPath(),
+          timeoutMs: 15000,
+          onFailure: (error) =>
+            sourceStatus?.record({ ...HAZARD_SOURCE, error }),
+        });
+        // A cycle without a recorded failure means the feed answered
+        if (result.fetched) {
+          sourceStatus?.record(HAZARD_SOURCE);
+        }
+      } catch (error) {
+        app.debug?.(`Hazard refresh failed: ${error.message}`);
       }
-    } catch (error) {
-      app.debug?.(`Hazard refresh failed: ${error.message}`);
     }
     const events = hazardSource.filterHazards({
       events: await hazardSource.loadHazards(app.getDataDirPath()),
@@ -1294,21 +1306,26 @@ module.exports = (app) => {
    *   samples or the position waypoint
    * @returns {Promise<void>}
    */
-  async function attachCapAlerts(payload, waypoints) {
+  async function attachCapAlerts(payload, waypoints, { online = true } = {}) {
     if (!capEnabled || capUrls.length === 0) {
       return;
     }
     let result = null;
     let refreshError = null;
-    try {
-      result = await capSource.refreshCapAlerts({
-        dataDir: app.getDataDirPath(),
-        urls: capUrls,
-        timeoutMs: 15000,
-      });
-    } catch (error) {
-      refreshError = error;
-      app.debug?.(`CAP refresh failed: ${error.message}`);
+    // Offline the feeds are not polled (work doc #55): the cached
+    // alerts still attach and publish, exactly like a failed fetch
+    // degrades to the cache while online.
+    if (online) {
+      try {
+        result = await capSource.refreshCapAlerts({
+          dataDir: app.getDataDirPath(),
+          urls: capUrls,
+          timeoutMs: 15000,
+        });
+      } catch (error) {
+        refreshError = error;
+        app.debug?.(`CAP refresh failed: ${error.message}`);
+      }
     }
     // One status row per feed (work doc #23): success and failure
     // alike, so the checklist can tell a moved URL from a dead host
@@ -1399,6 +1416,47 @@ module.exports = (app) => {
     return typeof lat === "number" && typeof lon === "number"
       ? { lat, lon }
       : null;
+  }
+
+  /**
+   * The route the webapp asked for and the plugin could not serve:
+   * a route created/selected while offline has no cache yet, and this
+   * marker makes it the next online window's briefing target (work
+   * doc #55). Plain marker file, same convention as `last-route`.
+   *
+   * @returns {string} Marker file path
+   */
+  function requestedRoutePath() {
+    return join(app.getDataDirPath(), "weather", "requested-route");
+  }
+
+  /**
+   * Reads the requested-route marker, null when absent or empty.
+   *
+   * @returns {Promise<string|null>}
+   */
+  async function readRequestedRoute() {
+    try {
+      const id = (await readFile(requestedRoutePath(), "utf8")).trim();
+      return id || null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  /**
+   * Loads a cached payload without throwing (missing or unreadable
+   * cache reads as none).
+   *
+   * @param {string} routeId
+   * @returns {Promise<{payload: object, cachedAt: string|null}|null>}
+   */
+  async function loadCachedPayload(routeId) {
+    try {
+      return await loadPayload(app.getDataDirPath(), routeId);
+    } catch (_error) {
+      return null;
+    }
   }
 
   /**
@@ -1653,18 +1711,22 @@ module.exports = (app) => {
    * for about an hour a day, so the last payload must survive the
    * other 23 offline hours).
    *
+   * Offline the compile still runs (work doc #55): the Weather API is
+   * a local read over the decoded GRIB on disk, so a route changed
+   * mid-passage is re-planned from what the boat already carries —
+   * ephemeris-only space events, cached hazards, CAP and bulletins —
+   * and the payload is marked `offlineCompile`. With no local weather
+   * source the cached payload is served honestly instead of failing.
+   *
    * @param {string} routeId
    * @param {number} [forecastDays]
-   * @returns {Promise<{routeId: string, cached: boolean, cachedAt: string|null, fetchedAt?: string}>}
+   * @returns {Promise<{routeId: string, cached: boolean, cachedAt: string|null, fetchedAt?: string, offline?: boolean}>}
    */
   async function refreshBriefingQueued(
     routeId,
     forecastDays = simulationForecastDays,
   ) {
-    if (!isOnline()) {
-      sourceStatus?.record({ ...WEATHER_SOURCE, skip: true });
-      throw new Error("Offline: internet weather is only fetched while online");
-    }
+    const offline = !isOnline();
     let coordinates;
     if (typeof app.resourcesApi?.getResource === "function") {
       let route;
@@ -1693,12 +1755,43 @@ module.exports = (app) => {
     lastCompiledWaypoints = waypoints;
     lastRouteWaypoints = waypoints;
     // Bulletins ride the same online window as the weather (SPEC §3.1
-    // metareaBulletin): pulled first so this briefing carries them
+    // metareaBulletin): pulled first so this briefing carries them.
+    // Offline both skip themselves and record checklist skips.
     await refreshBulletinsOnline("briefing", waypoints);
     await refreshSynopticsOnline("briefing", waypoints);
-    const payload = await withSourceStatus(WEATHER_SOURCE, () =>
-      trackWeatherFetcher({ waypoints, forecastDays }),
-    );
+    let payload;
+    try {
+      payload = await withSourceStatus(WEATHER_SOURCE, () =>
+        trackWeatherFetcher({ waypoints, forecastDays }),
+      );
+    } catch (error) {
+      if (!offline) {
+        throw error;
+      }
+      // Offline and no local weather: serve the cache honestly
+      // (work doc #55) instead of failing the request
+      try {
+        const cached = await loadPayload(app.getDataDirPath(), routeId);
+        if (cached) {
+          setStatus(`Offline: serving cached briefing for ${routeId}`);
+          return {
+            routeId,
+            cached: true,
+            cachedAt: cached.cachedAt,
+            offline: true,
+          };
+        }
+      } catch (_cacheError) {
+        // Unreadable cache: the original failure stands
+      }
+      throw error;
+    }
+    if (offline) {
+      // Mark the compile so the crew can see where its numbers
+      // came from: the GRIB run already on board, not a live fetch
+      payload.metadata.offlineCompile = true;
+      setStatus(`Briefing for ${routeId} compiled from local GRIB (offline)`);
+    }
     attachWeatherViewer(payload);
     const bulletin = await bulletinForTrack(waypoints);
     if (bulletin) {
@@ -1708,10 +1801,17 @@ module.exports = (app) => {
     // Space weather for the departure position (work doc #3):
     // fetched Phase-1 sources plus local Phase-2 ephemeris events,
     // all gated on the payload's own cloud cover; nightly moon and
-    // twilight context rides along for the timeline's night glyphs
+    // twilight context rides along for the timeline's night glyphs.
+    // The event window follows the plan's reachable horizon (work doc
+    // #54): the simulation cannot sail past the fetched forecasts, so
+    // events beyond them can never belong to any plan. Offline the
+    // fetched sources are skipped and the ephemeris answers alone
+    // (work doc #55).
     payload.spaceEvents = await fetchSpaceEvents({
       lat: waypoints[0].lat,
       lon: waypoints[0].lon,
+      hours: forecastDays * 24,
+      online: !offline,
       cloudCoverAt: ephemeris.cloudCoverLookup(payload),
       // Meteors ride the worker's track-positioned evaluation
       // (work doc #37) — fixed-position entries would double-report
@@ -1720,19 +1820,25 @@ module.exports = (app) => {
       spaceTrack: spaceTrackConfig,
       reentryEnabled: reentryWatchEnabled,
       launchEnabled: launchWatchEnabled,
-      recordSource: (source, error, { absent = false } = {}) => {
+      recordSource: (source, error, { absent = false, skip = false } = {}) => {
         if (source === "reentry") {
           if (absent) {
             sourceStatus?.record({ ...REENTRY_SOURCE, absent: true });
+          } else if (skip) {
+            sourceStatus?.record({ ...REENTRY_SOURCE, skip: true });
           } else {
             sourceStatus?.record(
               error ? { ...REENTRY_SOURCE, error } : REENTRY_SOURCE,
             );
           }
         } else if (source === "launch") {
-          sourceStatus?.record(
-            error ? { ...LAUNCH_SOURCE, error } : LAUNCH_SOURCE,
-          );
+          if (skip) {
+            sourceStatus?.record({ ...LAUNCH_SOURCE, skip: true });
+          } else {
+            sourceStatus?.record(
+              error ? { ...LAUNCH_SOURCE, error } : LAUNCH_SOURCE,
+            );
+          }
         }
       },
     });
@@ -1749,12 +1855,15 @@ module.exports = (app) => {
     // download during the online window; the boundary walk resamples
     // the route at ~1 nm so a short territorial hop is not missed.
     // Missing tiles, older Node or a failed download degrade to no
-    // transitions — never a failed briefing.
+    // transitions — never a failed briefing. Offline the prefetch is
+    // pointless; the walk runs on the tiles already on disk.
     try {
-      await maritimeZones.prefetchCorridor({
-        dataDir: app.getDataDirPath(),
-        waypoints,
-      });
+      if (!offline) {
+        await maritimeZones.prefetchCorridor({
+          dataDir: app.getDataDirPath(),
+          waypoints,
+        });
+      }
       const dense = sampleRoutePoints(
         coordinates,
         maritimeZones.SAMPLE_INTERVAL_NM,
@@ -1801,14 +1910,16 @@ module.exports = (app) => {
     } catch (error) {
       app.debug?.(`Departure anchor failed: ${error.message}`);
     }
-    await attachHazardEvents(payload, vesselPosition(), waypoints);
+    await attachHazardEvents(payload, vesselPosition(), waypoints, {
+      online: !offline,
+    });
     // Energy forecast (work doc #10): rides the payload like the here
     // mode's, powering the 24 h strip; the outlook terms ride along
     payload.energyHourly = adaptEnergyForecast(
       observations[ENERGY_FORECAST_PATH],
     );
     attachEnergyToPayload(payload);
-    await attachCapAlerts(payload, waypoints);
+    await attachCapAlerts(payload, waypoints, { online: !offline });
     // Automatic synoptic front passages (work doc #50): detection
     // and tracking over the weather provider's grid caches for the
     // route area, crossings against the route simulation's own
@@ -1879,6 +1990,7 @@ module.exports = (app) => {
       cachedAt: payload.metadata.fetchedAt,
       fetchedAt: payload.metadata.fetchedAt,
       waypoints,
+      ...(offline ? { offline: true } : {}),
     };
   }
 
@@ -1941,6 +2053,43 @@ module.exports = (app) => {
       lastRouteId = null;
     }
     const activeId = activeRouteId(observations[ACTIVE_ROUTE_PATH]);
+    // A route the webapp served from nothing (requested offline,
+    // work doc #55) outranks the last-briefed one but never the route
+    // being sailed: the crew is explicitly looking at it, and once it
+    // has a cache the marker dissolves back into the normal flow
+    if (!activeId) {
+      const requestedId = await readRequestedRoute();
+      if (requestedId && requestedId !== lastRouteId) {
+        const alreadyCached = await loadCachedPayload(requestedId);
+        if (!alreadyCached) {
+          try {
+            const result = await refreshBriefing(requestedId);
+            setStatus(
+              `Briefing for ${requestedId} cached at ${result.fetchedAt} (${trigger})`,
+            );
+            await unlink(requestedRoutePath()).catch(() => {});
+            return;
+          } catch (error) {
+            if (!/not found/i.test(error.message)) {
+              app.error(
+                `Briefing refresh failed (${trigger}): ${error.message}`,
+              );
+              setError(
+                `Briefing refresh failed (${trigger}): ${error.message}`,
+              );
+              return;
+            }
+            // Requested route deleted before it was ever briefed
+            app.debug?.(`Requested route ${requestedId} no longer exists`);
+            await unlink(requestedRoutePath()).catch(() => {});
+          }
+        } else {
+          // Briefed through some other path (manual update): the
+          // marker has done its job
+          await unlink(requestedRoutePath()).catch(() => {});
+        }
+      }
+    }
     const candidates = [...new Set([activeId, lastRouteId].filter(Boolean))];
     for (const routeId of candidates) {
       try {
@@ -2016,6 +2165,16 @@ module.exports = (app) => {
       } catch (_error) {
         // Unreadable or missing cache: try the next candidate
       }
+    }
+    // A requested route with no cache never ages fresh (work doc
+    // #55): the crew asked for a briefing that does not exist yet
+    const requestedId = await readRequestedRoute();
+    if (
+      requestedId &&
+      !candidates.includes(requestedId) &&
+      !(await loadCachedPayload(requestedId))
+    ) {
+      ageMs = ROUTE_TTL_MS;
     }
     if (ageMs == null) {
       try {
@@ -3065,6 +3224,7 @@ module.exports = (app) => {
         trackWeatherFetcher = createWeatherFetcher({
           weatherApi: app.weatherApi,
           weatherSource: config.weather_source,
+          isOnline,
         });
       } catch (error) {
         app.error(
@@ -3073,6 +3233,7 @@ module.exports = (app) => {
         trackWeatherFetcher = createWeatherFetcher({
           weatherApi: app.weatherApi,
           weatherSource: "open-meteo",
+          isOnline,
         });
       }
       // Boot scheduling (work doc #47 session): the cached here
@@ -3415,7 +3576,11 @@ module.exports = (app) => {
       router.post("/api/briefing/refresh", async (req, res) => {
         const routeId =
           typeof req.query.route === "string" ? req.query.route : "";
-        if (!isOnline()) {
+        // Here mode stays online-gated (work doc #7): conditions fetch
+        // has no local source to fall back to. Route mode compiles
+        // offline from the local GRIB (work doc #55) — the handler
+        // below serves the cache when even that cannot answer.
+        if (!routeId && !isOnline()) {
           res
             .status(503)
             .json({ error: "Offline: serving cached briefings only" });
@@ -3436,7 +3601,9 @@ module.exports = (app) => {
           res.json(await refreshBriefing(routeId, days));
         } catch (error) {
           app.error(`Briefing refresh failed: ${error.message}`);
-          res.status(502).json({ error: error.message });
+          // Offline failures read as "cannot serve this route" rather
+          // than "the fetch broke": the crew can act on that
+          res.status(isOnline() ? 502 : 503).json({ error: error.message });
         }
       });
 
@@ -3482,6 +3649,17 @@ module.exports = (app) => {
         }
         const cached = await loadPayload(app.getDataDirPath(), effectiveRoute);
         if (!cached) {
+          // The crew asked for a route the plugin cannot serve yet
+          // (created/selected offline, work doc #55): remember it so
+          // the next online window briefs it without another tap
+          try {
+            await mkdir(join(app.getDataDirPath(), "weather"), {
+              recursive: true,
+            });
+            await writeFile(requestedRoutePath(), effectiveRoute);
+          } catch (_error) {
+            // Marker persistence is best-effort
+          }
           res.json({
             mode: "route",
             routeId: effectiveRoute,
@@ -3490,6 +3668,11 @@ module.exports = (app) => {
             online: isOnline(),
           });
           return;
+        }
+        // A marker for a route that now has a cache has served its
+        // purpose — the refresh candidates fall back to last-route
+        if ((await readRequestedRoute()) === effectiveRoute) {
+          await unlink(requestedRoutePath()).catch(() => {});
         }
         // Serve-time bulletin re-filter: recompute the merged console
         // from the bulletin cache against the payload's track, so
@@ -3501,6 +3684,7 @@ module.exports = (app) => {
           mode: "route",
           routeId: effectiveRoute,
           ...cached,
+          cached: true,
           online: isOnline(),
         });
       });

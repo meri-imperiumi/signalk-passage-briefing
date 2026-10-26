@@ -785,13 +785,17 @@ class PassageOutlook extends HTMLElement {
     }
   }
 
-  /** Refreshes the selected route's briefing while online. */
+  /** Refreshes the selected route's briefing. Offline the route
+   * compile still runs — from the GRIB run already on disk (work doc
+   * #55); only conditions-here needs the link. */
   async refreshBriefing() {
     const routeId = this._routeSelect.value;
     const query = routeId ? `?route=${encodeURIComponent(routeId)}` : "";
     this.renderLoading(
       routeId
-        ? "Updating briefing — can take a minute over a slow link…"
+        ? this._status?.online === false
+          ? "Offline — compiling the route from local GRIB…"
+          : "Updating briefing — can take a minute over a slow link…"
         : "Updating conditions…",
     );
     try {
@@ -843,11 +847,12 @@ class PassageOutlook extends HTMLElement {
     strip.append(text);
     // Route mode has no other refresh affordance on screen; here mode
     // carries its own Update now in the conditions card head (work
-    // doc #7) — a second button on the strip read as a duplicate
+    // doc #7) — a second button on the strip read as a duplicate.
+    // Offline route compiles work from local GRIB (work doc #55), so
+    // the button stays live; only here mode needs the link.
     if (mode !== "here") {
       const button = document.createElement("button");
       button.textContent = "Update now";
-      button.disabled = this._status?.online !== true;
       button.addEventListener("click", () => this.refreshBriefing());
       strip.append(button);
     }
@@ -896,7 +901,10 @@ class PassageOutlook extends HTMLElement {
     text.textContent = `Briefing compiled ${info.stamp} — ${info.age} old`;
     const button = document.createElement("button");
     button.textContent = "Update now";
-    button.disabled = this._status?.online !== true;
+    // Route mode compiles from local GRIB offline (work doc #55);
+    // conditions-here has no local source and needs the link
+    button.disabled =
+      this._status?.online !== true && !this._routeSelect?.value;
     button.addEventListener("click", () => this.refreshBriefing());
     strip.append(text, button);
     this._view.before(strip);

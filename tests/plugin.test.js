@@ -528,8 +528,13 @@ describe("plugin", () => {
       path === "navigation.position"
         ? { latitude: -21.1, longitude: -175.2 }
         : null;
+    // Full horizon coverage (work doc #55): a provider answering only
+    // a few steps now reads as thin coverage and falls back to
+    // Open-Meteo online — this test proves the weather-api path, so
+    // the run carries the whole here-mode window
     app.weatherApi = {
-      getForecasts: async () => [0, 3, 6, 9].map(step),
+      getForecasts: async () =>
+        Array.from({ length: 17 }, (_, i) => i * 3).map(step),
     };
 
     // Capture the run-refresh timer without breaking the plugin's own
@@ -947,6 +952,265 @@ describe("plugin", () => {
       assert.equal(res.payload.mode, "route");
       assert.equal(res.payload.payload, null);
       assert.equal(res.payload.cached, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    plugin.stop();
+  });
+
+  test("offline route refresh compiles from local GRIB (doc #55)", async () => {
+    const RAD = Math.PI / 180;
+    const fetchedMs = Date.now();
+    const step = (hours) => ({
+      date: new Date(fetchedMs + hours * 3600000).toISOString(),
+      type: "point",
+      description: `ECMWF IFS 0.25° open data, cycle test, +${hours} h`,
+      wind: { speedTrue: 5.14, directionTrue: 45 * RAD, gust: 7.7 },
+      outside: { pressure: 101300 },
+      water: {
+        waveSignificantHeight: 1,
+        wavePeriod: 6,
+        waveDirection: 160 * RAD,
+      },
+    });
+    const route = {
+      name: "Offline crossing",
+      feature: {
+        geometry: {
+          coordinates: [
+            [0, 0],
+            [0, 1.5],
+          ],
+        },
+      },
+    };
+    const app = createMockApp();
+    app.resourcesApi = {
+      async getResource(resType, resId) {
+        if (resType === "routes" && resId === "r1") {
+          return route;
+        }
+        throw new Error("not found");
+      },
+    };
+    // Full horizon coverage: the local run answers what a week-long
+    // request asks for
+    app.weatherApi = {
+      getForecasts: async () => [0, 3, 72, 144, 166].map(step),
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const call = async (path, req) => {
+      const r = app.getRoutes().find((x) => x.path === path);
+      const res = {
+        code: null,
+        payload: null,
+        status(c) {
+          this.code = c;
+          return this;
+        },
+        json(p) {
+          this.payload = p;
+        },
+      };
+      await r.handler(req, res);
+      return res;
+    };
+
+    // Offline: the compile still runs, from the GRIB on disk
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "offline" }] },
+      ],
+    });
+    const res = await call("/api/briefing/refresh", {
+      query: { route: "r1" },
+    });
+    assert.equal(res.code, null);
+    assert.equal(res.payload.cached, true);
+    assert.equal(res.payload.offline, true);
+
+    // The served briefing carries the offline-compile mark
+    const brief = await call("/api/briefing", { query: { route: "r1" } });
+    assert.equal(brief.code, null);
+    assert.equal(brief.payload.payload.metadata.source, "weather-api");
+    assert.equal(brief.payload.payload.metadata.offlineCompile, true);
+
+    // Conditions-here stays online-gated (no local source for it)
+    const hereRes = await call("/api/briefing/refresh", { query: {} });
+    assert.equal(hereRes.code, 503);
+
+    plugin.stop();
+  });
+
+  test("offline refresh without a local source serves the cache honestly (doc #55)", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const app = createMockApp();
+    app.resourcesApi = {
+      async getResource(resType, resId) {
+        if (resType === "routes" && resId === "r1") {
+          return {
+            name: "Test crossing",
+            feature: {
+              geometry: {
+                coordinates: [
+                  [0, 0],
+                  [0, 1.5],
+                ],
+              },
+            },
+          };
+        }
+        throw new Error("not found");
+      },
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const call = async (path, req) => {
+      const r = app.getRoutes().find((x) => x.path === path);
+      const res = {
+        code: null,
+        payload: null,
+        status(c) {
+          this.code = c;
+          return this;
+        },
+        json(p) {
+          this.payload = p;
+        },
+      };
+      await r.handler(req, res);
+      return res;
+    };
+
+    // Online: build a cache the offline window can fall back to
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "online" }] },
+      ],
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockOpenMeteo();
+    try {
+      const onlineRes = await call("/api/briefing/refresh", {
+        query: { route: "r1" },
+      });
+      assert.equal(onlineRes.code, null);
+      const cacheFile = join(app.dataDir, "weather", "latest-r1.json");
+      const cached = JSON.parse(readFileSync(cacheFile, "utf8"));
+      const fetchedAt = cached.metadata.fetchedAt;
+
+      // Offline: no local weather source — the cache is served, the
+      // cache file is not rewritten
+      feed({
+        updates: [
+          { values: [{ path: "network.internet.state", value: "offline" }] },
+        ],
+      });
+      const res = await call("/api/briefing/refresh", {
+        query: { route: "r1" },
+      });
+      assert.equal(res.code, null);
+      assert.equal(res.payload.cached, true);
+      assert.equal(res.payload.offline, true);
+      assert.equal(res.payload.cachedAt, fetchedAt);
+      assert.equal(
+        JSON.parse(readFileSync(cacheFile, "utf8")).metadata.fetchedAt,
+        fetchedAt,
+      );
+
+      // A route with neither cache nor local source: the request
+      // fails, but as "cannot serve" rather than silently
+      const none = await call("/api/briefing/refresh", {
+        query: { route: "r2" },
+      });
+      assert.equal(none.code, 503);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    plugin.stop();
+  });
+
+  test("a route requested offline joins the next online window (doc #55)", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const app = createMockApp();
+    const route = (name) => ({
+      name,
+      feature: {
+        geometry: {
+          coordinates: [
+            [0, 0],
+            [0, 1.5],
+          ],
+        },
+      },
+    });
+    app.resourcesApi = {
+      async getResource(resType, resId) {
+        if (resType === "routes" && (resId === "r1" || resId === "r2")) {
+          return route(resId === "r1" ? "First" : "Second");
+        }
+        throw new Error("not found");
+      },
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({});
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const call = async (path, req) => {
+      const r = app.getRoutes().find((x) => x.path === path);
+      const res = {
+        code: null,
+        payload: null,
+        status(c) {
+          this.code = c;
+          return this;
+        },
+        json(p) {
+          this.payload = p;
+        },
+      };
+      await r.handler(req, res);
+      return res;
+    };
+
+    // Offline, the crew selects a route that was never briefed
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "offline" }] },
+      ],
+    });
+    let res = await call("/api/briefing", { query: { route: "r2" } });
+    assert.equal(res.payload.payload, null);
+    assert.equal(
+      readFileSync(join(app.dataDir, "weather", "requested-route"), "utf8"),
+      "r2",
+    );
+
+    // Back online: the oneshot briefs the requested route without
+    // another tap, and the marker dissolves
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockOpenMeteo();
+    try {
+      feed({
+        updates: [
+          { values: [{ path: "network.internet.state", value: "online" }] },
+        ],
+      });
+      await waitFor(() =>
+        existsSync(join(app.dataDir, "weather", "latest-r2.json")),
+      );
+      await waitFor(
+        () => !existsSync(join(app.dataDir, "weather", "requested-route")),
+      );
+      res = await call("/api/briefing", { query: { route: "r2" } });
+      assert.equal(res.payload.cached, true);
     } finally {
       globalThis.fetch = originalFetch;
     }

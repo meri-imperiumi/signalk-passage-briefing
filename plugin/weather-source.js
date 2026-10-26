@@ -20,6 +20,13 @@
  * - `weather-api`: always the Weather API; failures fail the fetch
  * - `open-meteo`: never touch the Weather API
  *
+ * The Weather API is a local read over the decoded run on disk, so it
+ * also serves offline compiles (work doc #55); Open-Meteo attempts
+ * are skipped while the boat is offline. Thin provider coverage — a
+ * run answering far short of the requested horizon — falls back like
+ * a failure while online, and rides with the shortfall recorded in
+ * `metadata.forecastHorizonShortfallHours` when offline.
+ *
  * Weather API responses arrive in Signal K units (m/s, rad, Pa) and
  * are mapped into the UnifiedWeatherPayload conventions (knots,
  * degrees true, hPa; wind and wave directions FROM, current set
@@ -301,8 +308,63 @@ function createWeatherApiFetcher({ weatherApi, timeoutMs = 30000 } = {}) {
 }
 
 /**
+ * Shortfall in hours beyond which the Weather API's coverage counts
+ * as thin (work doc #55): a provider answering one day of steps for a
+ * week-long request would otherwise masquerade as the forecast while
+ * the plan sails the rest on the clamped last step. A full day of
+ * missing horizon is a coverage gap, not cycle lag.
+ */
+const SHORTFALL_FALLBACK_HOURS = 24;
+
+/**
+ * Records the payload's real forecast horizon against the requested
+ * one (work doc #55). The horizon is the last step any waypoint
+ * carries; the shortfall is how far that sits behind the requested
+ * `forecastDays`. Both land in `metadata` so the crew (and the
+ * fallback logic) can see what the run actually covers.
+ *
+ * @param {object} payload - UnifiedWeatherPayload, mutated in place
+ * @param {number} forecastDays - Requested horizon, days
+ * @returns {number} Shortfall in hours (0 when coverage is full)
+ */
+function recordForecastHorizon(payload, forecastDays) {
+  const fetchedMs = Date.parse(payload?.metadata?.fetchedAt ?? "");
+  let lastMs = NaN;
+  for (const waypoint of payload?.waypoints ?? []) {
+    const steps = waypoint?.forecasts;
+    if (!Array.isArray(steps) || steps.length === 0) {
+      continue;
+    }
+    const ms = Date.parse(steps[steps.length - 1].timestamp);
+    if (Number.isFinite(ms) && !(ms <= lastMs)) {
+      lastMs = ms;
+    }
+  }
+  if (!Number.isFinite(fetchedMs)) {
+    return 0;
+  }
+  const horizonHours = Number.isFinite(lastMs)
+    ? Math.max(0, Math.round(((lastMs - fetchedMs) / 3600000) * 10) / 10)
+    : 0;
+  const shortfallHours = Number.isFinite(lastMs)
+    ? Math.max(0, Math.round((forecastDays * 24 - horizonHours) * 10) / 10)
+    : forecastDays * 24;
+  payload.metadata.forecastHorizonHours = horizonHours;
+  if (shortfallHours > 0) {
+    payload.metadata.forecastHorizonShortfallHours = shortfallHours;
+  }
+  return shortfallHours;
+}
+
+/**
  * Creates the track-weather fetch the briefing windows use, applying
  * the `weather_source` selection (module docstring).
+ *
+ * The Weather API is a local read — the provider decodes the GRIB run
+ * already on disk — so it answers with the internet link down (work
+ * doc #55). Open-Meteo is an internet service: when `isOnline`
+ * reports offline it is never attempted, and thin Weather API
+ * coverage cannot send the window online either.
  *
  * @param {object} params
  * @param {object} [params.weatherApi] - `app.weatherApi` when the
@@ -311,6 +373,8 @@ function createWeatherApiFetcher({ weatherApi, timeoutMs = 30000 } = {}) {
  * @param {typeof fetch} [params.fetchImpl] - Open-Meteo fetch
  *   implementation (tests); defaults to the global fetch, resolved
  *   at call time
+ * @param {() => boolean} [params.isOnline] - Internet link state;
+ *   absent means assume online
  * @returns {function({waypoints: Array, forecastDays?: number}):
  *   Promise<object>}
  */
@@ -318,6 +382,7 @@ function createWeatherFetcher({
   weatherApi,
   weatherSource = "auto",
   fetchImpl,
+  isOnline,
 } = {}) {
   const wantsWeatherApi = weatherSource !== "open-meteo";
   const weatherApiFetcher =
@@ -329,18 +394,37 @@ function createWeatherFetcher({
       "weather_source is weather-api but this server has no Weather API",
     );
   }
+  const offline = () =>
+    typeof isOnline === "function" ? isOnline() === false : false;
   return async function fetchTrackWeather({ waypoints, forecastDays } = {}) {
     if (weatherApiFetcher !== null) {
       try {
-        return await weatherApiFetcher({ waypoints, forecastDays });
+        const payload = await weatherApiFetcher({ waypoints, forecastDays });
+        const shortfall = recordForecastHorizon(payload, forecastDays);
+        // Thin coverage (work doc #55): a provider answering one day
+        // for a week-long request falls back like a failure — but
+        // only while online, where the fallback can actually answer.
+        if (
+          shortfall > SHORTFALL_FALLBACK_HOURS &&
+          !offline() &&
+          weatherSource === "auto"
+        ) {
+          throw new Error(
+            `Weather API coverage short by ${Math.round(shortfall)} h`,
+          );
+        }
+        return payload;
       } catch (error) {
-        if (weatherSource === "weather-api") {
+        if (weatherSource === "weather-api" || offline()) {
           throw error;
         }
-        // auto: this window falls back to Open-Meteo; the next one
-        // tries the Weather API again (self-heals once the provider
-        // has loaded its forecast)
+        // auto, online: this window falls back to Open-Meteo; the
+        // next one tries the Weather API again (self-heals once the
+        // provider has loaded its forecast)
       }
+    } else if (offline()) {
+      // No local source and no link: nothing to fetch (work doc #55)
+      throw new Error("Offline: no local weather source available");
     }
     // Bare `fetch` resolves at call time, so test and runtime
     // overrides of globalThis.fetch after plugin start still apply
@@ -359,4 +443,6 @@ module.exports = {
   modelLabel,
   modelCycleTime,
   buildApiPayload,
+  recordForecastHorizon,
+  SHORTFALL_FALLBACK_HOURS,
 };

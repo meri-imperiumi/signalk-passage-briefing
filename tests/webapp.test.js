@@ -1270,6 +1270,77 @@ test("webapp view models", async (t) => {
     assert.equal(timeline[1].hoursFromNow, null);
   });
 
+  await t.test(
+    "mergeTimeline clips events past the plan's end (doc #54)",
+    () => {
+      // A three-day plan that arrives at +70 h; the payload still
+      // carries satellite passes for hours beyond it (fixed fetch-time
+      // windows) — sea-trial noise after the Arrival row
+      const track = [
+        { hoursFromNow: 0, timestamp: "2026-06-21T06:00:00.000Z" },
+        { hoursFromNow: 70, timestamp: "2026-06-24T04:00:00.000Z" },
+      ];
+      const timeline = mergeTimeline(
+        {
+          passageSummary: {
+            arrived: true,
+            destinationName: "Opua",
+            track,
+          },
+        },
+        {
+          metadata: { fetchedAt: "2026-06-21T06:00:00.000Z" },
+          spaceEvents: [
+            {
+              timestamp: "2026-06-22T12:00:00.000Z",
+              tactical: false,
+              description: "ISS pass mid-passage",
+            },
+            {
+              timestamp: "2026-06-24T10:00:00.000Z",
+              tactical: false,
+              description: "ISS pass after arrival",
+            },
+          ],
+        },
+      );
+      const labels = timeline.map((item) => item.label);
+      assert.ok(labels.includes("ISS pass mid-passage"));
+      assert.ok(!labels.includes("ISS pass after arrival"));
+      // The arrival row is the timeline's last entry
+      assert.equal(timeline[timeline.length - 1].kind, "arrival");
+      assert.equal(timeline[timeline.length - 1].hoursFromNow, 70);
+    },
+  );
+
+  await t.test(
+    "mergeTimeline clips at the horizon cap when the plan never arrives",
+    () => {
+      // No arrival: the track's last row is the plan's reachable end
+      const track = [
+        { hoursFromNow: 0, timestamp: "2026-06-21T06:00:00.000Z" },
+        { hoursFromNow: 48, timestamp: "2026-06-23T06:00:00.000Z" },
+      ];
+      const timeline = mergeTimeline(
+        { passageSummary: { arrived: false, track } },
+        {
+          metadata: { fetchedAt: "2026-06-21T06:00:00.000Z" },
+          spaceEvents: [
+            {
+              timestamp: "2026-06-25T06:00:00.000Z",
+              tactical: false,
+              description: "beyond the cap",
+            },
+          ],
+        },
+      );
+      assert.equal(
+        timeline.filter((item) => item.label === "beyond the cap").length,
+        0,
+      );
+    },
+  );
+
   await t.test("mergeTimeline night stamps carry the actual moon glyph", () => {
     // The payload's celestialNights drive the glyph (work doc #3:
     // real moon phase instead of a fixed crescent); full moon the

@@ -1957,7 +1957,27 @@ export function mergeTimeline(exceptions, payload = null) {
     (item) => item.hoursFromNow == null || item.hoursFromNow >= 0,
   );
 
-  return upcoming.sort((a, b) => {
+  // Nothing after the plan's end belongs either (work doc #54, sea
+  // trial): the simulated track's last row is where the plan stops —
+  // the arrival hour when it made the destination, the horizon cap
+  // otherwise. Space events, comets and reentries computed on fixed
+  // fetch-time windows sort past that end and read as entries after
+  // arrival. They clip here, at the same boundary the arrival row
+  // sits on; items whose hour cannot be resolved stay (unsortable,
+  // they trail in insertion order) — half a rounding step of slack
+  // absorbs the 0.1 h quantization both the track rows and the
+  // payload stamps carry.
+  const planEndHours = lastRow?.hoursFromNow ?? null;
+  const inPassage =
+    planEndHours == null
+      ? upcoming
+      : upcoming.filter(
+          (item) =>
+            item.hoursFromNow == null ||
+            item.hoursFromNow <= planEndHours + 0.05,
+        );
+
+  return inPassage.sort((a, b) => {
     if (a.hoursFromNow == null || b.hoursFromNow == null) {
       return a.hoursFromNow == null && b.hoursFromNow == null
         ? 0

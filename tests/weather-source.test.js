@@ -322,4 +322,84 @@ describe("createWeatherFetcher", () => {
     assert.equal(queried, false);
     assert.equal(payload.metadata.source, "api");
   });
+
+  /** A provider answer whose steps stop `hours` past the fetch:
+   * simulates a GRIB corridor that only partly covers the route. */
+  function thinProvider(hours = 24) {
+    const fetchedMs = Date.now();
+    return {
+      getForecasts: async () =>
+        [0, 3, 6, 9, hours].map((step) =>
+          weatherDataEntry({
+            date: new Date(fetchedMs + step * 3600000).toISOString(),
+          }),
+        ),
+    };
+  }
+
+  test("thin coverage falls back to Open-Meteo while online (doc #55)", async () => {
+    const fetchTrack = createWeatherFetcher({
+      weatherApi: thinProvider(24),
+      fetchImpl: mockOpenMeteo(),
+      isOnline: () => true,
+    });
+    const payload = await fetchTrack({ waypoints, forecastDays: 7 });
+    // The fallback answered, not the thin provider
+    assert.equal(payload.metadata.source, "api");
+  });
+
+  test("thin coverage rides offline with the shortfall recorded", async () => {
+    let openMeteoCalled = false;
+    const fetchTrack = createWeatherFetcher({
+      weatherApi: thinProvider(24),
+      fetchImpl: async (...args) => {
+        openMeteoCalled = true;
+        return mockOpenMeteo()(...args);
+      },
+      isOnline: () => false,
+    });
+    const payload = await fetchTrack({ waypoints, forecastDays: 7 });
+    assert.equal(payload.metadata.source, "weather-api");
+    assert.equal(openMeteoCalled, false);
+    assert.ok(payload.metadata.forecastHorizonHours < 30);
+    assert.ok(payload.metadata.forecastHorizonShortfallHours > 140);
+  });
+
+  test("full coverage records no shortfall and never falls back", async () => {
+    const fetchedMs = Date.now();
+    const fetchTrack = createWeatherFetcher({
+      weatherApi: {
+        getForecasts: async () =>
+          [0, 72, 144, 166].map((step) =>
+            weatherDataEntry({
+              date: new Date(fetchedMs + step * 3600000).toISOString(),
+            }),
+          ),
+      },
+      fetchImpl: async () => {
+        throw new Error("Open-Meteo must not be called");
+      },
+      isOnline: () => true,
+    });
+    // A waypoint deep into the route: the ETA-window throttle keeps
+    // its whole window, horizon steps included
+    const far = [{ lat: 60.1, lon: 25.1, distanceFromStartNm: 400 }];
+    const payload = await fetchTrack({ waypoints: far, forecastDays: 7 });
+    assert.equal(payload.metadata.source, "weather-api");
+    // Cycle quantization may leave an hour or two short of the
+    // request — inside the fallback threshold, so no Open-Meteo trip
+    assert.ok(payload.metadata.forecastHorizonShortfallHours <= 24);
+    assert.ok(payload.metadata.forecastHorizonHours > 160);
+  });
+
+  test("offline with no local source rejects instead of going online", async () => {
+    const fetchTrack = createWeatherFetcher({
+      weatherApi: undefined,
+      fetchImpl: async () => {
+        throw new Error("Open-Meteo must not be called");
+      },
+      isOnline: () => false,
+    });
+    await assert.rejects(fetchTrack({ waypoints }), /Offline/);
+  });
 });
