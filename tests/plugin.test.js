@@ -1218,6 +1218,162 @@ describe("plugin", () => {
     plugin.stop();
   });
 
+  test("on passage: offline mosaic briefing, a new route mid-leg, and the metered window replaces it (doc #55)", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    const RAD = Math.PI / 180;
+    const app = createMockApp();
+    const route = (name) => ({
+      name,
+      feature: {
+        geometry: {
+          coordinates: [
+            [0, 0],
+            [0, 1.5],
+          ],
+        },
+      },
+    });
+    app.resourcesApi = {
+      async getResource(resType, resId) {
+        if (resType === "routes" && (resId === "r1" || resId === "r2")) {
+          return route(resId === "r1" ? "First" : "Second");
+        }
+        throw new Error("not found");
+      },
+    };
+    // The corridor mosaic, as the sea trial served it: tiles near
+    // the boat carry the fresh run's full slice set while mid-route
+    // waypoints stop inside day 2. The plan sails over every
+    // waypoint, so this answer must read as short even though its
+    // best waypoint reaches two weeks.
+    const fetchedMs = Date.now();
+    const gribSteps = (from, to) =>
+      Array.from({ length: (to - from) / 3 + 1 }, (_, i) => ({
+        date: new Date(fetchedMs + (from + i * 3) * 3600000).toISOString(),
+        type: "point",
+        description: `GFS 0.25°, cycle test, +${from + i * 3} h`,
+        wind: { speedTrue: 5.14, directionTrue: 45 * RAD, gust: 7.7 },
+        outside: { pressure: 101300 },
+        water: {
+          waveSignificantHeight: 1,
+          wavePeriod: 6,
+          waveDirection: 160 * RAD,
+        },
+      }));
+    app.weatherApi = {
+      getForecasts: async (position) =>
+        position.latitude < 1.0 ? gribSteps(0, 336) : gribSteps(0, 45),
+    };
+    const plugin = pluginFactory(app);
+    plugin.start({ forecast_days: 14 });
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const call = async (path, req = { query: {} }) => {
+      const r = app.getRoutes().find((x) => x.path === path);
+      const res = {
+        code: null,
+        payload: null,
+        status(c) {
+          this.code = c;
+          return this;
+        },
+        json(p) {
+          this.payload = p;
+        },
+      };
+      await r.handler(req, res);
+      return res;
+    };
+
+    // Underway, the link is down: the crew browses r1, already
+    // briefed before departure — the offline compile re-runs from
+    // the GRIB on disk, mosaic and all
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "offline" }] },
+      ],
+    });
+    let res = await call("/api/briefing/refresh", {
+      query: { route: "r1" },
+      method: "POST",
+    });
+    assert.equal(res.code, null, "offline route refresh compiles");
+    res = await call("/api/briefing", { query: { route: "r1" } });
+    assert.equal(res.payload.cached, true);
+    const mosaic = res.payload.payload.metadata;
+    assert.equal(mosaic.source, "weather-api");
+    assert.equal(mosaic.offlineCompile, true);
+    // Both truths recorded: the freshest waypoint reaches the full
+    // grid, the worst stops inside day 2 — and the shortfall says so
+    assert.ok(
+      mosaic.forecastHorizonHours > 300,
+      `max ${mosaic.forecastHorizonHours}`,
+    );
+    assert.ok(
+      mosaic.forecastHorizonMinHours < 70,
+      `min ${mosaic.forecastHorizonMinHours}`,
+    );
+    assert.ok(
+      mosaic.forecastHorizonShortfallHours > 260,
+      `shortfall ${mosaic.forecastHorizonShortfallHours}`,
+    );
+
+    // Mid-leg, the crew creates a second route: never briefed, the
+    // webapp remembers it for the next window…
+    res = await call("/api/briefing", { query: { route: "r2" } });
+    assert.equal(res.payload.payload, null);
+    assert.equal(
+      readFileSync(join(app.dataDir, "weather", "requested-route"), "utf8"),
+      "r2",
+    );
+
+    // …and one offline Update compiles it from the GRIB too. The
+    // marker has done its job — a cache exists — so it dissolves
+    res = await call("/api/briefing/refresh", {
+      query: { route: "r2" },
+      method: "POST",
+    });
+    assert.equal(res.code, null);
+    res = await call("/api/briefing", { query: { route: "r2" } });
+    assert.equal(res.payload.cached, true);
+    assert.equal(res.payload.payload.metadata.offlineCompile, true);
+    assert.ok(!existsSync(join(app.dataDir, "weather", "requested-route")));
+
+    // The metered hour: the link comes up, the oneshot re-briefs
+    // the last route (r2) — and the mosaic payload is replaced by
+    // the fallback's uniform horizon, the crew reading real steps
+    // at every waypoint again
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockOpenMeteo();
+    try {
+      feed({
+        updates: [
+          { values: [{ path: "network.internet.state", value: "online" }] },
+        ],
+      });
+      const latest = join(app.dataDir, "weather", "latest-r2.json");
+      await waitFor(() => {
+        try {
+          const payload = JSON.parse(readFileSync(latest, "utf8"));
+          return payload.metadata.source === "api";
+        } catch (_error) {
+          return false;
+        }
+      });
+      res = await call("/api/briefing", { query: { route: "r2" } });
+      assert.equal(res.payload.cached, true);
+      const fresh = res.payload.payload.metadata;
+      assert.equal(fresh.source, "api");
+      assert.equal(fresh.offlineCompile, undefined);
+      // Uniform coverage: no shortfall field rides an honest answer
+      assert.equal(fresh.forecastHorizonShortfallHours, undefined);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    plugin.stop();
+  });
+
   test("bulletins: fetched online, filtered per route, served and spliced", async () => {
     const { mockOpenMeteo } = require("./openmeteo-mock.js");
     const NAVAREA = [
