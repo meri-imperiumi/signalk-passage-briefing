@@ -387,6 +387,12 @@ export function weatherAt(forecasts, timestamp) {
 
   return {
     clamped: t < steps[0].t || t > steps[steps.length - 1].t,
+    // The bracket the value was blended across, in hours: hourly and
+    // 3-hourly steps bracket tightly, but a hole in the answer (a
+    // missing GRIB slice, a cropped provider response) blends across
+    // days. The sim flags those rows sparse — a fabricated blend must
+    // never read as living weather (work doc #55 session safety pass).
+    gapHours: Math.round((span / 3600000) * 10) / 10,
     surface: {
       tws: mix(sa.tws, sb.tws),
       twd: mix(sa.twd, sb.twd, true),
@@ -556,6 +562,15 @@ const SQUALL_GUST_KNOTS = 16;
 const EPISODE_GAP_HOURS = 2;
 
 /**
+ * Bracket span in hours past which a forecast value reads as
+ * fabricated (work doc #55 session safety pass): payload steps are
+ * hourly or 3-hourly by contract, so a bracket wider than this is a
+ * hole in the answer — the blend across it must surface as a sparse
+ * forecast, never as living weather.
+ */
+const SPARSE_GAP_HOURS = 6;
+
+/**
  * Peak of two optional values (null-safe).
  *
  * @param {number|null|undefined} a
@@ -604,6 +619,53 @@ function deriveForecastHorizonEpisodes(rows) {
   let current = null;
   for (const row of rows) {
     if (row.forecastClamped === true) {
+      if (current == null) {
+        current = {
+          hoursFromNow: row.hoursFromNow,
+          timestamp: row.timestamp ?? null,
+          untilHoursFromNow: row.hoursFromNow,
+          untilTimestamp: row.timestamp ?? null,
+        };
+        episodes.push(current);
+      } else {
+        current.untilHoursFromNow = row.hoursFromNow;
+        current.untilTimestamp = row.timestamp ?? null;
+      }
+    } else {
+      current = null;
+    }
+  }
+  return episodes.map((episode) => {
+    const hours = episode.untilHoursFromNow - episode.hoursFromNow + 1;
+    return {
+      hoursFromNow: episode.hoursFromNow,
+      timestamp: episode.timestamp,
+      untilHoursFromNow: episode.untilHoursFromNow,
+      untilTimestamp: episode.untilTimestamp,
+      hours: Math.max(1, Math.round(hours * 10) / 10),
+    };
+  });
+}
+
+/**
+ * Aggregates the hourly rows' sparse stretches (work doc #55 session
+ * safety pass): each continuous run of `forecastSparse` rows — hours
+ * the plan read weather blended across a hole in the payload's steps —
+ * becomes one episode carrying its start and span. A fabricated blend
+ * must be visible on the timeline, never pass as living forecast; the
+ * sibling {@link deriveForecastHorizonEpisodes} covers the past-the-end
+ * case, this one the holes inside it.
+ *
+ * @param {Array<{hoursFromNow: number, timestamp: string,
+ *   forecastSparse: boolean}>} rows - Simulated hourly rows
+ * @returns {Array<{hoursFromNow: number, timestamp: string,
+ *   untilHoursFromNow: number, untilTimestamp: string, hours: number}>}
+ */
+function deriveSparseForecastEpisodes(rows) {
+  const episodes = [];
+  let current = null;
+  for (const row of rows) {
+    if (row.forecastSparse === true) {
       if (current == null) {
         current = {
           hoursFromNow: row.hoursFromNow,
@@ -1605,6 +1667,10 @@ export function simulateRun({
       // #34 session): the plan sails on the final fetched forecast —
       // surfaced so a missed daily window is visible, not silent
       forecastClamped: weather?.clamped === true,
+      // The hour was blended across a hole in the forecast steps
+      // (work doc #55 session safety pass): a sparse stretch reads as
+      // fabricated weather on the timeline, never as living forecast
+      forecastSparse: (weather?.gapHours ?? 0) > SPARSE_GAP_HOURS,
       azMs2: null,
       comfortLevel: null,
       slatting: null,
@@ -2565,6 +2631,11 @@ export function filterExceptions(simulationResult, simParams = {}) {
       // Hours past the payload's forecast horizon (work doc #34
       // session): the missed-window tell
       horizonEpisodes: deriveForecastHorizonEpisodes(
+        simulationResult.hourlyComfort ?? [],
+      ),
+      // Hours the plan read weather blended across step holes (work
+      // doc #55 session safety pass): the sparse tell
+      sparseEpisodes: deriveSparseForecastEpisodes(
         simulationResult.hourlyComfort ?? [],
       ),
       // The destination's gazetteer name for the arrival row (work

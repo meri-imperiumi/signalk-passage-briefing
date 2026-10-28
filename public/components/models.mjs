@@ -1725,6 +1725,28 @@ export function mergeTimeline(exceptions, payload = null) {
     });
   }
 
+  // Sparse stretches (work doc #55 session safety pass): the hours the
+  // plan read weather blended across a hole in the payload's steps —
+  // missing GRIB slices, a cropped provider answer. A fabricated blend
+  // must be visible on the timeline, never pass as living forecast.
+  for (const h of summary.sparseEpisodes ?? []) {
+    push({
+      hoursFromNow: h.hoursFromNow ?? null,
+      timestamp: h.timestamp ?? null,
+      kind: "forecast",
+      severity: "warn",
+      label: "Sparse forecast",
+      detail: [
+        h.hours != null
+          ? `${h.hours} h interpolated across forecast gaps`
+          : null,
+        "refresh the briefing at the next window",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    });
+  }
+
   // Beating stretches (work doc #49): the in-irons legs the plan
   // sails as VMG — one episode per continuous tack-tack-tack stretch.
   for (const b of summary.beatEpisodes ?? []) {

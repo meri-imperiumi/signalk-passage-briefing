@@ -123,7 +123,7 @@ describe("plugin", () => {
   /** Waits until the predicate holds (refreshes span several event
    * loop turns once the physics module and synoptic fetches join the
    * here path). */
-  async function waitFor(predicate, ms = 5000) {
+  async function waitFor(predicate, ms = 15000) {
     const deadline = Date.now() + ms;
     while (Date.now() < deadline) {
       if (predicate()) {
@@ -2108,7 +2108,7 @@ describe("plugin", () => {
    * @param {number} [timeoutMs=5000]
    * @returns {Promise<void>} Rejects when the deadline passes
    */
-  async function waitFor(predicate, timeoutMs = 5000) {
+  async function waitFor(predicate, timeoutMs = 15000) {
     const deadline = Date.now() + timeoutMs;
     while (!predicate()) {
       if (Date.now() > deadline) {

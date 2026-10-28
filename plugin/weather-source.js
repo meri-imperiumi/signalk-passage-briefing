@@ -214,7 +214,7 @@ function buildApiPayload(waypoints, forecastsByWaypoint) {
     };
   });
   const fetchedAt = new Date().toISOString();
-  throttleWaypointForecasts(payloadWaypoints, fetchedAt);
+  throttleWaypointForecasts(payloadWaypoints);
   return {
     metadata: {
       fetchedAt,
@@ -318,10 +318,14 @@ const SHORTFALL_FALLBACK_HOURS = 24;
 
 /**
  * Records the payload's real forecast horizon against the requested
- * one (work doc #55). The horizon is the last step any waypoint
- * carries; the shortfall is how far that sits behind the requested
- * `forecastDays`. Both land in `metadata` so the crew (and the
- * fallback logic) can see what the run actually covers.
+ * one (work doc #55). The plan sails over every waypoint, so what it
+ * can rely on is the *earliest-stopping* point: `forecastHorizonHours`
+ * records the freshest waypoint's last step, `forecastHorizonMinHours`
+ * the earliest-stopping one, and the shortfall — how far the worst
+ * point sits behind the requested `forecastDays` — is what the fallback
+ * logic and the crew should read. A corridor mosaic where some waypoints
+ * reach days past the rest covers neither the plan's middle nor its end
+ * on living steps; a waypoint with no steps at all stops now.
  *
  * @param {object} payload - UnifiedWeatherPayload, mutated in place
  * @param {number} forecastDays - Requested horizon, days
@@ -329,27 +333,39 @@ const SHORTFALL_FALLBACK_HOURS = 24;
  */
 function recordForecastHorizon(payload, forecastDays) {
   const fetchedMs = Date.parse(payload?.metadata?.fetchedAt ?? "");
-  let lastMs = NaN;
+  let maxMs = NaN;
+  let minMs = NaN;
   for (const waypoint of payload?.waypoints ?? []) {
     const steps = waypoint?.forecasts;
-    if (!Array.isArray(steps) || steps.length === 0) {
+    const ms =
+      Array.isArray(steps) && steps.length > 0
+        ? Date.parse(steps[steps.length - 1].timestamp)
+        : fetchedMs;
+    if (!Number.isFinite(ms)) {
       continue;
     }
-    const ms = Date.parse(steps[steps.length - 1].timestamp);
-    if (Number.isFinite(ms) && !(ms <= lastMs)) {
-      lastMs = ms;
+    if (!(ms <= maxMs)) {
+      maxMs = ms;
+    }
+    if (!(ms >= minMs)) {
+      minMs = ms;
     }
   }
   if (!Number.isFinite(fetchedMs)) {
     return 0;
   }
-  const horizonHours = Number.isFinite(lastMs)
-    ? Math.max(0, Math.round(((lastMs - fetchedMs) / 3600000) * 10) / 10)
+  const horizonHours = Number.isFinite(maxMs)
+    ? Math.max(0, Math.round(((maxMs - fetchedMs) / 3600000) * 10) / 10)
     : 0;
-  const shortfallHours = Number.isFinite(lastMs)
-    ? Math.max(0, Math.round((forecastDays * 24 - horizonHours) * 10) / 10)
-    : forecastDays * 24;
+  const minHours = Number.isFinite(minMs)
+    ? Math.max(0, Math.round(((minMs - fetchedMs) / 3600000) * 10) / 10)
+    : 0;
+  const shortfallHours = Math.max(
+    0,
+    Math.round((forecastDays * 24 - minHours) * 10) / 10,
+  );
   payload.metadata.forecastHorizonHours = horizonHours;
+  payload.metadata.forecastHorizonMinHours = minHours;
   if (shortfallHours > 0) {
     payload.metadata.forecastHorizonShortfallHours = shortfallHours;
   }

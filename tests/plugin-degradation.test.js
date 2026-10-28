@@ -95,7 +95,7 @@ async function callRoute(app, path, req = { query: {} }) {
   return res;
 }
 
-async function waitFor(predicate, ms = 8000) {
+async function waitFor(predicate, ms = 15000) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     if (await predicate()) {

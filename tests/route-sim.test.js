@@ -158,6 +158,35 @@ describe("weatherAt", () => {
     assert.equal(after.clamped, true);
     approx(after.surface.tws, 14);
   });
+
+  test("reports the bracket span it blended across", async () => {
+    const { weatherAt } = await simPromise;
+    const forecasts = [
+      {
+        timestamp: "2026-06-21T00:00:00.000Z",
+        surface: { tws: 12, twd: 350, mslp: 1013, gust: 17 },
+      },
+      {
+        timestamp: "2026-06-21T01:00:00.000Z",
+        surface: { tws: 14, twd: 10, mslp: 1012, gust: 19 },
+      },
+    ];
+    // Tight hourly bracket
+    approx(weatherAt(forecasts, new Date("2026-06-21T00:30:00Z")).gapHours, 1);
+    // A hole in the answer: the blend spans it — the sim flags those
+    // rows sparse so a fabricated blend never reads as living weather
+    // (the 01:00 step survives, so the bracket is 01:00→18:00)
+    forecasts.splice(1, 0, {
+      timestamp: "2026-06-21T18:00:00.000Z",
+      surface: { tws: 20, twd: 10, mslp: 1010, gust: 25 },
+    });
+    approx(weatherAt(forecasts, new Date("2026-06-21T09:00:00Z")).gapHours, 17);
+    // Clamped reads bracket a single step: no gap
+    assert.equal(
+      weatherAt(forecasts, new Date("2026-06-22T12:00:00Z")).gapHours,
+      0,
+    );
+  });
 });
 
 describe("simulateRun", () => {
@@ -258,6 +287,51 @@ describe("simulateRun", () => {
     assert.equal(episodes.length, 1, "one continuous clamped stretch");
     assert.equal(episodes[0].hoursFromNow, first);
     assert.ok(episodes[0].hours >= 1, `span ${episodes[0].hours}`);
+  });
+
+  test("sparse forecast: hours blended across step holes surface as episodes", async () => {
+    const { simulateRun, filterExceptions } = await simPromise;
+    // 180 nm at ~6 kn ≈ 30 h of plan, against 72 h of forecasts — but
+    // with a 42-hour hole punched into the answers (failed GRIB
+    // slices, a cropped provider response): from hour 6 on, the plan
+    // reads values blended from hour 5 to hour 48, a 43 h bracket
+    const payload = buildPayload({ hours: 72 });
+    for (const waypoint of payload.waypoints) {
+      waypoint.forecasts = waypoint.forecasts.filter(
+        (_step, i) => i < 6 || i > 47,
+      );
+    }
+    const run = simulateRun({
+      payload,
+      startTime: START,
+      config: {},
+      maxHours: 72,
+    });
+    const sparse = run.hourly.filter((row) => row.forecastSparse === true);
+    assert.ok(
+      sparse.length > 10,
+      `rows across the hole flagged (${sparse.length})`,
+    );
+    // Inside the horizon, so nothing clamps: sparse ≠ horizon — the
+    // two tells answer different lies
+    assert.ok(
+      run.hourly.every((row) => row.forecastClamped !== true),
+      "no clamped rows: the hole is inside the horizon",
+    );
+
+    const exceptions = filterExceptions(
+      { ...run, hourlyComfort: run.hourly },
+      { config: {} },
+    );
+    const episodes = exceptions.passageSummary.sparseEpisodes;
+    assert.equal(episodes.length, 1, "one continuous sparse stretch");
+    // The plan departs at payload hour 6 — already inside the hole —
+    // so the sparse stretch starts at the plan's first row
+    assert.ok(
+      episodes[0].hoursFromNow <= 1,
+      `starts at ${episodes[0].hoursFromNow}`,
+    );
+    assert.ok(episodes[0].hours >= 20, `span ${episodes[0].hours}`);
   });
 
   test("learns sail suggestions from the matrix, day and night bucketed", async () => {

@@ -425,6 +425,33 @@ test("webapp view models", async (t) => {
   });
 
   await t.test(
+    "sparse forecast stretches ride the timeline as warnings (doc #55)",
+    () => {
+      const timeline = mergeTimeline({
+        passageSummary: {
+          sparseEpisodes: [
+            {
+              hoursFromNow: 6,
+              timestamp: "2026-06-21T12:00:00.000Z",
+              untilHoursFromNow: 40,
+              untilTimestamp: "2026-06-22T22:00:00.000Z",
+              hours: 35,
+            },
+          ],
+        },
+      });
+      assert.equal(timeline.length, 1);
+      assert.equal(timeline[0].kind, "forecast");
+      assert.equal(timeline[0].severity, "warn");
+      assert.equal(timeline[0].label, "Sparse forecast");
+      assert.match(
+        timeline[0].detail,
+        /35 h interpolated across forecast gaps/,
+      );
+    },
+  );
+
+  await t.test(
     "front passages ride the timeline as informational front rows (doc #50)",
     () => {
       const timeline = mergeTimeline(null, {

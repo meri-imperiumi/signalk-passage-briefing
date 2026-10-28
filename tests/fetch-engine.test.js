@@ -144,7 +144,7 @@ describe("throttleWaypointForecasts", () => {
     surface: { tws: h },
   });
 
-  test("windows bracket the arrival across the speed range", () => {
+  test("keeps the whole horizon at every waypoint", () => {
     const waypoints = [
       {
         distanceFromStartNm: 0,
@@ -155,64 +155,83 @@ describe("throttleWaypointForecasts", () => {
         forecasts: Array.from({ length: 168 }, (_, h) => step(h)),
       },
     ];
-    throttleWaypointForecasts(waypoints, FETCH);
-    const second = waypoints[1].forecasts.map((f) =>
-      Math.round((Date.parse(f.timestamp) - Date.parse(FETCH)) / HOUR),
-    );
-    // Fast boat: 210 nm at 10 kn arrives at 21 h, window opens 12 h
-    // before — the early hours the boat cannot be there yet are gone
-    assert.equal(second[0], 9);
-    // Slow boat: 210 nm at 2.5 kn arrives at 84 h, window closes 48 h
-    // after — beyond that the boat is reading the next waypoint's data
-    assert.equal(second[second.length - 1], 132);
+    throttleWaypointForecasts(waypoints);
+    for (const [index, waypoint] of waypoints.entries()) {
+      const stamps = waypoint.forecasts.map((f) =>
+        Math.round((Date.parse(f.timestamp) - Date.parse(FETCH)) / HOUR),
+      );
+      // No ETA-window cropping (work doc #55 session safety pass): a
+      // departure-day variant re-anchors the simulation to hours the
+      // old windows never covered, and the plan then read weather
+      // interpolated silently across the multi-day gap to the lone
+      // tail step. Every waypoint spans its whole fetched horizon.
+      assert.equal(stamps[0], 0, `waypoint ${index} starts at fetch`);
+      assert.equal(
+        stamps[stamps.length - 1],
+        167,
+        `waypoint ${index} spans to the horizon`,
+      );
+      for (let i = 1; i < stamps.length; i++) {
+        assert.ok(
+          stamps[i] - stamps[i - 1] <= 3,
+          `waypoint ${index} bracket ${stamps[i - 1]}→${stamps[i]} stays tight`,
+        );
+      }
+    }
   });
 
-  test("hourly steps collapse to 3-hourly past the first day of the window", () => {
+  test("hourly steps collapse to 3-hourly past the first day", () => {
     const waypoints = [
       {
         distanceFromStartNm: 0,
         forecasts: Array.from({ length: 168 }, (_, h) => step(h)),
       },
     ];
-    throttleWaypointForecasts(waypoints, FETCH);
+    throttleWaypointForecasts(waypoints);
     const stamps = waypoints[0].forecasts.map((f) =>
       Math.round((Date.parse(f.timestamp) - Date.parse(FETCH)) / HOUR),
     );
-    // The departure waypoint's window closes 48 h after its
-    // (immediate) arrival: 24 hourly steps, then every third hour
-    assert.equal(stamps.length, 24 + (48 - 24) / 3 + 1);
-    assert.equal(stamps[stamps.length - 1], 48);
+    // 24 hourly steps, then every third hour, then the horizon's last
+    // step always rides along
+    assert.equal(stamps.length, 24 + (165 - 24) / 3 + 1 + 1);
+    assert.equal(stamps[stamps.length - 1], 167);
     for (let i = 24; i < stamps.length - 1; i++) {
       assert.equal(stamps[i] % 3, 0);
     }
   });
 
-  test("a guaranteed minimum span survives a wildly slow boat", () => {
-    // 420 nm: the slow-bracket arrival (2.5 kn) sits past the 168 h
-    // horizon, so the window rides the whole horizon's tail — plenty
-    // of coverage either way, and the last step must survive decimation
-    const waypoints = [
-      {
-        distanceFromStartNm: 420,
-        forecasts: Array.from({ length: 168 }, (_, h) => step(h)),
-      },
-    ];
-    throttleWaypointForecasts(waypoints, FETCH);
+  test("decimation never invents steps: a hole in the answer stays a hole", () => {
+    // A provider answer with a 12-hour hole (failed GRIB slices, say):
+    // the throttle must not fill it — the sim flags the blend instead
+    const forecasts = Array.from({ length: 168 }, (_, h) => step(h)).filter(
+      (_f, h) => h < 30 || h > 42,
+    );
+    const waypoints = [{ distanceFromStartNm: 0, forecasts }];
+    throttleWaypointForecasts(waypoints);
+    const inputStamps = new Set(
+      forecasts.map((f) => new Date(Date.parse(f.timestamp)).toISOString()),
+    );
+    for (const forecast of waypoints[0].forecasts) {
+      assert.ok(
+        inputStamps.has(forecast.timestamp),
+        "every kept step was in the answer",
+      );
+    }
+    // The hole survives: no invented step appears inside 30..42
     const stamps = waypoints[0].forecasts.map((f) =>
       Math.round((Date.parse(f.timestamp) - Date.parse(FETCH)) / HOUR),
     );
-    assert.ok(stamps.length >= 16, "at least two days' 3-hourly coverage");
-    assert.equal(stamps[stamps.length - 1], 167);
+    assert.ok(!stamps.some((h) => h > 30 && h < 42), "hole preserved");
   });
 
   test("short fixtures pass through unchanged", () => {
     const forecasts = [step(0), step(1)];
     const waypoints = [{ distanceFromStartNm: 0, forecasts }];
-    throttleWaypointForecasts(waypoints, FETCH);
+    throttleWaypointForecasts(waypoints);
     assert.equal(waypoints[0].forecasts.length, 2);
   });
 
-  test("roughly a quarter of the original payload remains on a week-long route", () => {
+  test("less than half of the original payload remains on a week-long route", () => {
     // 15 waypoints, 30 nm apart, 7-day horizon: the shape behind the
     // 1.3 MB briefing
     const waypoints = Array.from({ length: 15 }, (_, i) => ({
@@ -220,9 +239,9 @@ describe("throttleWaypointForecasts", () => {
       forecasts: Array.from({ length: 168 }, (_, h) => step(h)),
     }));
     const before = waypoints.reduce((sum, wp) => sum + wp.forecasts.length, 0);
-    throttleWaypointForecasts(waypoints, FETCH);
+    throttleWaypointForecasts(waypoints);
     const after = waypoints.reduce((sum, wp) => sum + wp.forecasts.length, 0);
-    assert.ok(after <= before * 0.35, `${after} of ${before} steps remain`);
+    assert.ok(after <= before * 0.5, `${after} of ${before} steps remain`);
     for (const wp of waypoints) {
       assert.ok(wp.forecasts.length > 0, "no waypoint stripped bare");
     }

@@ -7,6 +7,7 @@ const {
   createWeatherFetcher,
   modelCycleTime,
   modelLabel,
+  recordForecastHorizon,
   weatherDataToTimeStep,
 } = require("../plugin/weather-source.js");
 
@@ -196,6 +197,64 @@ describe("buildApiPayload", () => {
       payload.waypoints[1].forecasts[0].timestamp,
       "2026-10-03T15:00:00.000Z",
     );
+  });
+});
+
+describe("recordForecastHorizon", () => {
+  test("the mosaic reads shortfall from the worst waypoint, not the best", () => {
+    const fetchedMs = Date.parse("2026-10-28T09:42:00.000Z");
+    const waypoint = (lat, lastHours) => ({
+      lat,
+      lon: 174,
+      forecasts: lastHours
+        ? [
+            {
+              timestamp: new Date(
+                fetchedMs + lastHours * 3600000,
+              ).toISOString(),
+            },
+          ]
+        : [],
+    });
+    const payload = {
+      metadata: { fetchedAt: new Date(fetchedMs).toISOString() },
+      waypoints: [waypoint(-18.5, 362), waypoint(-19.2, 69)],
+    };
+    const shortfall = recordForecastHorizon(payload, 14);
+    // Both truths land in metadata…
+    assert.ok(payload.metadata.forecastHorizonHours > 360, "freshest waypoint");
+    assert.ok(payload.metadata.forecastHorizonMinHours < 70, "worst waypoint");
+    // …but the shortfall (and the fallback decision) reads the worst:
+    // the plan sails over the waypoint that stops inside day 3, so a
+    // 14-day request is 267 h short no matter how far the best reaches
+    assert.equal(shortfall, 336 - 69);
+    assert.equal(payload.metadata.forecastHorizonShortfallHours, 336 - 69);
+  });
+
+  test("uniform coverage keeps the shortfall inside the fallback threshold", () => {
+    const fetchedMs = Date.parse("2026-10-28T09:42:00.000Z");
+    const payload = {
+      metadata: { fetchedAt: new Date(fetchedMs).toISOString() },
+      waypoints: [
+        {
+          lat: -18.5,
+          forecasts: [
+            { timestamp: new Date(fetchedMs + 334 * 3600000).toISOString() },
+          ],
+        },
+        {
+          lat: -19.2,
+          forecasts: [
+            { timestamp: new Date(fetchedMs + 330 * 3600000).toISOString() },
+          ],
+        },
+      ],
+    };
+    const shortfall = recordForecastHorizon(payload, 14);
+    // Cycle quantization leaves a few hours short: recorded honestly,
+    // but inside the fallback threshold — no Open-Meteo trip
+    assert.equal(shortfall, 6);
+    assert.equal(payload.metadata.forecastHorizonShortfallHours, 6);
   });
 });
 
@@ -401,5 +460,89 @@ describe("createWeatherFetcher", () => {
       isOnline: () => false,
     });
     await assert.rejects(fetchTrack({ waypoints }), /Offline/);
+  });
+
+  /** A mosaic corridor: the point near the boat rides the fresh run's
+   * full slice set while a waypoint mid-route stops early — the sea
+   * trial shape that passed the old max-based horizon check and left
+   * the plan clamping between the tiles (work doc #55 session). */
+  function mosaicProvider() {
+    const fetchedMs = Date.now();
+    const steps = (from, to) =>
+      Array.from({ length: (to - from) / 3 + 1 }, (_, i) =>
+        weatherDataEntry({
+          date: new Date(fetchedMs + (from + i * 3) * 3600000).toISOString(),
+        }),
+      );
+    return {
+      // Point A: near the boat, full grid (14 days of 3-h slices)
+      // Point B: mid-route tile generation, stops inside day 3
+      getForecasts: async (point) =>
+        point.latitude === -18.5 ? steps(0, 336) : steps(0, 69),
+    };
+  }
+
+  test("mosaic coverage falls back while online: worst waypoint wins", async () => {
+    const route = [
+      { lat: -18.5, lon: 174.0, distanceFromStartNm: 0 },
+      { lat: -19.2, lon: 174.6, distanceFromStartNm: 45 },
+    ];
+    const fetchTrack = createWeatherFetcher({
+      weatherApi: mosaicProvider(),
+      fetchImpl: mockOpenMeteo(),
+      isOnline: () => true,
+    });
+    const payload = await fetchTrack({ waypoints: route, forecastDays: 14 });
+    // The fallback answered, not the mosaic
+    assert.equal(payload.metadata.source, "api");
+  });
+
+  test("mosaic coverage rides offline, shortfall read from the worst waypoint", async () => {
+    let openMeteoCalled = false;
+    const route = [
+      { lat: -18.5, lon: 174.0, distanceFromStartNm: 850 },
+      { lat: -19.2, lon: 174.6, distanceFromStartNm: 500 },
+    ];
+    const fetchTrack = createWeatherFetcher({
+      weatherApi: mosaicProvider(),
+      fetchImpl: async (...args) => {
+        openMeteoCalled = true;
+        return mockOpenMeteo()(...args);
+      },
+      isOnline: () => false,
+    });
+    const payload = await fetchTrack({ waypoints: route, forecastDays: 14 });
+    assert.equal(payload.metadata.source, "weather-api");
+    assert.equal(openMeteoCalled, false);
+    // The freshest waypoint reaches the full grid; the worst stops
+    // inside day 3 — both truths land in metadata, the shortfall
+    // reads the worst
+    assert.ok(payload.metadata.forecastHorizonHours > 300);
+    assert.ok(payload.metadata.forecastHorizonMinHours < 70);
+    assert.ok(payload.metadata.forecastHorizonShortfallHours > 260);
+  });
+
+  test("a waypoint with no steps counts as no coverage", async () => {
+    const fetchedMs = Date.now();
+    const payload = {
+      metadata: { fetchedAt: new Date(fetchedMs).toISOString() },
+      waypoints: [
+        {
+          lat: 1,
+          lon: 1,
+          forecasts: [
+            {
+              timestamp: new Date(fetchedMs + 320 * 3600000).toISOString(),
+            },
+          ],
+        },
+        { lat: 2, lon: 2, forecasts: [] },
+      ],
+    };
+    const shortfall = recordForecastHorizon(payload, 14);
+    // The empty waypoint stops now: the full request reads as missing
+    assert.equal(shortfall, 14 * 24);
+    assert.ok(payload.metadata.forecastHorizonHours > 300);
+    assert.equal(payload.metadata.forecastHorizonMinHours, 0);
   });
 });

@@ -578,14 +578,24 @@ class PassageOutlook extends HTMLElement {
       // variant dies with the mooring line
       this._departureVariant = null;
     }
-    // Forecast horizon: the last hour the payload carries weather for
+    // Forecast horizon: the earliest hour any waypoint's weather ends
+    // (work doc #55 session safety pass) — the plan sails over every
+    // waypoint, so the earliest-stopping one bounds what the payload
+    // can honestly carry; a variant past it clamps mid-route
     let horizonEnd = null;
     for (const wp of payload.waypoints ?? []) {
+      let waypointEnd = null;
       for (const forecast of wp.forecasts ?? []) {
         const t = new Date(forecast.timestamp).getTime();
-        if (Number.isFinite(t) && (horizonEnd == null || t > horizonEnd)) {
-          horizonEnd = t;
+        if (Number.isFinite(t) && (waypointEnd == null || t > waypointEnd)) {
+          waypointEnd = t;
         }
+      }
+      if (
+        waypointEnd != null &&
+        (horizonEnd == null || waypointEnd < horizonEnd)
+      ) {
+        horizonEnd = waypointEnd;
       }
     }
     const candidates = departureCandidates({
