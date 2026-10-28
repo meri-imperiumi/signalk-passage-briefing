@@ -789,7 +789,12 @@ class PassageOutlook extends HTMLElement {
    * compile still runs — from the GRIB run already on disk (work doc
    * #55); only conditions-here needs the link. */
   async refreshBriefing() {
-    const routeId = this._routeSelect.value;
+    // The switcher's departure-day variants carry `route#hours`
+    // values (work doc #34) and selectRoute() splits them; this path
+    // reads the raw select value, so the suffix must go here too —
+    // the plugin's refresh API resolves the id against the resources
+    // API and a `#72` id is a guaranteed instant "not found"
+    const routeId = this._routeSelect.value.split("#")[0];
     const query = routeId ? `?route=${encodeURIComponent(routeId)}` : "";
     this.renderLoading(
       routeId

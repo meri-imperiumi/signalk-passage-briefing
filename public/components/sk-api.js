@@ -22,12 +22,42 @@ export async function fetchJson(url, timeoutMs = 8000, options = {}) {
   try {
     const res = await fetch(url, { signal: controller.signal, ...options });
     if (!res.ok) {
-      throw new Error(`${res.status} ${res.statusText}`);
+      throw new Error(await fetchError(res));
     }
     return await res.json();
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Message for a non-ok response: the server error bodies carry the
+ * actionable part (the plugin's refresh failures name the source that
+ * broke; Open-Meteo 400s carry a `reason`), while a bare "502 Bad
+ * Gateway" reads as a broken server when the answer is right there in
+ * the body. Only structured JSON details surface — a proxy's HTML body
+ * is noise; the status line stands alone when the body is not JSON or
+ * the read loses to the abort timeout.
+ *
+ * @param {Response} res
+ * @returns {Promise<string>}
+ */
+async function fetchError(res) {
+  const status = `${res.status} ${res.statusText}`;
+  let detail = "";
+  try {
+    const parsed = JSON.parse(await res.text());
+    // Open-Meteo answers `{error: true, reason: "…"}` — a boolean
+    // `error` field must not win over the string fields
+    detail =
+      [parsed.error, parsed.reason, parsed.message].find(
+        (field) => typeof field === "string" && field.trim() !== "",
+      ) ?? "";
+  } catch {
+    // Non-JSON body or read lost to the abort: the status line stands
+  }
+  detail = String(detail).trim().slice(0, 200);
+  return detail ? `${status} — ${detail}` : status;
 }
 
 /**
@@ -256,12 +286,6 @@ export async function fetchNotes() {
       }
     }
     return {};
-    return Object.entries(notes ?? {}).map(([id, note]) => ({
-      id,
-      description: note?.description ?? note?.name ?? null,
-      position: note?.position ?? null,
-      feature: note?.feature ?? null,
-    }));
   } catch {
     return [];
   }

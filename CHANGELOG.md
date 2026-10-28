@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+- The Update button no longer 502s instantly with a departure-day variant selected (sea trial): `refreshBriefing()` read the route switcher's raw value, and the variant options carry `route#hours` values (work doc #34) — so refreshing while browsing e.g. "«route», +72 h" POSTed `?route=<id>%2372` and the plugin resolved that id against the resources API, failing with "Route …#72 not found" wrapped as 502 before any weather work (the switcher's own selection handler splits the suffix; the refresh path now does too).
+- The webapp's fetch error toasts surface the server's answer instead of a bare status line: `fetchJson` threw `${status} ${statusText}` without reading the body, so the plugin's refresh failures showed as an unactionable "502 Bad Gateway" while the real reason ("Route …#72 not found", an Open-Meteo `reason`, a timeout detail) sat in the response. Structured JSON details now ride the thrown message (`error`/`reason`/`message`, string fields only — Open-Meteo's boolean `error: true` must not win; non-JSON proxy bodies keep the clean status line; details truncate at 200 chars).
+- Dead unreachable return in `fetchNotes` removed (lint error, untouched since the notes probing landed).
+
 ## [0.15.3] - 2026-10-26
 
 ### Fixed
