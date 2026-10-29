@@ -107,8 +107,6 @@ export function radiantMaxAltitudeDeg(lat, dec) {
   return 90 - Math.abs(lat - dec);
 }
 
-const DAY_MS = 86400000;
-
 /** Forecast cloud cover (percent) above which the description
  * carries the overcast hedge — the night is still reported (forecasts
  * err bright as often as overcast), worded honestly. */
@@ -171,7 +169,7 @@ export function meteorNightEvents({
   cloudCoverAt,
 }) {
   const events = [];
-  const end = from.getTime() + hours * DAY_MS;
+  const end = from.getTime() + hours * 3600000;
   // Candidate nights keyed by anchor instant — longitude-proof: a
   // night's dusk anchor may fall on either side of its UTC calendar
   // date, so calendar-date keying would misfile nights
