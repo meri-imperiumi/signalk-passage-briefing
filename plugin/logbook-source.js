@@ -672,7 +672,8 @@ async function readLogbookSailEvents({
     from != null && entries == null
       ? new Date(new Date(from).getTime() - STATE_LOOKBACK_MS)
       : undefined;
-  const all = entries || (await readLogbookEntries(app, { from: readFrom, to }));
+  const all =
+    entries || (await readLogbookEntries(app, { from: readFrom, to }));
   const events = extractSailEvents(all, { knownSailKeys });
   if (from == null && to == null) {
     return events;

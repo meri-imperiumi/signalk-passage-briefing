@@ -411,6 +411,26 @@ describe("readLogbookEntries", () => {
       /logentries resource provider/,
     );
   });
+
+  test("bounds the provider read to the requested window", async () => {
+    const queries = [];
+    const app = {
+      resourcesApi: {
+        async listResources(_type, query) {
+          queries.push(query);
+          return {};
+        },
+      },
+    };
+    const entries = await readLogbookEntries(app, {
+      from: "2025-03-01T00:00:00Z",
+      to: "2025-04-01T00:00:00.000Z",
+    });
+    assert.deepEqual(entries, []);
+    // Bounds normalize to the listing contract's ISO-8601 form
+    assert.equal(queries[0].from, "2025-03-01T00:00:00.000Z");
+    assert.equal(queries[0].to, "2025-04-01T00:00:00.000Z");
+  });
 });
 
 describe("readLogbookSailEvents", () => {
@@ -501,6 +521,35 @@ describe("readLogbookSailEvents", () => {
     assert.equal(windowed.length, 1);
     // Classified against the state from the previous day's entry
     assert.equal(windowed[0].eventType, "REEF_INCREASE");
+  });
+
+  test("windows the provider read around the requested range", async () => {
+    const queries = [];
+    const app = {
+      resourcesApi: {
+        async listResources(_type, query) {
+          queries.push(query);
+          return {
+            "uuid-b": {
+              datetime: "2023-03-20T08:00:00.000Z",
+              text: "Sails set: Main (2nd reef)",
+            },
+          };
+        },
+      },
+    };
+    const windowed = await readLogbookSailEvents({
+      app,
+      from: "2023-03-20T00:00:00.000Z",
+      to: "2023-03-21T00:00:00.000Z",
+    });
+    assert.equal(windowed.length, 1);
+    // Prior state predates the read: the change degrades to a generic
+    // SAIL_CHANGE while the entry's own rig snapshot stays exact
+    assert.equal(windowed[0].eventType, "SAIL_CHANGE");
+    // The read carries the state lookback before the window
+    assert.equal(queries[0].from, "2023-03-06T00:00:00.000Z");
+    assert.equal(queries[0].to, "2023-03-21T00:00:00.000Z");
   });
 
   test("missing provider fails loudly with the reason", async () => {
