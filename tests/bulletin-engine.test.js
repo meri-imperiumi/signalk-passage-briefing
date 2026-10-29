@@ -19,6 +19,7 @@ const {
   parseAdvisory,
   extractGeometry,
   filterBulletin,
+  isMastheadBlock,
   navtexSubject,
   parseCardinalBounds,
   parseCoverageArea,
@@ -1270,19 +1271,79 @@ test("fixture fqps43 (MetService NZ Subtropic): WMO-set rendering, day+hhmmUTC i
   const result = filterBulletin({
     rawText: raw,
     source: "api",
-    // Inside the polygon the area definition parses to (the band's
-    // western corner — the ring is a coarse 3-point approximation of
-    // the stated 25S–40S / 163E–170E area)
-    track: [[166, -34]],
+    // Mid-band vessel, north of the ridge
+    track: [[172, -27]],
   });
   assert.ok(result, "bulletin retained");
   // "Wellington issued at 021856UTC Valid until 031200UTC." parses
   // (day+hhmm, UTC, no month/year on the wire)
   assert.notEqual(result.issuedAt, "1970-01-01T00:00:00.000Z");
   assert.match(result.issuer, /New Zealand/);
-  // The situation-analysis ridge chain extracts as a feature line
-  const geoms = result.blocks.filter((b) => b.geometryType);
-  assert.ok(geoms.length >= 1, "ridge/low geometry extracted");
+  // The masthead (title + area statement) stays off the console; its
+  // content rides the bulletin header and declared-area parse instead
+  assert.ok(
+    result.blocks.every((b) => !isMastheadBlock(b.text)),
+    "masthead on the console",
+  );
+  // The situation-analysis features still collect for named-bound
+  // resolution (Ridge R1's axis chain), whatever the console retains
+  const features = collectFeatures(stripBoilerplate(raw));
+  assert.ok(features.has("R1"), "ridge feature collected");
+});
+
+test("the bulletin masthead never renders as a warning (2026-10-28 live NFFN)", () => {
+  const raw = readFixture("fqps01-nffn-2026-10-28.txt");
+  // Vessel at North Minerva Reef, 18.3S 174.3E — inside the masthead's
+  // declared area (EQUATOR TO 25S BETWEEN 160E AND 120W, the 80°
+  // eastward arc) once bounds wrap the seam correctly; the title card
+  // must still not reach the console as a "warning"
+  const here = filterBulletin({
+    rawText: raw,
+    source: "api",
+    track: [[174.3, -18.3]],
+  });
+  assert.ok(here, "bulletin retained");
+  assert.ok(
+    here.blocks.every((b) => !isMastheadBlock(b.text)),
+    `masthead on the console: ${here.blocks.map((b) => b.text.split(/\r?\n/)[0]).join(" | ")}`,
+  );
+  // Inside the declared east-of-170W swells slice the swell note serves
+  const swells = filterBulletin({
+    rawText: raw,
+    source: "api",
+    track: [[-165, -20]],
+  });
+  assert.ok(swells.blocks.some((b) => /EAST OF 170W/.test(b.text)));
+  // An unplaced track (no route compiled yet) is the bug's exact serve
+  // shape: everything placeable keeps, the masthead does not
+  const unplaced = filterBulletin({ rawText: raw, source: "api", track: [] });
+  assert.ok(
+    unplaced.blocks.every((b) => !isMastheadBlock(b.text)),
+    "masthead kept on an empty track",
+  );
+});
+
+test("WMO-set masthead and area statement render no console blocks either", () => {
+  const raw = readFixture("fqps43-nzkl-subtropic.txt");
+  const result = filterBulletin({
+    rawText: raw,
+    source: "api",
+    track: [[172, -29]],
+  });
+  assert.ok(
+    result.blocks.every((b) => !/MARINE WEATHER BULLETIN FOR/.test(b.text)),
+  );
+  assert.ok(result.blocks.every((b) => !/^Area from 25S/m.test(b.text)));
+});
+
+test("NWS masthead keeps out of the console", () => {
+  const raw = readFixture("fznt01-kwbc-hsf-at1.txt");
+  const result = filterBulletin({
+    rawText: raw,
+    source: "api",
+    track: [[-73.5, 12.5]],
+  });
+  assert.ok(result.blocks.every((b) => !isMastheadBlock(b.text)));
 });
 
 test("fixture fqau23 (Australian BoM Western METAREA X): commencing issue line", () => {

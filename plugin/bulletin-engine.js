@@ -61,6 +61,36 @@ function hasSevereKeyword(text) {
 }
 
 /**
+ * Bulletin masthead titles: the product-identification text an issuer
+ * prints ahead of the first section — NFFN/NZKL `MARINE WEATHER
+ * BULLETIN FOR <AREA>` (with the declared-area statement riding the
+ * same block or its own), NWS `HIGH SEAS FORECAST`, and MetService's
+ * standalone `Area from 25S to 40S, …` statement. Metadata for the
+ * headline and the declared-area parse, never a warning: the block
+ * must not reach the console even when its area bounds intersect the
+ * track, or the bulletin title renders as a "warning" covering the
+ * issuer's whole declared area.
+ */
+const MASTHEAD_TITLE =
+  /^(?:MARINE WEATHER BULLETIN FOR\s+\S+|HIGH SEAS FORECAST\b|AREA FROM\s+\d+(?:\.\d+)?\s*[NS]\s+TO\s+\d+(?:\.\d+)?\s*[NS])/i;
+
+/**
+ * Whether a block is the bulletin's masthead (title/area statement):
+ * detected on the block's first line, since issuers fuse the area
+ * statement into the title block on the wire (TGFTP single-newline
+ * rendering) and the title always leads it.
+ *
+ * @param {string} blockText
+ * @returns {boolean}
+ */
+function isMastheadBlock(blockText) {
+  const firstLine = String(blockText ?? "")
+    .split(/\r?\n/, 1)[0]
+    ?.trim();
+  return MASTHEAD_TITLE.test(firstLine);
+}
+
+/**
  * Retained NAVTEX B_2 subject indicators (work doc #4): A navigational
  * warnings, B gale warnings, E meteorological forecasts. The rest
  * (C ice reports, D SAR, …) is dropped for the weather briefing.
@@ -1752,6 +1782,13 @@ function filterBulletin({
         : sectionBlocks,
     )
     .map((blockText) => {
+      // The masthead is the bulletin's title card, not a warning: it
+      // never reaches the console, even when its declared-area bounds
+      // intersect the track (a clamped masthead bbox would render the
+      // title as a "warning" over the issuer's whole area)
+      if (isMastheadBlock(blockText)) {
+        return null;
+      }
       const geometry = extractGeometry(blockText, features, coverage);
       if (!intersectsTrack(geometry, track)) {
         return null; // Discard rule: not on our waters
@@ -2038,6 +2075,7 @@ module.exports = {
   STORM_DECLARATION,
   stripBoilerplate,
   hasSevereKeyword,
+  isMastheadBlock,
   navtexSubject,
   shouldRetainSubject,
   segmentBlocks,
