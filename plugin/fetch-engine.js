@@ -38,6 +38,7 @@ const {
   writeFile,
 } = require("node:fs/promises");
 const path = require("node:path");
+const { writeFileAtomic } = require("./fs-atomic.js");
 
 /**
  * Earth radius in nautical miles.
@@ -729,7 +730,12 @@ async function savePayload(dataDir, routeId, payload) {
     /[:.]/g,
     "-",
   );
-  await writeFile(
+  // `latest-` is the one file every offline read hits, written through
+  // the atomic store so a crash mid-write cannot tear it (a torn
+  // latest would read as "no cache" for the route until the next
+  // online window — exactly the loss the cache exists to prevent).
+  // The dated snapshot below keeps its own temp-plus-rename.
+  await writeFileAtomic(
     path.join(dir, `latest-${fileId}.json`),
     JSON.stringify(payload),
   );

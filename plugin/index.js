@@ -21,6 +21,7 @@
 const { join } = require("node:path");
 const { homedir } = require("node:os");
 const { mkdir, readFile, unlink, writeFile } = require("node:fs/promises");
+const { writeFileAtomic } = require("./fs-atomic.js");
 
 const { PassageStateMachine } = require("./state-machine.js");
 const { PassageDatabase } = require("./sqlite-db.js");
@@ -1585,7 +1586,10 @@ module.exports = (app) => {
     }
     const dir = join(app.getDataDirPath(), "weather");
     await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, "here.json"), JSON.stringify(payload));
+    // The here payload is the one file offline here-mode reads:
+    // persisted through the atomic store so a crash mid-write cannot
+    // tear it into "no cache" (same reason the route payloads use it)
+    await writeFileAtomic(join(dir, "here.json"), JSON.stringify(payload));
     // Tile freshness; the route field stays empty in here mode
     payload.comfortTier = await currentComfortTier(payload);
     recordBriefCompile(
