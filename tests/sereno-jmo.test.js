@@ -439,3 +439,17 @@ describe("serenoComfort with the hull kernel", () => {
     assert.equal(comfort.comfort, "champagne");
   });
 });
+
+describe("route-sim hull plumbing", () => {
+  test("SIMULATION_DEFAULTS carry the follow-Signal-K hull fields", async () => {
+    const routeSim = import("../public/route-sim.mjs");
+    const [p, rs] = await Promise.all([physics(), routeSim]);
+    assert.equal(typeof p.resolveHull, "function");
+    // Zeros and the empty string mean "the boat's own design.* wins;
+    // leave missing when neither source has it"
+    assert.equal(rs.SIMULATION_DEFAULTS.hull_beam_m, 0);
+    assert.equal(rs.SIMULATION_DEFAULTS.hull_displacement_kg, 0);
+    assert.equal(rs.SIMULATION_DEFAULTS.hull_gm_m, 0);
+    assert.equal(rs.SIMULATION_DEFAULTS.hull_type, "");
+  });
+});

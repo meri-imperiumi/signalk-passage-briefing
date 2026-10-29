@@ -228,6 +228,18 @@ const DEFAULTS = {
   drift_mode_enabled: true,
   motor_fuel_l_per_hour: 1.8,
   waterline_length_m: 9.4,
+  // Hull description gap-fillers (work doc #56): the vessel's own
+  // published design.* values win; these fill what the boat does not
+  // publish (usually displacement and GM), and a number neither
+  // source provides keeps the hour on the legacy motion kernel —
+  // nothing is guessed.
+  hull_lwl_m: 0,
+  hull_beam_m: 0,
+  hull_canoe_draft_m: 0,
+  hull_displacement_kg: 0,
+  hull_gm_m: 0,
+  hull_accel_point_m: 0,
+  hull_type: "",
   spool_directory: join(homedir(), ".signalk", "spool", "passage-outlook"),
   k_heel: 0.35,
   k_pitch: 0.4,
@@ -357,7 +369,56 @@ module.exports = (app) => {
     waterline_length_m: DEFAULTS.waterline_length_m,
     k_heel: DEFAULTS.k_heel,
     k_pitch: DEFAULTS.k_pitch,
+    hull_lwl_m: DEFAULTS.hull_lwl_m,
+    hull_beam_m: DEFAULTS.hull_beam_m,
+    hull_canoe_draft_m: DEFAULTS.hull_canoe_draft_m,
+    hull_displacement_kg: DEFAULTS.hull_displacement_kg,
+    hull_gm_m: DEFAULTS.hull_gm_m,
+    hull_accel_point_m: DEFAULTS.hull_accel_point_m,
+    hull_type: DEFAULTS.hull_type,
+    /** The vessel's published Signal K design.* snapshot (work doc
+     * #56): the boat's own values win over the config gap-fillers;
+     * refreshed whenever the config is (re)applied and whenever
+     * /api/config answers. */
+    hull_design: null,
   };
+
+  /**
+   * Reads the vessel's published hull description (work doc #56):
+   * the design.* paths the motion kernel consumes, tolerant of both
+   * the schema's `value` subgroup and bare legacy paths. Numbers
+   * only — anything absent or non-positive stays absent, and the
+   * caller's resolution falls to the config gap-filler.
+   *
+   * @returns {object|null} design snapshot or null when nothing
+   *   publishes design data at all
+   */
+  function readHullDesign() {
+    if (typeof app.getSelfPath !== "function") {
+      return null;
+    }
+    const path = (selfPath) => {
+      try {
+        const value = app.getSelfPath(selfPath);
+        const v =
+          typeof value === "object" && value !== null
+            ? (value.value ?? value)
+            : value;
+        return typeof v === "number" && v > 0 ? v : null;
+      } catch (_error) {
+        return null;
+      }
+    };
+    const snapshot = {
+      lengthWaterlineM: path("design.length.value.waterline"),
+      lengthOverallM: path("design.length.value.overall"),
+      beamM: path("design.beam"),
+      canoeDraughtM: path("design.draft.value.canoe"),
+      maxDraughtM: path("design.draft.value.maximum"),
+      displacementKg: path("design.displacement"),
+    };
+    return Object.values(snapshot).some((v) => v != null) ? snapshot : null;
+  }
   /** Configured route-briefing fetch horizon in days (the default
    * `forecastDays` every refresh path falls back to). */
   let simulationForecastDays = DEFAULT_FORECAST_DAYS;
@@ -1741,6 +1802,14 @@ module.exports = (app) => {
         waterline_length_m: simulationConfig.waterline_length_m,
         k_heel: simulationConfig.k_heel,
         k_pitch: simulationConfig.k_pitch,
+        hull_lwl_m: simulationConfig.hull_lwl_m,
+        hull_beam_m: simulationConfig.hull_beam_m,
+        hull_canoe_draft_m: simulationConfig.hull_canoe_draft_m,
+        hull_displacement_kg: simulationConfig.hull_displacement_kg,
+        hull_gm_m: simulationConfig.hull_gm_m,
+        hull_accel_point_m: simulationConfig.hull_accel_point_m,
+        hull_type: simulationConfig.hull_type,
+        hull_design: readHullDesign(),
       });
       return rows[0]?.comfortLevel ?? null;
     } catch (_error) {
@@ -2922,7 +2991,72 @@ module.exports = (app) => {
         waterline_length_m: {
           type: "number",
           title: "Waterline Length (meters)",
+          description:
+            "Drives the legacy motion kernel's pitching resonance and " +
+            "the hull kernel's LWL when Signal K design.length " +
+            "waterline is not published.",
           default: DEFAULTS.waterline_length_m,
+        },
+        hull_beam_m: {
+          type: "number",
+          title: "Hull Beam (meters, gap-filler)",
+          description:
+            "Beam of the boat for the hull-grounded motion model " +
+            "(work doc #56). The vessel's published Signal K " +
+            "design.beam wins when present; this is only used when " +
+            "the boat does not publish it — a missing value keeps the " +
+            "hour on the legacy comfort kernel.",
+          default: DEFAULTS.hull_beam_m,
+        },
+        hull_canoe_draft_m: {
+          type: "number",
+          title: "Canoe-body Draught (meters, gap-filler)",
+          description:
+            "Hull-body draught without appendages — NOT the maximum " +
+            "draft with the keel. Only used when Signal K " +
+            "design.draft.canoe is not published.",
+          default: DEFAULTS.hull_canoe_draft_m,
+        },
+        hull_displacement_kg: {
+          type: "number",
+          title: "Displacement (kg, gap-filler)",
+          description:
+            "Light-ship displacement in kilograms for the motion " +
+            "model. Signal K design.displacement wins when present; " +
+            "few boats publish it, so set it here for the spectral " +
+            "kernel (Jensen, Mansour & Olsen 2004 hull motions) to run.",
+          default: DEFAULTS.hull_displacement_kg,
+        },
+        hull_gm_m: {
+          type: "number",
+          title: "Metacentric Height GM (meters, roll figures off at 0)",
+          description:
+            "Transverse metacentric height from the boat's stability " +
+            "data. Signal K publishes no GM field, so this is the only " +
+            "source; 0 (default) disables the RMS roll figure and the " +
+            "deck-work roll flag while vertical acceleration still runs.",
+          default: DEFAULTS.hull_gm_m,
+        },
+        hull_accel_point_m: {
+          type: "number",
+          title: "Acceleration Evaluation Point (meters forward of CoG)",
+          description:
+            "Where on board the vertical acceleration is evaluated: " +
+            "0 = amidships, positive forward (the after cockpit sits " +
+            "around −2). Pitch lever on the motion the crew feels.",
+          default: DEFAULTS.hull_accel_point_m,
+        },
+        hull_type: {
+          type: "string",
+          title: "Hull Type",
+          enum: ["", "monohull", "catamaran", "trimaran"],
+          description:
+            "Hull form. The comfort scale is monohull-adapted; a known " +
+            "catamaran or trimaran keeps the briefing to the legacy " +
+            "motion kernel and the UI says the motion numbers do not " +
+            "apply. Empty = unknown (treated as the monohull this " +
+            "plugin is built for).",
+          default: DEFAULTS.hull_type,
         },
         spool_directory: {
           type: "string",
@@ -3367,6 +3501,14 @@ module.exports = (app) => {
         waterline_length_m: config.waterline_length_m,
         k_heel: config.k_heel,
         k_pitch: config.k_pitch,
+        hull_lwl_m: Number(config.hull_lwl_m) || 0,
+        hull_beam_m: Number(config.hull_beam_m) || 0,
+        hull_canoe_draft_m: Number(config.hull_canoe_draft_m) || 0,
+        hull_displacement_kg: Number(config.hull_displacement_kg) || 0,
+        hull_gm_m: Number(config.hull_gm_m) || 0,
+        hull_accel_point_m: Number(config.hull_accel_point_m) || 0,
+        hull_type: typeof config.hull_type === "string" ? config.hull_type : "",
+        hull_design: readHullDesign(),
         lines_of_interest_enabled: config.lines_of_interest_enabled,
         landfall_enabled: config.landfall_enabled !== false,
         height_of_eye_m: config.height_of_eye_m,
@@ -3602,6 +3744,11 @@ module.exports = (app) => {
      */
     registerWithRouter: (router) => {
       router.get("/api/config", (_req, res) => {
+        // Hull data can change between config applies (Vessel Base
+        // Data edits) — refresh the design snapshot on every read so
+        // the webapp's simulation runs on the current boat (work doc
+        // #56)
+        simulationConfig.hull_design = readHullDesign();
         res.json(simulationConfig);
       });
 

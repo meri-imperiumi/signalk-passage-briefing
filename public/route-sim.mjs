@@ -29,6 +29,7 @@ import {
   isNight,
   noSailsRegime,
   regimeBandOf,
+  resolveHull,
   SAILS_FILL_MIN_AWS_KNOTS,
   SAILS_MAX_AWS_KNOTS,
   serenoComfort,
@@ -67,6 +68,21 @@ export const SIMULATION_DEFAULTS = {
   drift_mode_enabled: true,
   motor_fuel_l_per_hour: 1.8,
   waterline_length_m: 9.4,
+  // Hull description beyond the waterline (work doc #56): 0/empty
+  // means "leave missing if Signal K doesn't publish it either" — the
+  // vessel's own design.* values win, these fill the gaps (usually
+  // displacement, which few boats publish), and a missing number
+  // keeps the hour on the legacy motion kernel rather than guessing.
+  // waterline_length_m doubles as the LWL gap-filler (resolveHull
+  // reads it when hull_lwl_m is unset and design.length waterline is
+  // unpublished).
+  hull_lwl_m: 0,
+  hull_beam_m: 0,
+  hull_canoe_draft_m: 0,
+  hull_displacement_kg: 0,
+  hull_gm_m: 0,
+  hull_accel_point_m: 0,
+  hull_type: "",
   k_heel: 0.35,
   k_pitch: 0.4,
   lines_of_interest_enabled: true,
@@ -1232,6 +1248,11 @@ function runDeploymentPass(
   // motion — the recommendation precedes and supersedes the slatting
   // penalty it relieves. Outside, the plan's own rig applies (canvas
   // down reads motoring; unknown stays legacy).
+  // The hull description (work doc #56) resolves once per run:
+  // the served design.* snapshot wins, config fills the gaps, the
+  // rest stays missing — an incomplete hull keeps its hours on the
+  // legacy motion kernel rather than guessing.
+  const hull = resolveHull(cfg, cfg.hull_design);
   const covering = (rowMs) =>
     comfortWindows.find((d) => rowMs >= d.startMs && rowMs <= d.untilMs);
   for (const row of hourly) {
@@ -1243,6 +1264,7 @@ function runDeploymentPass(
       waterlineLengthM: cfg.waterline_length_m,
       kHeel: cfg.k_heel,
       kPitch: cfg.k_pitch,
+      hull,
       sailState: covered
         ? "sailing"
         : // null is a meaningful state (unknown rig: legacy slatting
@@ -1272,6 +1294,9 @@ function runDeploymentPass(
       row.azMs2 = comfort.acceleration.value;
       row.comfortLevel = comfort.comfort;
       row.slatting = comfort.slatting;
+      row.motionKernel = comfort.acceleration.kernel;
+      row.rmsRollDeg = comfort.acceleration.rmsRollDeg;
+      row.deckWork = comfort.acceleration.deckWork;
       row.parasailorRecommended = covered != null;
     }
   }

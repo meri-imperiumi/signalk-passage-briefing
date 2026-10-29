@@ -11,6 +11,7 @@ import { landfallAdvisory } from "../landfall-estimator.mjs";
 import {
   greatCircleNm,
   isNight,
+  resolveHull,
   serenoComfort,
   travelDirection,
 } from "../sereno-physics.mjs";
@@ -349,6 +350,16 @@ export function sparklineColumns(hourlyComfort, hours = 24, options = {}) {
       : `${hoursFromNow}h`;
   return blocks.map((b) => {
     const aws = b.awsKnots ?? 0;
+    // Deck-work verdict (work doc #56): the spectral kernel's roll
+    // figure rides the hover when the hull data supports it — the
+    // title states the roll RMS and what the limits allow, saying
+    // nothing when the legacy kernel ran.
+    const rollText =
+      b.rmsRollDeg != null
+        ? `roll ${b.rmsRollDeg.toFixed(1)}°${
+            b.deckWork && b.deckWork !== "ok" ? " — deck work off" : ""
+          }`
+        : null;
     return {
       hoursFromNow: b.hoursFromNow,
       comfortLevel: b.comfortLevel ?? null,
@@ -356,7 +367,9 @@ export function sparklineColumns(hourlyComfort, hours = 24, options = {}) {
       awsKnots: aws,
       heightPct: Math.max(4, Math.round((aws / maxAws) * 100)),
       color: comfortColor(b.comfortLevel),
-      title: `${stamp(b.hoursFromNow)}: ${fmtKn(aws)} AWS, ${b.slatting ? "slatting" : (b.comfortLevel ?? "?")}`,
+      title: `${stamp(b.hoursFromNow)}: ${fmtKn(aws)} AWS, ${
+        b.slatting ? "slatting" : (b.comfortLevel ?? "?")
+      }${rollText ? `, ${rollText}` : ""}`,
     };
   });
 }
@@ -455,6 +468,10 @@ export function hereHourly(payload, config = {}, hours = 24) {
         waterlineLengthM: config.waterline_length_m ?? 9.4,
         kHeel: config.k_heel ?? 0.35,
         kPitch: config.k_pitch ?? 0.4,
+        // Hull-grounded motion kernel (work doc #56): the same
+        // resolution the route sim runs — the published design.*
+        // snapshot wins, config fills the gaps, gaps stay missing.
+        hull: resolveHull(config, config.hull_design ?? null),
       },
       { twsKnots: tws ?? 0, twaRad: 0 },
     );
@@ -465,6 +482,9 @@ export function hereHourly(payload, config = {}, hours = 24) {
       azMs2: comfort.acceleration.value,
       comfortLevel: comfort.comfort,
       slatting: comfort.slatting,
+      motionKernel: comfort.acceleration.kernel,
+      rmsRollDeg: comfort.acceleration.rmsRollDeg,
+      deckWork: comfort.acceleration.deckWork,
       twsKnots: tws,
       sogKnots: 0,
       night: isNight(t, waypoint.lat, waypoint.lon),

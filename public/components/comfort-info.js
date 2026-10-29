@@ -158,6 +158,20 @@ class ComfortInfo extends HTMLElement {
       "wind < 7–12 kn by point of sail · swell ≥ 0.6 m";
     slatting.appendChild(slattingBand);
     this._pop.appendChild(slatting);
+    // Motion physics provenance (work doc #56): which kernel judged
+    // the hour and what it stands on. The spectral hull kernel rates
+    // W_f-weighted acceleration — the ISO bands' native quantity —
+    // and reports RMS roll against PredictWind's deck-work limits
+    // when the hull data (including GM) allows.
+    const motion = document.createElement("p");
+    motion.className = "note";
+    motion.textContent =
+      "Motion is rated from the boat's hull when its dimensions are " +
+      "known (Jensen, Mansour & Olsen 2004 closed-form seakeeping, " +
+      "ISO 2631-1 motion-sickness weighting; roll needs a metacentric " +
+      "height in the settings) — otherwise from the calibrated " +
+      "encounter-period model.";
+    this._pop.appendChild(motion);
     // Content changes (tier highlight) can resize the open popover
     this._positionPop();
   }
