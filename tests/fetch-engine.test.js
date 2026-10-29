@@ -490,4 +490,22 @@ describe("payload cache", () => {
     assert.equal(await loadPayload(dataDir, "nope"), null);
     assert.deepEqual(await listCachedRoutes(dataDir), []);
   });
+
+  test("route ids with dots round-trip through the cache file name", async () => {
+    // `.` and `'` were once flattened to `_`, so the cached file for
+    // `a.b` listed back as `a_b` — an id no resource carries (audit
+    // fix). The lossless percent-escape reverses exactly.
+    const dataDir = mkdtempSync(join(tmpdir(), "passage-cache-"));
+    const payload = {
+      metadata: { fetchedAt: "2026-10-28T09:00:00.000Z" },
+      waypoints: [],
+    };
+    await savePayload(dataDir, "route.one's", payload);
+    const loaded = await loadPayload(dataDir, "route.one's");
+    assert.equal(loaded.payload.metadata.fetchedAt, payload.metadata.fetchedAt);
+    const listed = await listCachedRoutes(dataDir);
+    assert.deepEqual(listed, [
+      { routeId: "route.one's", cachedAt: "2026-10-28T09:00:00.000Z" },
+    ]);
+  });
 });

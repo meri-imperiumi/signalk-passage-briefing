@@ -712,11 +712,19 @@ function cacheDir(dataDir) {
 /**
  * Sanitizes a route id for use as a cache file name.
  *
+ * encodeURIComponent leaves `.` and `'` unescaped (they are URI
+ * marks), and flattening them to `_` broke the round trip: a cached
+ * file for route `a.b` listed back as `a_b`, an id no resource
+ * carries. The two are percent-escaped instead, so decodeURIComponent
+ * reverses the encoding exactly.
+ *
  * @param {string} routeId
  * @returns {string}
  */
 function routeFileId(routeId) {
-  return encodeURIComponent(String(routeId)).replace(/[.']/g, "_");
+  return encodeURIComponent(String(routeId))
+    .replace(/\./g, "%2E")
+    .replace(/'/g, "%27");
 }
 
 /**
