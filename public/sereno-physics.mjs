@@ -12,12 +12,20 @@
  *
  * 1. **Wind over the deck** — apparent wind speed bands derived from
  *    reef points (SPEC §5.2 vector 1).
- * 2. **Motion** — RMS vertical acceleration from the wave encounter
- *    period, adjusted for heel-induced roll and hull-length pitching
- *    resonance (SPEC §5.2 vector 2), rated against the comfort bands of
- *    ISO 2631-1. The slatting & roll-dampening penalty (work doc #14)
- *    scales the motion of light air in a residual swell — the
- *    "washing machine" a raw acceleration number reads as calm.
+ * 2. **Motion** — rated from one of two kernels (work doc #56). With
+ *    a complete hull description (waterline, beam, canoe draught,
+ *    displacement, from plugin config and Signal K design.*) the
+ *    spectral kernel applies the Jensen, Mansour & Olsen (2004)
+ *    closed-form heave/pitch/roll transfer functions on a
+ *    Pierson–Moskowitz spectrum and bands the ISO 2631-1 W_f-weighted
+ *    acceleration; roll rides PredictWind's deck-work limits. Without
+ *    the hull data the hour falls back to the legacy kernel below —
+ *    RMS vertical acceleration from the wave encounter period,
+ *    adjusted for heel-induced roll and hull-length pitching
+ *    resonance, calibrated against the vessel's own history. The
+ *    slatting & roll-dampening penalty (work doc #14) scales the
+ *    motion of light air in a residual swell — the "washing machine"
+ *    a raw acceleration number reads as calm — whichever kernel ran.
  *
  * The physics follows SV Sabado's `passage-weather` planner
  * (https://github.com/sailing12388/passage-weather, MIT), adapted for a
@@ -955,6 +963,821 @@ export function encounterPeriodFloorSeconds(waterlineLengthM) {
   return Math.sqrt((2 * Math.PI * waterlineLengthM) / G);
 }
 
+/* ------------------------------------------------------------------ *
+ * Hull-grounded spectral motion kernel (work doc #56; SPEC §5.2 alt).
+ *
+ * The legacy kernel above rates motion from a single sinusoid at the
+ * encounter period, tuned with hand-picked heel and pitch multipliers.
+ * This kernel replaces the guesstimation with published physics when
+ * the boat's hull is known, and falls back to the legacy kernel
+ * per-hour when it is not — the simulation never invents a hull.
+ *
+ * Transfer functions: Jensen, Mansour & Olsen (2004), "Estimation of
+ * ship motions using closed-form expressions", Ocean Engineering
+ * 31(1) 61–85, https://doi.org/10.1016/S0029-8018(03)00108-2 —
+ * closed-form heave, pitch and roll RAOs for a box-shaped uniformly
+ * loaded displacement monohull, driven here at the encounter frequency
+ * the legacy math already computes. Implemented from the paper's
+ * published formulas; the DTU NetSSE transcription
+ * (netsse/model/ship.py, GPL-3) was used as a notation cross-check
+ * only, no code taken.
+ *
+ * Spectrum: Pierson–Moskowitz (Bretschneider form) from combined Hs
+ * and Tp; response RMS values are ∫ TF²(ω)·S(ω) dω over the
+ * encounter-mapped spectrum. Forecasts publish the ECMWF energy
+ * period Tm−1 (mwp), so the peak period is derived via the PM
+ * relation Tm−1 = Γ(5/4)·(4/5)^¼/ωp (≈ 0.857·Tp).
+ *
+ * Banding: the ISO 2631-1 comfort bands were always defined on
+ * frequency-*weighted* acceleration; this kernel applies the W_f
+ * motion-sickness weighting (ISO 2631-1 Annex A / ISO 8041 filter
+ * set) to the acceleration spectrum before the bands see it, so the
+ * Miserable tier means what the standard says.
+ * ------------------------------------------------------------------ */
+
+/** Seawater density (kg/m³), JMO/NetSSE convention. */
+export const RHO_SEAWATER_KG_M3 = 1025;
+
+/**
+ * Ratio of the PM peak period to the energy (first-moment-minus-one)
+ * period: Tp / Tm−1 = 2π / (Γ(5/4)·(4/5)^¼) ≈ 1.167. ECMWF's `mwp`
+ * field is Tm−1, so forecasts need this conversion before the
+ * spectrum can be built. Derived analytically from the PM shape (see
+ * the kernel header); verified numerically against the moment
+ * integrals.
+ */
+export const PM_PEAK_OVER_ENERGY_PERIOD = 1.167;
+
+/**
+ * ISO 2631-1 W_f weighting, vertical motion-sickness filter (Annex A
+ * parameters, per ISO 8041 band-limit + transition + step filters).
+ * Parameter set: f1 0.08 Hz, f2 0.63 Hz (band limits, Butterworth
+ * Q = 1/√2), f4 0.25 Hz Q4 0.86 (transition), f5 0.0625 Hz Q5 0.80,
+ * f6 0.10 Hz Q6 0.80 (upward step). Implemented from the published
+ * filter cascade; reproduces the standard's 1/3-octave W_f table to
+ * better than 0.01 dB at 0.1–2 Hz (tested).
+ */
+export const ISO2631_WF_F1_HZ = 0.08;
+export const ISO2631_WF_F2_HZ = 0.63;
+export const ISO2631_WF_F4_HZ = 0.25;
+export const ISO2631_WF_Q4 = 0.86;
+export const ISO2631_WF_F5_HZ = 0.0625;
+export const ISO2631_WF_Q5 = 0.8;
+export const ISO2631_WF_F6_HZ = 0.1;
+export const ISO2631_WF_Q6 = 0.8;
+
+/**
+ * Magnitude of the ISO 2631-1 W_f weighting at a frequency.
+ *
+ * @param {number} frequencyHz - Frequency (Hz), clamped positive
+ * @returns {number} Linear weighting factor (peak ≈ 1 around 0.2 Hz)
+ */
+export function iso2631WfWeighting(frequencyHz) {
+  const f = Math.max(Number(frequencyHz) || 0, 1e-6);
+  // Band limits: 2nd-order Butterworth high-pass (f1) and low-pass
+  // (f2), Q = 1/√2 — with that Q the magnitude reduces to the
+  // fc⁴/(f⁴ + fc⁴) forms below.
+  const butterworthHp = (fc) => Math.sqrt(f ** 4 / (f ** 4 + fc ** 4));
+  const butterworthLp = (fc) => Math.sqrt(fc ** 4 / (f ** 4 + fc ** 4));
+  // Transition (f4, Q4) and the upward step's numerator/denominator
+  // sections: general 2nd-order magnitudes.
+  const secondOrder = (fc, q) => {
+    const w = 2 * Math.PI * f;
+    const wc = 2 * Math.PI * fc;
+    return Math.sqrt(wc ** 4 / ((wc ** 2 - w ** 2) ** 2 + ((w * wc) / q) ** 2));
+  };
+  const step = (fa, qa, fb, qb) => {
+    const w = 2 * Math.PI * f;
+    const wa = 2 * Math.PI * fa;
+    const wb = 2 * Math.PI * fb;
+    return Math.sqrt(
+      ((wa ** 2 - w ** 2) ** 2 + ((w * wa) / qa) ** 2) /
+        ((wb ** 2 - w ** 2) ** 2 + ((w * wb) / qb) ** 2),
+    );
+  };
+  return (
+    butterworthHp(ISO2631_WF_F1_HZ) *
+    butterworthLp(ISO2631_WF_F2_HZ) *
+    secondOrder(ISO2631_WF_F4_HZ, ISO2631_WF_Q4) *
+    step(ISO2631_WF_F5_HZ, ISO2631_WF_Q5, ISO2631_WF_F6_HZ, ISO2631_WF_Q6)
+  );
+}
+
+/**
+ * Peak period of a Pierson–Moskowitz sea from its energy period
+ * (ECMWF `mwp`): Tp ≈ {@link PM_PEAK_OVER_ENERGY_PERIOD} · Tm−1.
+ *
+ * @param {number} energyPeriodS - Energy period Tm−1 (s)
+ * @returns {number} Peak period Tp (s)
+ */
+export function peakPeriodFromEnergyPeriod(energyPeriodS) {
+  return energyPeriodS * PM_PEAK_OVER_ENERGY_PERIOD;
+}
+
+/**
+ * Pierson–Moskowitz (Bretschneider) spectrum value: S(ω) = (5/16) ·
+ * Hs² · ωp⁴/ω⁵ · exp(−5/4·(ωp/ω)⁴). Normalizes to m0 = Hs²/16.
+ *
+ * @param {number} omegaRadS - Absolute wave frequency (rad/s)
+ * @param {number} hsMeters - Significant wave height (m)
+ * @param {number} peakPeriodS - Peak period Tp (s)
+ * @returns {number} Spectral density (m²·s)
+ */
+export function piersonMoskowitzSpectrum(omegaRadS, hsMeters, peakPeriodS) {
+  const omegaP = (2 * Math.PI) / peakPeriodS;
+  const coefficient = (5 / 16) * hsMeters * hsMeters * omegaP ** 4;
+  return (
+    (coefficient / omegaRadS ** 5) * Math.exp(-1.25 * (omegaP / omegaRadS) ** 4)
+  );
+}
+
+/**
+ * JMO 2004 heave transfer function |η3/a| (m/m), wave amplitude to
+ * heave amplitude, for a box-shaped displacement monohull.
+ *
+ * @param {number} omegaRadS - Absolute wave frequency (rad/s)
+ * @param {number} betaRad - Encounter angle: heading relative to the
+ *   wave travel direction (rad; 0 = following, ±π = head seas)
+ * @param {number} speedMs - Vessel speed (m/s)
+ * @param {number} lengthM - Waterline length (m)
+ * @param {number} beamM - Beam (m)
+ * @param {number} draughtM - Hull body (canoe) draught (m)
+ * @param {number} blockCoeff - Block coefficient C_B (−)
+ * @returns {number} Heave transfer amplitude (m/m)
+ */
+export function jmoHeaveTF(
+  omegaRadS,
+  betaRad,
+  speedMs,
+  lengthM,
+  beamM,
+  draughtM,
+  blockCoeff,
+) {
+  const k = Math.max(omegaRadS ** 2 / G, 1e-9);
+  const B = beamM * Math.min(Math.max(blockCoeff, 0.1), 1);
+  const alpha =
+    1 -
+    (speedMs / Math.sqrt(G * lengthM)) *
+      Math.sqrt(k * lengthM) *
+      Math.cos(betaRad);
+  const omegaE = omegaRadS - k * speedMs * Math.cos(betaRad);
+  const A =
+    2 *
+    Math.sin((omegaE * omegaE * B) / (2 * G)) *
+    Math.exp(-((omegaE * omegaE * draughtM) / G));
+  const ke = Math.abs(k * Math.cos(betaRad));
+  const f = Math.sqrt(
+    (1 - k * draughtM) ** 2 + ((A * A) / (k * B * alpha ** 3)) ** 2,
+  );
+  const kappaAttenuation = Math.exp(-k * draughtM);
+  const F =
+    ((kappaAttenuation * f * 2) / (ke * lengthM)) *
+    Math.sin((ke * lengthM) / 2);
+  const eta =
+    1 /
+    Math.sqrt(
+      (1 - 2 * k * draughtM * alpha ** 2) ** 2 +
+        ((A * A) / (k * B * alpha ** 2)) ** 2,
+    );
+  return Math.abs(eta * F);
+}
+
+/**
+ * JMO 2004 pitch transfer function |η5/a| (rad/m), wave amplitude to
+ * pitch amplitude. Same hull inputs as {@link jmoHeaveTF}.
+ *
+ * @returns {number} Pitch transfer amplitude (rad/m)
+ */
+export function jmoPitchTF(
+  omegaRadS,
+  betaRad,
+  speedMs,
+  lengthM,
+  beamM,
+  draughtM,
+  blockCoeff,
+) {
+  const k = Math.max(omegaRadS ** 2 / G, 1e-9);
+  const B = beamM * Math.min(Math.max(blockCoeff, 0.1), 1);
+  const alpha =
+    1 -
+    (speedMs / Math.sqrt(G * lengthM)) *
+      Math.sqrt(k * lengthM) *
+      Math.cos(betaRad);
+  const omegaE = omegaRadS - k * speedMs * Math.cos(betaRad);
+  const A =
+    2 *
+    Math.sin((omegaE * omegaE * B) / (2 * G)) *
+    Math.exp(-((omegaE * omegaE * draughtM) / G));
+  const ke = Math.abs(k * Math.cos(betaRad));
+  const f = Math.sqrt(
+    (1 - k * draughtM) ** 2 + ((A * A) / (k * B * alpha ** 3)) ** 2,
+  );
+  const kappaAttenuation = Math.exp(-k * draughtM);
+  const Gjmo =
+    ((kappaAttenuation * f * 24) / ((ke * lengthM) ** 2 * lengthM)) *
+    (Math.sin((ke * lengthM) / 2) -
+      ((ke * lengthM) / 2) * Math.cos((ke * lengthM) / 2));
+  const eta =
+    1 /
+    Math.sqrt(
+      (1 - 2 * k * draughtM * alpha ** 2) ** 2 +
+        ((A * A) / (k * B * alpha ** 2)) ** 2,
+    );
+  return Math.abs(eta * Gjmo);
+}
+
+/**
+ * Default waterplane area coefficient assumed for the roll model when
+ * the hull form is unknown: a typical full-bodied cruising monohull.
+ * An estimate, not a measurement — the payload marks roll numbers as
+ * model estimates either way (work doc #56 degradation rules).
+ */
+export const ROLL_WATERPLANE_COEFF_DEFAULT = 0.75;
+
+/**
+ * Ratio of the aft-body beam length to the whole length in the JMO
+ * simplified two-parcel roll model, v1 default: half the waterplane
+ * coefficient (a midship-neutral parcel split). Overridable per hull.
+ */
+export const ROLL_AFT_BODY_RATIO_FACTOR = 0.5;
+
+/**
+ * Viscous-plus-sway roll damping ratio (μ in JMO's B44) with the
+ * working canvas drawing: the mainsail's aerodynamic damping. Value
+ * chosen so bare-pole resonant roll roughly doubles (PredictWind's
+ * published guidance) against {@link ROLL_DAMPING_BARE_POLE}; the
+ * pair is this kernel's first calibration target for the backtest
+ * corpus (work doc #56).
+ */
+export const ROLL_DAMPING_SAILING = 0.08;
+
+/** Viscous roll damping ratio with no main drawing (bare pole / motor). */
+export const ROLL_DAMPING_BARE_POLE = 0.04;
+
+/**
+ * IMO A.685 roll-period factor for vessels under 45 m (from the
+ * empirical T_N = 2·f·B/√GM, as referenced by JMO 2004 via
+ * ADA147598).
+ */
+export const ROLL_PERIOD_FACTOR_SHORT_SHIP = 0.4;
+
+/**
+ * Roll natural period from beam and stability (IMO A.685 empirical,
+ * the same relation JMO 2004 adopts for T_N): T_N = 2·f·B/√GM.
+ *
+ * @param {number} beamM - Beam (m)
+ * @param {number} gmMeters - Transverse metacentric height (m)
+ * @returns {number} Roll natural period (s)
+ */
+export function rollNaturalPeriodSeconds(beamM, gmMeters) {
+  return (2 * ROLL_PERIOD_FACTOR_SHORT_SHIP * beamM) / Math.sqrt(gmMeters);
+}
+
+/**
+ * Roll transfer of the paper's one-degree-of-freedom roll formulation
+ * (Jensen, Mansour & Olsen 2004, §roll: the roll equation driven by
+ * the wave slope, with the IMO A.685 natural-period empirical and the
+ * viscous damping ratio μ as its two hull parameters): the transfer
+ * of wave-slope amplitude to roll angle around resonance.
+ *
+ * Sanity properties (checked in the test suite): quasi-static limit —
+ * long swell rolls the boat only to its slope; resonance amplifies
+ * the slope by 1/(2μ); head/following seas excite no roll; halving μ
+ * doubles resonant roll (the mainsail-damping guidance). This is the
+ * small-vessel form of the paper's roll model — the two-parcel ship
+ * variant ({@link jmoRollTF}) leaves its B/T ≈ 2–3.5, C_B ≈ 0.7–0.8
+ * validity class for small wide hulls (B/T > 4.5, low C_B) and
+ * over-predicts low-frequency excitation there; it is retained as
+ * reference code, not used (work doc #56, implementation finding).
+ *
+ * Linear near-resonance over-predicts (real hulls saturate); the
+ * number is labeled a model estimate in the payload either way.
+ *
+ * @param {number} omega0RadS - Absolute wave frequency (rad/s)
+ * @param {number} omegaERadS - Encounter frequency (rad/s)
+ * @param {number} betaRad - Encounter angle (rad; 0 = following)
+ * @param {number} naturalPeriodS - Roll natural period T_N (s)
+ * @param {number} dampingRatio - Viscous damping ratio μ
+ * @returns {number} Roll transfer (rad per m of wave amplitude)
+ */
+export function rollTransfer1dof(
+  omega0RadS,
+  omegaERadS,
+  betaRad,
+  naturalPeriodS,
+  dampingRatio,
+) {
+  const r = (omegaERadS * naturalPeriodS) / (2 * Math.PI);
+  const slopePerAmp = (omega0RadS * omega0RadS) / G;
+  const denominator = Math.sqrt((1 - r * r) ** 2 + (2 * dampingRatio * r) ** 2);
+  return (Math.abs(Math.sin(betaRad)) * slopePerAmp) / denominator;
+}
+
+/**
+ * Shape factor of the JMO two-parcel roll excitation moment: the sin(...)²
+ * interference of the two hull parcels, normalized by the 2/ke
+ * division it accompanies. In beam seas ke = k·cos(β) → 0 and the
+ * raw quotient is a 0/0 limit — analytically finite (the sines scale
+ * with ke too) — so small-ke cases take the closed limit
+ * (δ + κ(1−δ))·L/2 · (2/ke) folded in. Retained with the two-parcel
+ * variant for reference; see {@link rollTransfer1dof} for what the
+ * kernel actually uses.
+ *
+ * @param {number} lengthM - Waterline length (m)
+ * @param {number} ke - |k·cos β| (rad/m)
+ * @param {number} delta - Aft-body length fraction δ (−)
+ * @param {number} kappaParcel - Fore/aft parcel damping ratio κ (−)
+ * @returns {number} (2/ke)·shape — the full multiplier, finite at ke=0
+ */
+function rollExcitationShape(lengthM, ke, delta, kappaParcel) {
+  const halfL = (lengthM * ke) / 2;
+  if (halfL < 1e-6) {
+    // lim ke→0: sqrt(...) ≈ (δ + κ(1−δ))·L·ke/2; times 2/ke:
+    return (delta + kappaParcel * (1 - delta)) * lengthM;
+  }
+  const a = delta * halfL;
+  const b = (1 - delta) * halfL;
+  const shape = Math.sqrt(
+    Math.sin(a) ** 2 +
+      kappaParcel ** 2 * Math.sin(b) ** 2 +
+      2 * kappaParcel * Math.sin(a) * Math.sin(b) * Math.cos(2 * halfL),
+  );
+  return shape / ke;
+}
+
+/**
+ * JMO 2004 roll transfer function |φ/a| (rad/m), wave amplitude to
+ * roll angle amplitude. The viscous damping ratio follows the sail
+ * state — the mainsail damps roll; bare-pole resonant roll roughly
+ * doubles (PredictWind guidance, see the damping constants).
+ *
+ * @param {number} omegaRadS - Absolute wave frequency (rad/s)
+ * @param {number} betaRad - Encounter angle (rad; 0 = following)
+ * @param {number} speedMs - Vessel speed (m/s)
+ * @param {number} lengthM - Waterline length (m)
+ * @param {number} beamM - Beam (m)
+ * @param {number} draughtM - Hull body draught (m)
+ * @param {number} blockCoeff - Block coefficient C_B (−)
+ * @param {number} waterplaneCoeff - Waterplane area coefficient C_WP (−)
+ * @param {number} gmMeters - Transverse metacentric height (m)
+ * @param {number} aftBodyRatio - Aft-body beam length ratio κ (0..C_WP)
+ * @param {number} dampingRatio - Viscous damping ratio μ
+ * @returns {number} Roll transfer amplitude (rad/m)
+ */
+export function jmoRollTF(
+  omegaRadS,
+  betaRad,
+  speedMs,
+  lengthM,
+  beamM,
+  draughtM,
+  blockCoeff,
+  waterplaneCoeff,
+  gmMeters,
+  aftBodyRatio,
+  dampingRatio,
+) {
+  const rho = RHO_SEAWATER_KG_M3;
+  // JMO's simplified roll hull needs the draught inside the beam
+  // validity window: clamp to [B/6, min(B0, B1)] per the model's
+  // construction (NetSSE transcription of the paper's bounds).
+  const delta = Math.max(waterplaneCoeff - aftBodyRatio, 0);
+  const gamma = Math.max(aftBodyRatio / (1 - delta), 1 / 6);
+  const B1 = gamma * beamM;
+  const T = Math.max(Math.min(draughtM, beamM, B1), beamM / 6, B1 / 6);
+  const displacementKg = lengthM * beamM * T * blockCoeff * rho;
+  const naturalPeriod = rollNaturalPeriodSeconds(beamM, gmMeters);
+  const C44 = G * displacementKg * gmMeters;
+  const B44crit = (C44 * naturalPeriod) / Math.PI;
+  const A0 = (blockCoeff * beamM * T) / (delta + gamma * (1 - delta));
+  const A1 = gamma * A0;
+
+  // Hull-form wave damping polynomials, valid B/T ∈ [0.99, 6]
+  // (JMO's validity window — clamped, noted in the payload when the
+  // clamp bites is not tracked; the estimate label covers it).
+  const dampingPoly = (overT) => {
+    const bOverT = Math.min(Math.max(overT, 0.99), 6);
+    if (bOverT >= 3) {
+      return {
+        a: 0.256 * bOverT - 0.286,
+        b: -0.11 * bOverT - 2.55,
+        d: 0.033 * bOverT - 1.419,
+      };
+    }
+    return {
+      a: -3.94 * bOverT + 13.69,
+      b: -2.12 * bOverT - 1.89,
+      d: 1.16 * bOverT - 7.97,
+    };
+  };
+  const poly0 = dampingPoly(beamM / T);
+  const poly1 = dampingPoly(B1 / T);
+
+  const k = Math.max(omegaRadS ** 2 / G, 1e-100);
+  const omegaE = Math.max(
+    Math.abs(omegaRadS - k * speedMs * Math.cos(betaRad)),
+    1e-100,
+  );
+  const ke = Math.max(Math.abs(k * Math.cos(betaRad)), 1e-100);
+
+  const parcelDamping = (Aparcel, Bparcel, poly) =>
+    Math.max(
+      rho *
+        Aparcel *
+        Bparcel ** 2 *
+        Math.sqrt((2 * G) / Bparcel) *
+        poly.a *
+        Math.exp(poly.b * omegaE ** -1.3) *
+        omegaE ** poly.d,
+      1e-100,
+    );
+  const b44_0 = parcelDamping(A0, beamM, poly0);
+  const b44_1 = parcelDamping(A1, B1, poly1);
+  const kappaParcel = Math.sqrt(1 + (b44_1 - b44_0) / b44_0);
+  const B44inviscid =
+    lengthM * b44_0 * (delta + kappaParcel ** 2 * (1 - delta));
+  const B44total = B44inviscid + dampingRatio * B44crit;
+
+  const excitation =
+    Math.abs(Math.sin(betaRad)) *
+    Math.sqrt((rho * G ** 2) / omegaE) *
+    Math.sqrt(b44_0) *
+    rollExcitationShape(lengthM, ke, delta, kappaParcel);
+  return (
+    excitation /
+    Math.sqrt(
+      (-(omegaE ** 2) * (naturalPeriod / (2 * Math.PI)) ** 2 + 1) ** 2 *
+        C44 ** 2 +
+        omegaE ** 2 * B44total ** 2,
+    )
+  );
+}
+
+/**
+ * Block coefficient of a resolved hull: displacement over the
+ * box L·B·T·ρ — the definition, not an estimate, when all four hull
+ * numbers are known. Clamped into (0, 1] (the box bound).
+ *
+ * @param {object} hull - See {@link resolveHull}
+ * @returns {number|null} C_B (−), null when the hull is incomplete
+ */
+export function blockCoefficientOf(hull) {
+  if (!hullMotionReady(hull)) {
+    return null;
+  }
+  const boxKg =
+    hull.lengthWaterlineM *
+    hull.beamM *
+    hull.canoeDraughtM *
+    RHO_SEAWATER_KG_M3;
+  if (!(boxKg > 0)) {
+    return null;
+  }
+  return Math.min(Math.max(hull.displacementKg / boxKg, 0.1), 1);
+}
+
+/**
+ * Whether the hull description is complete enough for the spectral
+ * motion kernel: waterline, beam, canoe draught and displacement all
+ * finite and positive. Nothing is guessed — a missing number keeps
+ * the hour on the legacy kernel (work doc #56 degradation rules).
+ *
+ * @param {object|null} hull - See {@link resolveHull}
+ * @returns {boolean}
+ */
+export function hullMotionReady(hull) {
+  return (
+    hull != null &&
+    [
+      hull.lengthWaterlineM,
+      hull.beamM,
+      hull.canoeDraughtM,
+      hull.displacementKg,
+    ].every((v) => Number.isFinite(v) && v > 0)
+  );
+}
+
+/**
+ * Whether the resolved hull also carries what the roll model needs
+ * beyond the motion kernel: a metacentric height. Signal K publishes
+ * no GM field, so this is an override setting — without it the hour
+ * still gets spectral vertical acceleration but roll stays null and
+ * the deck-work flag reports its absence.
+ *
+ * @param {object|null} hull
+ * @returns {boolean}
+ */
+export function hullRollReady(hull) {
+  return (
+    hullMotionReady(hull) && Number.isFinite(hull.gmMeters) && hull.gmMeters > 0
+  );
+}
+
+/**
+ * Whether the hull form is one this monohull-adapted scale may judge:
+ * hull type unknown (proceed — the scale is declared monohull) or
+ * explicitly monohull. A known catamaran or trimaran refuses the
+ * spectral kernel — the numbers would be silently wrong (work doc
+ * #56), and the payload carries the mismatch so the UI can say why.
+ *
+ * @param {object|null} hull
+ * @returns {boolean}
+ */
+export function hullTypeUsable(hull) {
+  return (
+    hull == null ||
+    hull.hullType == null ||
+    hull.hullType === "" ||
+    hull.hullType === "monohull"
+  );
+}
+
+/**
+ * Resolves the hull description from Signal K `design.*` data and
+ * plugin configuration: the vessel's published value wins (the boat
+ * is the source of truth for its own hull), a configuration value is
+ * the gap-filler for what the boat does not publish (displacement
+ * and GM are the usual gaps), and what is left missing stays
+ * missing. Each carried field records its source so the briefing can
+ * say which hull numbers are grounded and which are absent.
+ *
+ * @param {object} cfg - Plugin/simulation config subset: `hull_lwl_m`,
+ *   `hull_beam_m`, `hull_canoe_draft_m`, `hull_displacement_kg`,
+ *   `hull_gm_m`, `hull_accel_point_m`, `hull_type` (string), plus
+ *   the legacy `waterline_length_m` override
+ * @param {object|null} [design] - Signal K `design.*` snapshot:
+ *   `{lengthWaterlineM, lengthOverallM, beamM, canoeDraughtM, maxDraughtM, displacementKg}`
+ * @returns {{lengthWaterlineM: number|null, beamM: number|null,
+ *   canoeDraughtM: number|null, displacementKg: number|null,
+ *   gmMeters: number|null, accelPointM: number, hullType: string|null,
+ *   sources: object}} Resolved hull with per-field provenance
+ */
+export function resolveHull(cfg, design = null) {
+  const pick = (override, published) => {
+    if (Number.isFinite(published) && published > 0) {
+      return { value: published, source: "signalk" };
+    }
+    if (Number.isFinite(override) && override > 0) {
+      return { value: override, source: "config" };
+    }
+    return { value: null, source: "missing" };
+  };
+  const lwl = pick(
+    cfg.hull_lwl_m ?? cfg.waterline_length_m,
+    design?.lengthWaterlineM,
+  );
+  const beam = pick(cfg.hull_beam_m, design?.beamM);
+  const canoe = pick(cfg.hull_canoe_draft_m, design?.canoeDraughtM);
+  const displacement = pick(cfg.hull_displacement_kg, design?.displacementKg);
+  const gm = pick(cfg.hull_gm_m, null);
+  return {
+    lengthWaterlineM: lwl.value,
+    beamM: beam.value,
+    canoeDraughtM: canoe.value,
+    displacementKg: displacement.value,
+    gmMeters: gm.value,
+    accelPointM: Number.isFinite(cfg.hull_accel_point_m)
+      ? cfg.hull_accel_point_m
+      : 0,
+    hullType:
+      typeof cfg.hull_type === "string" && cfg.hull_type !== ""
+        ? cfg.hull_type
+        : null,
+    sources: {
+      lengthWaterlineM: lwl.source,
+      beamM: beam.source,
+      canoeDraughtM: canoe.source,
+      displacementKg: displacement.source,
+      gmMeters: gm.source,
+    },
+  };
+}
+
+/**
+ * Wraps an angle to [−π, π). Local helper of the spectral kernel —
+ * this module stays import-free (shared browser/Node).
+ *
+ * @param {number} rad - Angle (rad)
+ * @returns {number} Wrapped angle (rad)
+ */
+function wrapAnglePi(rad) {
+  const wrapped =
+    ((((rad + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) -
+    Math.PI;
+  return wrapped;
+}
+
+/** Low end of the spectral integration grid (rad/s, ≈ 31 s waves). */
+export const MOTION_SPECTRUM_OMEGA_MIN = 0.2;
+/** High end of the spectral integration grid (rad/s, ≈ 2.6 s waves). */
+export const MOTION_SPECTRUM_OMEGA_MAX = 2.4;
+/** Log-spaced bin count of the spectral integration grid. */
+export const MOTION_SPECTRUM_BINS = 48;
+
+/**
+ * Spectral RMS motions of the resolved hull in one sea state (the
+ * work doc #56 kernel): Pierson–Moskowitz spectrum from Hs and Tp,
+ * JMO 2004 transfer functions at the encounter frequency, response
+ * moments integrated over the spectrum. Vertical acceleration is
+ * taken at a longitudinal point on board (default amidships) and
+ * returned both raw and ISO 2631-1 W_f-weighted — the weighted value
+ * is what the comfort bands rate. Roll needs a metacentric height;
+ * without one it stays null and the caller knows why.
+ *
+ * @param {object} params
+ * @param {number} params.hsMeters - Combined significant wave height (m)
+ * @param {number} params.peakPeriodSeconds - Peak period Tp (s; use
+ *   {@link peakPeriodFromEnergyPeriod} for ECMWF `mwp` inputs)
+ * @param {number} params.waveTravelDirectionRad - Direction the waves
+ *   travel toward (rad, true)
+ * @param {number} params.headingRad - Vessel heading (rad, true)
+ * @param {number} params.speedKnots - Speed over ground (kn)
+ * @param {object} params.hull - Resolved hull, see {@link resolveHull}
+ * @param {string|null} [params.sailState] - 'sailing' | 'motoring' |
+ *   null: selects the roll damping ratio (main drawing or not)
+ * @returns {{azMs2: number, azWeightedMs2: number, rmsRollDeg:
+ *   number|null, rmsHeaveM: number, rmsPitchDeg: number,
+ *   encounterOmegaPeak: number}} Spectral motion assessment
+ */
+export function hullMotionResponse({
+  hsMeters,
+  peakPeriodSeconds,
+  waveTravelDirectionRad,
+  headingRad,
+  speedKnots,
+  hull,
+  sailState = null,
+}) {
+  const out = {
+    azMs2: 0,
+    azWeightedMs2: 0,
+    rmsRollDeg: null,
+    rmsHeaveM: 0,
+    rmsPitchDeg: 0,
+    encounterOmegaPeak: null,
+  };
+  if (!hullMotionReady(hull) || !(hsMeters > 0) || !(peakPeriodSeconds > 0)) {
+    return out;
+  }
+  const betaRad = wrapAnglePi(waveTravelDirectionRad - headingRad);
+  const speedMs = speedKnots * KN_TO_MS;
+  const lengthM = hull.lengthWaterlineM;
+  const beamM = hull.beamM;
+  const draughtM = hull.canoeDraughtM;
+  const cb = blockCoefficientOf(hull);
+  const rollUsable = hullRollReady(hull);
+  const rollParams = rollUsable
+    ? {
+        cwp: ROLL_WATERPLANE_COEFF_DEFAULT,
+        kappa: ROLL_WATERPLANE_COEFF_DEFAULT * ROLL_AFT_BODY_RATIO_FACTOR,
+        gm: hull.gmMeters,
+        mu:
+          sailState === "motoring"
+            ? ROLL_DAMPING_BARE_POLE
+            : ROLL_DAMPING_SAILING,
+      }
+    : null;
+
+  let mAz = 0;
+  let mAzWeighted = 0;
+  let mRoll = 0;
+  let mHeave = 0;
+  let mPitch = 0;
+  let peakWeightedRao = 0;
+  let peakOmegaE = null;
+  const n = MOTION_SPECTRUM_BINS;
+  const logMin = Math.log(MOTION_SPECTRUM_OMEGA_MIN);
+  const logMax = Math.log(MOTION_SPECTRUM_OMEGA_MAX);
+  let previousOmega = null;
+  let previousAz2S = null;
+  let previousAz2SW = null;
+  let previousRoll2S = null;
+  let previousHeave2S = null;
+  let previousPitch2S = null;
+  for (let i = 0; i <= n; i++) {
+    const omega =
+      i === 0
+        ? MOTION_SPECTRUM_OMEGA_MIN
+        : Math.exp(logMin + ((logMax - logMin) * i) / n);
+    const s = piersonMoskowitzSpectrum(omega, hsMeters, peakPeriodSeconds);
+    const k = omega ** 2 / G;
+    const omegaE = omega - k * speedMs * Math.cos(betaRad);
+    const wf = iso2631WfWeighting(omegaE > 0 ? omegaE / (2 * Math.PI) : 0);
+    let az2S = 0;
+    let roll2S = 0;
+    let heave2S = 0;
+    let pitch2S = 0;
+    if (omegaE > 0.01) {
+      const heave = jmoHeaveTF(
+        omega,
+        betaRad,
+        speedMs,
+        lengthM,
+        beamM,
+        draughtM,
+        cb,
+      );
+      const pitch = jmoPitchTF(
+        omega,
+        betaRad,
+        speedMs,
+        lengthM,
+        beamM,
+        draughtM,
+        cb,
+      );
+      // Vertical displacement at the point: heave minus the pitch
+      // lever (x forward of CoG); acceleration amplitude ωe²·|z|.
+      const lever = Number.isFinite(hull.accelPointM) ? hull.accelPointM : 0;
+      const zAmp = Math.abs(heave - lever * pitch);
+      const azRao = omegaE * omegaE * zAmp;
+      const rollRao = rollParams
+        ? rollTransfer1dof(
+            omega,
+            omegaE,
+            betaRad,
+            rollNaturalPeriodSeconds(beamM, rollParams.gm),
+            rollParams.mu,
+          )
+        : null;
+      az2S = azRao * azRao * s;
+      heave2S = heave * heave * s;
+      pitch2S = pitch * pitch * s;
+      if (rollRao != null) {
+        roll2S = rollRao * rollRao * s;
+      }
+      if (azRao * wf > peakWeightedRao) {
+        peakWeightedRao = azRao * wf;
+        peakOmegaE = omegaE;
+      }
+    }
+    if (previousOmega != null) {
+      const dOmega = omega - previousOmega;
+      mAz += ((previousAz2S + az2S) / 2) * dOmega;
+      mAzWeighted += ((previousAz2SW + az2S * wf ** 2) / 2) * dOmega;
+      mRoll += ((previousRoll2S + roll2S) / 2) * dOmega;
+      mHeave += ((previousHeave2S + heave2S) / 2) * dOmega;
+      mPitch += ((previousPitch2S + pitch2S) / 2) * dOmega;
+    }
+    previousOmega = omega;
+    previousAz2S = az2S;
+    previousAz2SW = az2S * wf ** 2;
+    previousRoll2S = roll2S;
+    previousHeave2S = heave2S;
+    previousPitch2S = pitch2S;
+  }
+  out.azMs2 = Math.sqrt(mAz);
+  out.azWeightedMs2 = Math.sqrt(mAzWeighted);
+  out.rmsRollDeg = rollParams ? Math.sqrt(mRoll) * (180 / Math.PI) : null;
+  out.rmsHeaveM = Math.sqrt(mHeave);
+  out.rmsPitchDeg = Math.sqrt(mPitch) * (180 / Math.PI);
+  out.encounterOmegaPeak = peakOmegaE;
+  return out;
+}
+
+/**
+ * PredictWind's operational RMS roll limit: 4°, the amplitude at
+ * which a crew can still move around the boat and complete tasks
+ * safely on deck (PredictWind wave-polar help page, as cited in work
+ * doc #56).
+ */
+export const DECK_WORK_ROLL_LIMIT_DEG = 4;
+
+/**
+ * PredictWind's operational vertical acceleration limit: 0.2 g, at
+ * or below which tasks can be performed safely and seasickness stays
+ * unlikely.
+ */
+export const TASKS_ACCELERATION_LIMIT_G = 0.2;
+
+/**
+ * Crew-action verdict for an hour: do the spectral motion numbers
+ * allow deck work? Two independent PredictWind limits — RMS roll for
+ * moving on deck, weighted acceleration for tasks and seasickness —
+ * compose into one label: "ok" (both met), "roll_limit" (roll over,
+ * acceleration fine: hold the rail), "accel_limit" (acceleration
+ * over: hatches shut, cooking dubious), "both_limits" (nobody goes
+ * out). Null when the numbers are unavailable (legacy kernel or no
+ * GM for roll — the flag never invents).
+ *
+ * @param {number|null} rmsRollDeg - RMS roll (degrees), null unknown
+ * @param {number|null} azMs2 - RMS vertical acceleration (m/s²)
+ * @returns {"ok"|"roll_limit"|"accel_limit"|"both_limits"|null}
+ */
+export function deckWorkOf(rmsRollDeg, azMs2) {
+  if (!Number.isFinite(rmsRollDeg) || !Number.isFinite(azMs2)) {
+    return null;
+  }
+  const rollOver = rmsRollDeg > DECK_WORK_ROLL_LIMIT_DEG;
+  const accelOver = azMs2 > TASKS_ACCELERATION_LIMIT_G * G;
+  if (rollOver && accelOver) return "both_limits";
+  if (rollOver) return "roll_limit";
+  if (accelOver) return "accel_limit";
+  return "ok";
+}
+
 export function verticalAcceleration(sea, vessel, wind) {
   const awsKnots = apparentWindSpeedKnots({
     twsKnots: wind.twsKnots,
@@ -1056,7 +1879,51 @@ export function serenoComfort(sea, vessel, wind) {
     stwKnots: vessel.sogKnots,
     twaRad: wind.twaRad,
   });
-  const acceleration = verticalAcceleration(sea, vessel, wind);
+  // Motion kernel selection (work doc #56): with a complete hull and
+  // a usable hull type the spectral JMO kernel judges the hour —
+  // W_f-weighted acceleration against the ISO bands, RMS roll against
+  // the deck-work limits. Anything missing (a hull number, a GM for
+  // roll, or a known non-monohull form) keeps the hour on the legacy
+  // kernel, and the breakdown says which ran.
+  const hullUsable =
+    hullTypeUsable(vessel.hull) &&
+    hullMotionReady(vessel.hull) &&
+    Number.isFinite(sea.hsMeters) &&
+    sea.hsMeters > 0 &&
+    Number.isFinite(sea.tpSeconds) &&
+    sea.tpSeconds > 0;
+  let acceleration;
+  if (hullUsable) {
+    const motion = hullMotionResponse({
+      hsMeters: sea.hsMeters,
+      peakPeriodSeconds: sea.tpSeconds,
+      waveTravelDirectionRad: sea.waveTravelDirectionRad ?? vessel.headingRad,
+      headingRad: vessel.headingRad,
+      speedKnots: vessel.sogKnots,
+      hull: vessel.hull,
+      sailState: vessel.sailState ?? null,
+    });
+    acceleration = {
+      kernel: "jmo",
+      encounterPeriod: motion.encounterOmegaPeak
+        ? (2 * Math.PI) / motion.encounterOmegaPeak
+        : Infinity,
+      base: motion.azMs2,
+      value: motion.azWeightedMs2,
+      rmsRollDeg: motion.rmsRollDeg,
+      rmsHeaveM: motion.rmsHeaveM,
+      rmsPitchDeg: motion.rmsPitchDeg,
+      hullMismatch: !hullTypeUsable(vessel.hull) ? vessel.hull.hullType : null,
+      deckWork: deckWorkOf(motion.rmsRollDeg, motion.azWeightedMs2),
+    };
+  } else {
+    acceleration = verticalAcceleration(sea, vessel, wind);
+    acceleration.kernel = "legacy";
+    acceleration.rmsRollDeg = null;
+    acceleration.deckWork = null;
+    acceleration.hullMismatch =
+      vessel.hull && !hullTypeUsable(vessel.hull) ? vessel.hull.hullType : null;
+  }
   const slatting = slattingRisk({
     hsMeters: sea.hsMeters,
     twsKnots: wind.twsKnots,
