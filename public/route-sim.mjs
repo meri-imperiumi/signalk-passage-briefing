@@ -1498,9 +1498,14 @@ export function simulateRun({
     const remaining = distanceNm(pos.lat, pos.lon, target.lat, target.lon);
     const stepDistance = sog * STEP_HOURS;
     let arrivedNow = false;
+    /** Hours actually sailed this step: the arrival step is partial —
+     * motoring hours and fuel burn must follow the same clock as the
+     * schedule, not round the final leg up to a full hour. */
+    let stepHours = STEP_HOURS;
     if (sog > 0.05 && stepDistance >= remaining) {
       // Arrive during this step: partial hour
       const hoursNeeded = Math.max(remaining / sog, 0);
+      stepHours = hoursNeeded;
       hours += hoursNeeded;
       t = new Date(t.getTime() + hoursNeeded * 3600000);
       pos = { lat: target.lat, lon: target.lon };
@@ -1513,8 +1518,8 @@ export function simulateRun({
       distanceMadeGoodNm += stepDistance;
     }
     if (motoring) {
-      motoringHours += STEP_HOURS;
-      fuelLiters += fuelRate * STEP_HOURS;
+      motoringHours += stepHours;
+      fuelLiters += fuelRate * stepHours;
     }
 
     // Sea state of the hour (the comfort evaluation itself runs in

@@ -1508,6 +1508,37 @@ describe("canvas-down drive (work docs #5/#26)", () => {
     assert.equal(change.conditions.slatting, true);
   });
 
+  test("the arrival step's motor hours and fuel follow the partial clock", async () => {
+    const { simulatePassage } = await simPromise;
+    // A 0.4° (~24 nm) meridian hop at the 4.5 kn engine speed arrives
+    // ~5.33 h in: the final step is a two-thirds hour, and the motor
+    // clock must follow it — the old full-step accounting rounded the
+    // passage up to 6 motor hours and 10.8 l (audit fix)
+    const result = simulatePassage({
+      payload: buildPayload({
+        route: [
+          [0, 0],
+          [0, 0.4],
+        ],
+        tws: 2,
+        hours: 8,
+      }),
+      startTime: new Date("2026-06-21T06:00:00Z"),
+      matrix: NO_SAILS_MATRIX,
+      config: { drift_mode_enabled: false },
+    });
+    assert.ok(result.arrived, "plan reaches the destination");
+    // Hours ~5.33, not the 6.0 a full-step increment would count
+    assert.ok(
+      result.motoringHours > 5.2 && result.motoringHours < 5.5,
+      `motor hours ${result.motoringHours}`,
+    );
+    assert.ok(
+      result.fuelConsumptionLiters > 9.4 && result.fuelConsumptionLiters < 9.9,
+      `fuel ${result.fuelConsumptionLiters}`,
+    );
+  });
+
   test("becalmed canvas-down with drift mode rides the current", async () => {
     const { simulateRun } = await simPromise;
     // 2 kn of wind, drift mode on: the becalmed boat idles on the
