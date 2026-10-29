@@ -25,6 +25,31 @@ const { resolveBulletinSource } = require("./bulletin-engine.js");
 const KEEP_BULLETINS = 20;
 
 /**
+ * Serialization for the cache's read-modify-write cycles (audit fix):
+ * the fetch-window refresh and the ticker's spool ingest both run
+ * load → merge → save on independent chains, and two interleaved
+ * snapshots rename out of order, the stale one landing last — the
+ * fetch's fresh entries lost for a day offshore. One writer at a
+ * time, per module.
+ *
+ * @type {Promise<void>}
+ */
+let cacheWriteChain = Promise.resolve();
+
+/**
+ * Queues one cache read-modify-write cycle behind the previous one.
+ *
+ * @template T
+ * @param {() => Promise<T>} run - The cycle to run
+ * @returns {Promise<T>} The cycle's result
+ */
+function withCacheLock(run) {
+  const next = cacheWriteChain.then(run, run);
+  cacheWriteChain = next.catch(() => {});
+  return next;
+}
+
+/**
  * @typedef {{url: string, fetchedAt: string, text: string, source?: "api"|"spool"}} BulletinEntry
  */
 
@@ -106,7 +131,7 @@ async function saveBulletinCache(dataDir, entries) {
  *   Newly fetched URLs (failures listed separately) and the merged
  *   cache
  */
-async function refreshBulletins({
+async function refreshBulletinsUnlocked({
   dataDir,
   urls,
   zoneBulletins = [],
@@ -150,10 +175,106 @@ async function refreshBulletins({
   return { fetched, failed, entries: cached };
 }
 
+/**
+ * Merges spool-parsed bulletins into the cache: one entry per spool
+ * file, keyed by its spool path (`spool:<file>`) so a re-dropped file
+ * updates in place, the newer issue time winning. Lives beside the
+ * fetched bulletins' entries and prunes through the same budget.
+ *
+ * @param {BulletinEntry[]} cached - Existing cache entries
+ * @param {Array<{file: string, issuedAt: string, bulletinText: string}>}
+ *   bulletins - Parsed spool files (newest first from the watcher)
+ * @returns {BulletinEntry[]} Merged, newest first
+ */
+function mergeSpoolBulletins(cached, bulletins) {
+  const byUrl = new Map();
+  for (const entry of [...(cached ?? []), ...(bulletins ?? [])]) {
+    const existing = byUrl.get(entry.url);
+    if (
+      !existing ||
+      String(entry.fetchedAt ?? "").localeCompare(
+        String(existing.fetchedAt ?? ""),
+      ) > 0
+    ) {
+      byUrl.set(entry.url, entry);
+    }
+  }
+  return [...byUrl.values()].sort((a, b) =>
+    String(b.fetchedAt ?? "").localeCompare(String(a.fetchedAt ?? "")),
+  );
+}
+
+/**
+ * Ingests the spool watcher's parsed bulletins into the bulletin
+ * cache (SPEC §2.2/§3.1). Each file becomes an entry keyed by its
+ * spool path with the parsed issue time; the cache only rewrites when
+ * the spool actually changed the picture, so the ticker can call this
+ * every minute for free. The spool entries share the fetched
+ * bulletins' pruning budget — the newest text wins, whatever path it
+ * arrived by.
+ *
+ * @param {object} params
+ * @param {string} params.dataDir - Plugin data directory
+ * @param {Array<{file: string, issuedAt: string, bulletinText: string}>}
+ *   [params.bulletins] - Parsed spool files
+ * @returns {Promise<{changed: boolean, count: number}>} Whether the
+ *   cache changed (the caller republishes the warnings when it did)
+ *   and how many spool entries the cache now carries
+ */
+async function ingestSpoolBulletinsUnlocked({ dataDir, bulletins }) {
+  const entries = (bulletins ?? []).map((bulletin) => ({
+    url: `spool:${bulletin.file}`,
+    fetchedAt: bulletin.issuedAt,
+    text: bulletin.bulletinText,
+    source: "spool",
+  }));
+  const cached = await loadBulletinCache(dataDir);
+  const merged = mergeSpoolBulletins(cached, entries);
+  // Identity of an entry for change detection: path, issue time and
+  // the text's size — a same-length edit is the only blind spot, and
+  // a re-dropped file usually moves the mtime fallback too
+  const keyOf = (entry) =>
+    `${entry.url}|${entry.fetchedAt}|${entry.text.length}`;
+  const changed =
+    merged.length !== cached.length ||
+    merged.some((entry, index) => keyOf(entry) !== keyOf(cached[index]));
+  if (changed) {
+    await saveBulletinCache(dataDir, merged);
+  }
+  return {
+    changed,
+    count: merged.filter((entry) => entry.url.startsWith("spool:")).length,
+  };
+}
+
+/**
+ * Refreshes the configured feeds, serialized against the spool
+ * ingest's cache cycles (see {@link withCacheLock}).
+ *
+ * @param {object} params - See {@link refreshBulletinsUnlocked}
+ * @returns {Promise<{fetched: string[], failed: string[], entries: BulletinEntry[]}>}
+ */
+function refreshBulletins(params) {
+  return withCacheLock(() => refreshBulletinsUnlocked(params));
+}
+
+/**
+ * Ingests spool bulletins, serialized against the fetch window's
+ * cache cycles (see {@link withCacheLock}).
+ *
+ * @param {object} params - See {@link ingestSpoolBulletinsUnlocked}
+ * @returns {Promise<{changed: boolean, count: number}>}
+ */
+function ingestSpoolBulletins(params) {
+  return withCacheLock(() => ingestSpoolBulletinsUnlocked(params));
+}
+
 module.exports = {
   KEEP_BULLETINS,
   cachePath,
   loadBulletinCache,
   saveBulletinCache,
   refreshBulletins,
+  mergeSpoolBulletins,
+  ingestSpoolBulletins,
 };

@@ -56,9 +56,20 @@ const MONTHS = {
  * @returns {string|null} ISO timestamp, or null when none found
  */
 function extractIssuedAt(text) {
-  const iso = text.match(/\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?Z?)/);
+  const iso = text.match(
+    /\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)/,
+  );
   if (iso) {
-    const parsed = new Date(iso[0].replace(" ", "T"));
+    // Bulletins speak Zulu; an offsetless stamp parsed bare would be
+    // read in the server's timezone and shift the issue time by the
+    // local offset (the same bug the SWPC Kp parser guards against).
+    // The Z is appended unless the stamp carries an explicit offset —
+    // which the match must include for that check to see it.
+    const raw = iso[0];
+    const normalized = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(raw)
+      ? raw
+      : `${raw.replace(" ", "T")}Z`;
+    const parsed = new Date(normalized);
     if (!Number.isNaN(parsed.getTime())) {
       return parsed.toISOString();
     }

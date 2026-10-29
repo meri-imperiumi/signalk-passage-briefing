@@ -40,7 +40,12 @@ const {
   textNearTrack,
   ukhoBlocksFromWarnings,
 } = require("./bulletin-engine.js");
-const { loadBulletinCache, refreshBulletins } = require("./bulletin-source.js");
+const {
+  loadBulletinCache,
+  refreshBulletins,
+  ingestSpoolBulletins,
+} = require("./bulletin-source.js");
+const { createSpoolWatcher } = require("./spool-watcher.js");
 const {
   loadSynoptic,
   loadSynopticFailure,
@@ -309,6 +314,9 @@ module.exports = (app) => {
   let bulletinUrls = DEFAULTS.bulletin_urls;
   /** TGFTP station→zone table (from configuration). */
   let bulletinStations = DEFAULTS.bulletin_stations;
+  /** Spool directory (from configuration): where the on-board HF
+   * gateway drops bulletin text files for offline ingestion. */
+  let spoolDirectory = DEFAULTS.spool_directory;
   /** GDACS hazard event config (work doc #22). */
   let hazardEventsEnabled = DEFAULTS.hazard_events_enabled;
   /** CAP source config (work doc #24). */
@@ -365,6 +373,11 @@ module.exports = (app) => {
   let positionFetchPending = false;
   /** @type {NodeJS.Timeout|null} */
   let cronTimer = null;
+  /** Spool watcher (SPEC §2.2): bulletins dropped into the configured
+   * spool directory by the on-board HF gateway ingest into the same
+   * bulletin cache the online fetches use, so the offline briefing
+   * carries them. Created in start(), closed in stop(). */
+  let spoolWatcher = null;
   /** Last known values of the watched paths. */
   const observations = {
     [INTERNET_STATE_PATH]: null,
@@ -512,6 +525,47 @@ module.exports = (app) => {
         url,
         ...(errors.has(url) ? { error: errors.get(url) } : {}),
       });
+    }
+  }
+
+  /**
+   * Ingests the spool directory's bulletins into the bulletin cache
+   * (SPEC §3.1): each file becomes a cache entry keyed by its spool
+   * path, so a re-dropped file updates in place and the crew's
+   * fetched bulletins keep their own entries. On change the warnings
+   * republish against the publication track — a spooled gale warning
+   * reaches the plotter without any online window.
+   *
+   * @param {string} trigger - for the debug line
+   * @returns {Promise<void>}
+   */
+  async function ingestSpool(trigger) {
+    if (!spoolWatcher) {
+      return;
+    }
+    try {
+      await spoolWatcher.refresh();
+      const { changed, count } = await ingestSpoolBulletins({
+        dataDir: app.getDataDirPath(),
+        bulletins: spoolWatcher.all(),
+      });
+      sourceStatus?.record({
+        id: "bulletin-spool",
+        label: "Spool bulletins",
+        kind: "bulletin",
+        url: spoolDirectory,
+        ...(count > 0
+          ? { note: `${count} file(s) on the spool` }
+          : { absent: true }),
+      });
+      if (changed) {
+        app.debug?.(
+          `Spool bulletins ingested (${trigger}): ${spoolWatcher.all().length} file(s)`,
+        );
+        await publishWarningsFor(`spool-${trigger}`);
+      }
+    } catch (error) {
+      app.debug?.(`Spool ingest failed: ${error.message}`);
     }
   }
 
@@ -3276,6 +3330,20 @@ module.exports = (app) => {
               typeof station.station === "string",
           )
         : [];
+      // Spool ingestion (SPEC §2.2): files the HF gateway drops into
+      // the spool directory ride the same bulletin cache and warning
+      // publication as the online fetches — the offline lifeline the
+      // configuration knob has always described
+      spoolDirectory =
+        typeof config.spool_directory === "string" && config.spool_directory
+          ? config.spool_directory
+          : DEFAULTS.spool_directory;
+      spoolWatcher = createSpoolWatcher({
+        dir: spoolDirectory,
+        onChange: () => {
+          void ingestSpool("watch");
+        },
+      });
       // Departure-day variants (work doc #34): the candidate-day count
       // the route switcher offers, clamped to a sane range
       const departureDays = Math.min(
@@ -3324,6 +3392,14 @@ module.exports = (app) => {
       sourceStatus.define(WEATHER_SOURCE);
       sourceStatus.define(HAZARD_SOURCE);
       sourceStatus.define(EPHEMERIS_SOURCE);
+      // The spool ingest's checklist row (the ticker records its
+      // outcome — file count or absent — every minute)
+      sourceStatus.define({
+        id: "bulletin-spool",
+        label: "Spool bulletins",
+        kind: "bulletin",
+        url: spoolDirectory,
+      });
       if (frontsEnabled) {
         sourceStatus.define(frontsSource.FRONTS_SOURCE);
       }
@@ -3387,6 +3463,11 @@ module.exports = (app) => {
         runHazardEscalation(new Date()).catch((error) =>
           app.debug?.(`Hazard escalation failed: ${error.message}`),
         );
+        // Spool ingest: the fs.watch events cover a running gateway,
+        // the ticker rescan catches files dropped while the watcher
+        // could not attach (directory created after start) and
+        // self-heals a missed event
+        void ingestSpool("tick");
       }, CRON_TICK_INTERVAL_MS);
       cronTimer.unref?.();
 
@@ -3485,6 +3566,10 @@ module.exports = (app) => {
       if (db) {
         db.close();
         db = null;
+      }
+      if (spoolWatcher) {
+        spoolWatcher.close();
+        spoolWatcher = null;
       }
       if (sourceStatus) {
         // Best-effort: flush the pending persistence write
