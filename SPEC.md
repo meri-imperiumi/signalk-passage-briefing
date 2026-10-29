@@ -490,7 +490,41 @@ $$AWS = \sqrt{TWS^2 + STW^2 + 2 \cdot TWS \cdot STW \cdot \cos(TWA)}$$
 * $23\text{ kt} \le AWS < 33\text{ kt} \implies \mathbf{Rough}$
 * $AWS \ge 33\text{ kt} \implies \mathbf{Miserable}$
 
-#### Vector 2: Monohull Vertical Acceleration ($a_z$)
+#### Vector 2: Monohull Motion — Two Kernels, One Scale (work doc #56)
+
+The motion rating runs one of two kernels per hour, chosen by what the boat's hull allows, never guessed: with a complete hull description (waterline, beam, canoe-body draught, displacement — all positive) and no known non-monohull form, the **spectral kernel** judges the hour from published seakeeping physics; anything missing keeps the hour on the **legacy kernel**, whose formulation is retained below unchanged as the fallback. The row carries which kernel ran (`motionKernel: jmo | legacy`), so the briefing never presents a hull-grounded number that does not exist.
+
+The hull description resolves with explicit precedence: the vessel's published Signal K `design.*` value wins — the boat is the source of truth for its own hull (`design.length.value.waterline`, `design.beam`, `design.draft.value.canoe`, `design.displacement`) — and the configuration fields (`waterline_length_m` doubles as the LWL gap-filler, plus `hull_beam_m`, `hull_canoe_draft_m`, `hull_displacement_kg`, `hull_gm_m`, `hull_accel_point_m`, `hull_type`) fill only what the boat does not publish, displacement and stability being the usual gaps. What neither provides stays missing — no defaults are invented. A known `catamaran` or `trimaran` hull type refuses the spectral kernel outright (the scale is monohull-adapted); the row flags the mismatch instead of silently applying wrong math.
+
+##### Spectral kernel (primary): JMO 2004 closed-form motions on a PM spectrum
+
+Origin: Jensen, Mansour & Olsen (2004), "Estimation of ship motions using closed-form expressions", *Ocean Engineering* 31(1) 61–85, [doi:10.1016/S0029-8018(03)00108-2](https://doi.org/10.1016/S0029-8018(03)00108-2) — closed-form heave, pitch and roll transfer functions for a box-shaped displacement monohull, implemented from the paper's published formulas (the DTU NetSSE transcription served as a notation cross-check only; it is GPL-3 and no code was taken). Spectrum: Pierson–Moskowitz in Bretschneider form, built from the combined sea the forecast step carries:
+
+$$S(\omega) = \frac{5}{16} \cdot H_s^2 \cdot \frac{\omega_p^4}{\omega^5} \exp\left(-\frac{5}{4}\left(\frac{\omega_p}{\omega}\right)^4\right), \qquad m_0 = \int S \, d\omega = \frac{H_s^2}{16}$$
+
+Forecasts publish the ECMWF energy period $T_{m-1}$ (`mwp`), so the peak period comes from the PM shape's analytic relation $T_{m-1} = \Gamma(5/4)\cdot(4/5)^{1/4}/\omega_p \approx 0.857\,T_p$: $T_p = 1.167 \cdot T_{m-1}$. Response moments integrate $|TF(\omega)|^2 S(\omega)\,d\omega$ over a log-spaced grid ($\omega \in [0.2, 2.4]$ rad/s, 48 bins), each bin mapped to the encounter frequency $\omega_e = \omega_0 - k\,U\cos\beta$ with $\beta$ the angle between heading and wave travel direction (0 = following seas) — only positive $\omega_e$ bins count.
+
+**Heave and pitch** (per unit wave amplitude $a$, with $k = \omega_0^2/g$, $B = B_{hull}\cdot C_B$, Froude number $F_n = U/\sqrt{gL}$, $\alpha = 1 - F_n\sqrt{kL}\cos\beta$, $\omega_e = \omega_0 - kU\cos\beta$, $A = 2\sin(\omega_e^2 B/2g)\exp(-\omega_e^2 T_{draught}/g)$, $f = \sqrt{(1-kT)^2 + (A^2/kB\alpha^3)^2}$, $\kappa_{att} = e^{-kT}$, $k_e = |k\cos\beta|$):
+
+$$|\eta_3/a| = \left|\frac{\kappa_{att} f}{k_e L/2}\sin\left(\frac{k_e L}{2}\right)\right| \cdot \left[(1 - 2kT\alpha^2)^2 + \left(\frac{A^2}{kB\alpha^2}\right)^2\right]^{-1/2}$$
+
+$$|\eta_5/a| = \left|\frac{24\,\kappa_{att} f}{(k_e L)^2 L}\left(\sin\frac{k_e L}{2} - \frac{k_e L}{2}\cos\frac{k_e L}{2}\right)\right| \cdot \left[(1 - 2kT\alpha^2)^2 + \left(\frac{A^2}{kB\alpha^2}\right)^2\right]^{-1/2}$$
+
+$C_B$ is the definition, not an estimate: displacement over the box $\rho L B T$ ($\rho = 1025$ kg/m³). **Vertical acceleration at the crew point** $x$ metres forward of the centre ($x = 0$ default, `hull_accel_point_m`): the point displacement is $z = \eta_3 - x\,\eta_5$, driven at the encounter frequency, $a_z\text{-TF} = \omega_e^2 |z|$. **Roll** uses the paper's one-degree-of-freedom formulation — the roll equation driven by the wave slope with the natural period and damping as the two hull parameters — because the two-parcel ship variant leaves its validity class (B/T ≈ 2–3.5, C_B ≈ 0.7–0.8) for small wide hulls (B/T > 4.5, low C_B) and over-predicts low-frequency excitation there; the retained two-parcel implementation exists as reference code only. With $r = \omega_e T_N / 2\pi$:
+
+$$|\varphi/a| = \frac{(\omega_0^2/g)\,|\sin\beta|}{\sqrt{(1-r^2)^2 + (2\mu r)^2}}, \qquad T_N = \frac{2 f_{IMO} B}{\sqrt{GM}}, \; f_{IMO} = 0.4 \; (L < 45\text{ m, IMO A.685})$$
+
+The damping ratio follows the sail state — the mainsail damps roll (PredictWind's wave-polar guidance: resonant roll roughly doubles with no main up): $\mu_{sailing} = 0.08$ drawing, $\mu_{bare} = 0.04$ motoring or unknown. GM comes only from the configuration override (Signal K publishes no stability field); without it roll stays null and the deck-work verdict reports its absence. The near-resonance linear roll over-predicts (real hulls saturate); the payload labels all roll numbers as model estimates.
+
+**ISO 2631-1 W_f weighting**: the comfort bands below were always defined on frequency-*weighted* acceleration; the spectral kernel applies the W_f motion-sickness weighting to the acceleration spectrum before banding (weight by $W_f(f_e)$, band on $\sqrt{\int W_f^2\,a\text{-TF}^2 S\,d\omega}$). The W_f filter set (band limits 0.08/0.63 Hz Butterworth, transition 0.25 Hz Q 0.86, upward step 0.0625/0.10 Hz Q 0.80, per ISO 2631-1 Annex A / ISO 8041) is implemented from the published cascade and reproduces the standard's 1/3-octave table to better than 0.01 dB across 0.1–2 Hz (tested).
+
+**Crew-action verdicts** ride the same numbers, against PredictWind's published operational limits (work doc #56 origin issue): RMS roll > 4° means the crew cannot safely move and work on deck; weighted acceleration > 0.2 g means tasks become unsafe and seasickness likely. The two compose into the row's `deckWork` label: `ok`, `roll_limit` (hold the rail), `accel_limit` (hatches shut), `both_limits` — computed from the unslatted, unstabilized values, since these are operational thresholds, not comfort tiers.
+
+**Slating and downwind-sail damping apply unchanged**: the slatting multiplier (§ above) and the Parasailor-class damping factor act on the kernel's acceleration value before banding exactly as they do on the legacy value — the penalties are kernel-independent by design.
+
+##### Legacy kernel (fallback): encounter-period sinusoid
+
+Runs when the hull is incomplete, the hull type refuses, or the wave data is absent. Formulation unchanged — the constants and bands were calibrated together against the vessel's own history (SPEC §7), so they move as a pair:
 
 1. **Wave Encounter Period ($T_e$):**
 
