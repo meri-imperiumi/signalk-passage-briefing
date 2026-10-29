@@ -1848,6 +1848,9 @@ module.exports = (app) => {
             routeId,
             cached: true,
             cachedAt: cached.cachedAt,
+            // runFetch's status line reads fetchedAt; the cache's own
+            // stamp is the honest answer here too
+            ...(cached.cachedAt != null ? { fetchedAt: cached.cachedAt } : {}),
             offline: true,
           };
         }
@@ -2135,7 +2138,7 @@ module.exports = (app) => {
           try {
             const result = await refreshBriefing(requestedId);
             setStatus(
-              `Briefing for ${requestedId} cached at ${result.fetchedAt} (${trigger})`,
+              `Briefing for ${requestedId} cached at ${result.fetchedAt ?? "unknown"} (${trigger})`,
             );
             await unlink(requestedRoutePath()).catch(() => {});
             return;
@@ -2165,7 +2168,7 @@ module.exports = (app) => {
       try {
         const result = await refreshBriefing(routeId);
         setStatus(
-          `Briefing for ${routeId} cached at ${result.fetchedAt} (${trigger})`,
+          `Briefing for ${routeId} cached at ${result.fetchedAt ?? "unknown"} (${trigger})`,
         );
         return;
       } catch (error) {
