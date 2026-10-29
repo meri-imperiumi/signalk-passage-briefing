@@ -56,6 +56,25 @@ The Open-Meteo entries below are the fallback weather source: used when no Weath
 
 All external fetches are online-gated and cached to the plugin data directory, so the last payloads survive the offline hours.
 
+## Telling the plugin about your hull
+
+With the boat's hull known, the comfort model upgrades from the calibrated heuristic to researched physics: Jensen, Mansour & Olsen's (2004) closed-form seakeeping estimates drive the hourly motion rating, the acceleration is weighted with the ISO 2631-1 motion-sickness curve before the comfort bands see it, and every hour carries an RMS roll figure flagged against the crew-action limits (4° — deck work still possible; 0.2 g — tasks and seasickness). Roll also votes in the comfort tier: ≥ 5° RMS caps the hour at Sporty, ≥ 9° at Rough, ≥ 13° at Miserable — vertical acceleration alone cannot see a boat rolling its guts out in a beam sea, which is exactly how the worst days happen. Without the hull the hour falls back to the older encounter-period model — same scale, coarser physics.
+
+The boat's own Signal K data wins: anything published under `design.*` (beam, waterline length, canoe draught, displacement — the Vessel Base Data page) is used as-is. The plugin settings only fill what the boat does not publish, and what nobody provides stays missing — the Data Sources checklist carries a "Hull description" row showing which numbers are grounded, which are missing, and which motion kernel is therefore judging your hours. Two notes on meanings: the draught the model wants is the **canoe-body draught** (bare hull, no keel or rudder — not the maximum draft on the data plate), and displacement should be the boat **as she sails**, not the empty brochure figure.
+
+What to enter, and how to get it:
+
+- **Waterline length** (`waterline_length_m`) — from the builder's specifications; [sailboatdata.com](https://sailboatdata.com) carries most designs. A boat that doesn't publish it falls back to her overall length as a coarse stand-in; a number here overrides both.
+- **Hull beam** (`hull_beam_m`) — specifications, or a tape measure amidships.
+- **Canoe-body draught** (`hull_canoe_draft_m`) — the hardest of the four: the immersion of the bare hull. Class documents or lines plans state it; otherwise a depth-sounder reading alongside (checked against a charted depth) and a look at where the boot stripe sits gets you close. For a long-keeler it is typically a bit over half the maximum draft.
+- **Displacement** (`hull_displacement_kg`) — the specification's light-ship weight, but prefer the figure for the boat as she actually sails: registered tonnage, or light ship plus tanks, gear and the anchor locker's ambitions. A 10 % error here moves the result far less than a missing number does.
+- **Roll natural period** (`hull_roll_period_s`) — the one that unlocks roll, and measurable in two minutes at the still dock: push the shrouds or swing crew weight side to side, time at least five full roll cycles rail-to-rail, and divide seconds by cycles; repeat until two tries agree. Heavy full-keel cruisers typically roll at 4–5 seconds. With this entered, the per-hour RMS roll, the deck-work flags and the roll vote in the comfort tier all come alive — it is the boat telling the model her own mind, and it beats the alternative (a metacentric height from stability papers, which the IMO's period formula then misreads for heavy full-keelers) hands down.
+- **Metacentric height GM** (`hull_gm_m`) — only if you have stability documentation; the roll period above is easier and better. Signal K publishes neither, so these two settings are the only sources.
+- **Acceleration evaluation point** (`hull_accel_point_m`) — where the crew actually sits, in meters forward of amidships; the after cockpit is around −2. Default 0.
+- **Hull type** (`hull_type`) — leave empty for the monohulls this model is built for; a known catamaran or trimaran is told honestly that the motion numbers do not apply rather than being judged by the wrong physics.
+
+All roll figures are model estimates — right within a band, not instrument readings — and the standing caveat of every forecast applies: the seas a forecast grid describes are open-ocean seas; what an archipelago does to them is the skipper's knowledge, not the model's.
+
 ## Pairing with Weather Router Plus
 
 [signalk-weather-router-plus](https://github.com/motamman/signalk-weather-router-plus) plans the passage: isochrone routing against the vessel's polar on the ECMWF open-data run it keeps decoded on disk, with map overlays, tides and currents. Activate the route it publishes to the Resources API, and this plugin briefs it — `navigation.course.activeRoute` wins over the last briefed route at the next fetch window, and with `weather_source: auto` (the default) the briefing reads its forecasts from the router's Weather API provider. One forecast on board, planner and briefing in agreement: the router for planning and visualization, the briefing for the underway daily routine (comfort, sail changes, bulletins, energy).
