@@ -9,7 +9,6 @@
 
 import { landfallAdvisory } from "../landfall-estimator.mjs";
 import {
-  assumedDepartureTime,
   greatCircleNm,
   isNight,
   serenoComfort,
@@ -1422,10 +1421,6 @@ export function mergeTimeline(exceptions, payload = null) {
   // Polar day/night transitions (work doc #40 session feedback): the
   // sun regime flips as the boat sails — time moving and boat moving
   // together. The wording matches the flip, never invents one
-  const sunKindLabel = {
-    midnightSun: "Midnight sun",
-    polarNight: "Polar night",
-  };
   for (const s of summary.sunDayTransitions ?? []) {
     const label =
       s.to === "midnightSun"

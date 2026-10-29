@@ -990,9 +990,14 @@ export function verticalAcceleration(sea, vessel, wind) {
   const encounterPeriodFloor = encounterPeriodFloorSeconds(
     vessel.waterlineLengthM,
   );
-  // RMS elevation of a sinusoidal sea is Hs/4; RMS acceleration of the
-  // riding vessel follows the sea at the encounter frequency, floored
-  // at the period the hull starts bridging instead of following.
+  // Motion amplitude: half the significant wave height — the crest
+  // amplitude of the sea the boat rides — driven at the encounter
+  // frequency (ω²·a, ω = 2π/Te), floored at the period the hull starts
+  // bridging instead of following. This is deliberately the crest
+  // amplitude, not the pure sinusoid's RMS elevation (Hs/(2√2)): the
+  // factor and the AZ band constants were calibrated together against
+  // the vessel's own history (SPEC §7), so they move as a pair — do
+  // not change one without re-running the backtest.
   const effectivePeriod = Math.max(encounterPeriod, encounterPeriodFloor);
   const base =
     ((4 * Math.PI * Math.PI) / (effectivePeriod * effectivePeriod)) *

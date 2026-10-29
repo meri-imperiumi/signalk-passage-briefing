@@ -3435,7 +3435,6 @@ module.exports = (app) => {
         (delta) => feedDelta(delta),
       );
 
-      const _tickerCount = 0;
       cronTimer = setInterval(() => {
         const result = stateMachine.tick(new Date());
         if (result.fetch === "cron") {

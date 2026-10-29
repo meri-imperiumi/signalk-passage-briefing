@@ -316,7 +316,7 @@ function extractGmdssPre(html) {
  *
  * @param {object} params
  * @param {number[]} params.zones - Active zone integers
- * @param {Array<{zone: number, wmoId: string, station: string}>}
+ * @param {Array<{zone: number, header: string, station: string}>}
  *   [params.tgftpStations] - Configured TGFTP fast paths
  * @param {typeof fetch} [params.fetchImpl]
  * @param {number} [params.timeoutMs]
