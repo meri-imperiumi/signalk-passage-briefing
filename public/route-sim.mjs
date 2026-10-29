@@ -1656,7 +1656,10 @@ export function simulateRun({
       lat: pos.lat,
       lon: pos.lon,
       distanceFromStartNm: Math.round(distanceMadeGoodNm * 10) / 10,
-      headingDeg: Math.round(((heading / DEG) % 360) * 10) / 10,
+      // Normalized to [0, 360): the bearing comes out of atan2 in
+      // (−180, 180], and a negative heading degree in the rows read as
+      // west-of-north on anything that consumed it raw
+      headingDeg: Math.round(((((heading / DEG) % 360) + 360) % 360) * 10) / 10,
       twdDeg: weather?.surface?.twd ?? null,
       twaRad: sailingTwaRad,
       awsKnots: apparentWindSpeedKnots({

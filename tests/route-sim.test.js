@@ -2259,3 +2259,29 @@ test("Parasailor deployment windows supersede slatting (work doc #41)", async ()
   void twsByHour;
   void dying;
 });
+
+test("simulated heading degrees are normalized to [0, 360)", async () => {
+  const { simulateRun } = await simPromise;
+  // A westbound course bears 270°; the raw atan2 bearing is −90°, and
+  // a negative heading degree in the rows read as west-of-north on
+  // anything that consumed it raw (audit fix)
+  const run = simulateRun({
+    payload: buildPayload({
+      route: [
+        [0, 0],
+        [-0.1, 0],
+      ],
+      hours: 4,
+    }),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    maxHours: 2,
+  });
+  assert.ok(run.hourly.length > 0);
+  for (const row of run.hourly) {
+    assert.ok(
+      row.headingDeg >= 0 && row.headingDeg < 360,
+      `headingDeg ${row.headingDeg}`,
+    );
+  }
+  assert.equal(run.hourly[0].headingDeg, 270);
+});
