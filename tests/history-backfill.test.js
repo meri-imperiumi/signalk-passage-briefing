@@ -175,6 +175,23 @@ describe("createHistoryWindStats", () => {
       /History API returned 500/,
     );
   });
+
+  test("a wedged History API query aborts on the timeout", async () => {
+    const getStats = createHistoryWindStats({
+      baseUrl: "http://localhost:3000",
+      timeoutMs: 20,
+      fetchImpl: (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener("abort", () =>
+            reject(new Error(`aborted: ${init.signal.reason?.name}`)),
+          );
+        }),
+    });
+    await assert.rejects(
+      getStats({ timestamp: "2023-03-20T09:28:00.000Z" }),
+      /aborted: TimeoutError/,
+    );
+  });
 });
 
 describe("extractWindWindowStats", () => {

@@ -54,6 +54,13 @@ function loadPhysics() {
 const WINDOW_MINUTES = 15;
 
 /**
+ * Abort timeout for one History API window query: a wedged provider
+ * fails the event (and the run) instead of hanging the backfill
+ * request forever.
+ */
+const HISTORY_QUERY_TIMEOUT_MS = 30_000;
+
+/**
  * Signal K paths queried from the History API.
  */
 const WIND_PATHS = ["environment.wind.speedTrue", "environment.wind.angleTrue"];
@@ -197,6 +204,8 @@ function createLogbookWindStats(entries, windowMinutes = WINDOW_MINUTES) {
  * @param {string[]} [params.paths] - Paths to query (default
  *   {@link WIND_PATHS})
  * @param {number} [params.resolution] - Resolution in seconds
+ * @param {number} [params.timeoutMs] - Abort timeout for the query
+ *   (default {@link HISTORY_QUERY_TIMEOUT_MS})
  * @param {typeof fetch} [params.fetchImpl] - Fetch implementation (tests)
  * @returns {Promise<object>} History API `/values` response
  */
@@ -208,6 +217,7 @@ async function queryHistory({
   to,
   paths = WIND_PATHS,
   resolution = HISTORY_RESOLUTION_SECONDS,
+  timeoutMs = HISTORY_QUERY_TIMEOUT_MS,
   fetchImpl = fetch,
 }) {
   const url = new URL("/signalk/v2/api/history/values", baseUrl);
@@ -222,7 +232,10 @@ async function queryHistory({
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
-  const response = await fetchImpl(url, { headers });
+  const response = await fetchImpl(url, {
+    headers,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
   if (!response.ok) {
     throw new Error(
       `History API returned ${response.status}: ${response.statusText}`,
@@ -300,6 +313,8 @@ function extractWindWindowStats({ historyData, from, to }) {
  * @param {number} [options.windowMinutes] - Window length (default
  *   {@link WINDOW_MINUTES})
  * @param {number} [options.resolution] - Resolution in seconds
+ * @param {number} [options.timeoutMs] - Abort timeout per query
+ *   (default {@link HISTORY_QUERY_TIMEOUT_MS})
  * @param {typeof fetch} [options.fetchImpl] - Fetch implementation (tests)
  * @returns {(event: {timestamp: string}) => Promise<WindWindowStats|null>}
  */
@@ -309,6 +324,7 @@ function createHistoryWindStats({
   provider,
   windowMinutes = WINDOW_MINUTES,
   resolution,
+  timeoutMs,
   fetchImpl,
 } = {}) {
   return async (event) => {
@@ -321,6 +337,7 @@ function createHistoryWindStats({
       from,
       to,
       resolution,
+      timeoutMs,
       fetchImpl,
     });
     return extractWindWindowStats({ historyData, from, to });
@@ -600,6 +617,7 @@ module.exports = {
   WINDOW_MINUTES,
   WIND_PATHS,
   HISTORY_RESOLUTION_SECONDS,
+  HISTORY_QUERY_TIMEOUT_MS,
   MS_TO_KNOTS,
   parseUtcTimestamp,
   foldTwaDegrees,
