@@ -80,7 +80,7 @@ describe("plugin", () => {
     assert.equal(properties.motoring_tws_threshold.default, 3.5);
     assert.equal(properties.drift_mode_enabled.default, true);
     assert.equal(properties.motor_fuel_l_per_hour.default, 1.8);
-    assert.equal(properties.waterline_length_m.default, 9.4);
+    assert.equal(properties.waterline_length_m.default, 0);
     assert.ok(properties.spool_directory);
     assert.equal(properties.k_heel.default, 0.35);
     assert.equal(properties.k_pitch.default, 0.4);

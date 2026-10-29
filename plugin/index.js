@@ -227,7 +227,10 @@ const DEFAULTS = {
   downwind_night_policy: "break",
   drift_mode_enabled: true,
   motor_fuel_l_per_hour: 1.8,
-  waterline_length_m: 9.4,
+  // 0 = follow the boat's published design.* waterline (or its LOA
+  // as the coarsest stand-in) — a number here gap-fills for boats
+  // that publish neither
+  waterline_length_m: 0,
   // Hull description gap-fillers (work doc #56): the vessel's own
   // published design.* values win; these fill what the boat does not
   // publish (usually displacement and GM), and a number neither
@@ -2993,11 +2996,13 @@ module.exports = (app) => {
         },
         waterline_length_m: {
           type: "number",
-          title: "Waterline Length (meters)",
+          title: "Waterline Length (meters, gap-filler)",
           description:
             "Drives the legacy motion kernel's pitching resonance and " +
-            "the hull kernel's LWL when Signal K design.length " +
-            "waterline is not published.",
+            "the hull kernel's LWL. The vessel's published Signal K " +
+            "design.length waterline wins when present (its LOA is " +
+            "the coarsest fallback); this only gap-fills for boats " +
+            "that publish neither.",
           default: DEFAULTS.waterline_length_m,
         },
         hull_beam_m: {

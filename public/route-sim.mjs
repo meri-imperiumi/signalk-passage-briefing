@@ -67,7 +67,11 @@ export const SIMULATION_DEFAULTS = {
   motoring_speed_threshold: 2,
   drift_mode_enabled: true,
   motor_fuel_l_per_hour: 1.8,
-  waterline_length_m: 9.4,
+  // 0 = follow the boat: design.length.value.waterline when
+  // published, else LOA as the coarsest stand-in, else the last-
+  // ditch default below for the legacy kernel's length terms (work
+  // doc #56)
+  waterline_length_m: 0,
   // Hull description beyond the waterline (work doc #56): 0/empty
   // means "leave missing if Signal K doesn't publish it either" — the
   // vessel's own design.* values win, these fill the gaps (usually
@@ -1262,7 +1266,12 @@ function runDeploymentPass(
     const vessel = {
       sogKnots: row.sogKnots ?? 0,
       headingRad: row.headingRad ?? 0,
-      waterlineLengthM: cfg.waterline_length_m,
+      // The resolved hull's LWL (design.* → config → LOA) also feeds
+      // the legacy kernel's length terms when the hull is incomplete
+      // — one source of length, never the stale config default
+      waterlineLengthM:
+        hull.lengthWaterlineM ??
+        (cfg.waterline_length_m || SIMULATION_DEFAULTS.waterline_length_m),
       kHeel: cfg.k_heel,
       kPitch: cfg.k_pitch,
       hull,

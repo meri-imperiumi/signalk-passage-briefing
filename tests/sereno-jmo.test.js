@@ -269,12 +269,13 @@ describe("hull motion response", () => {
 });
 
 describe("hull resolution and guards", () => {
-  test("Signal K wins; config fills the gaps", async () => {
+  test("Signal K wins; config fills the gaps; LOA is the LWL fallback", async () => {
     const { resolveHull } = await physics();
     const h = resolveHull(
       { waterline_length_m: 9.4, hull_beam_m: 3.1 },
       {
         lengthWaterlineM: 8.7,
+        lengthOverallM: 9.36,
         beamM: 3.05,
         canoeDraughtM: 0.65,
         displacementKg: 4300,
@@ -288,6 +289,24 @@ describe("hull resolution and guards", () => {
     assert.equal(h.sources.beamM, "signalk");
     assert.equal(h.sources.canoeDraughtM, "signalk");
     assert.equal(h.sources.displacementKg, "signalk");
+  });
+
+  test("a boat that publishes only LOA still gets a length", async () => {
+    const { resolveHull } = await physics();
+    // Config gap-filler unset (0 = follow the boat): LOA stands in
+    const h = resolveHull(
+      { waterline_length_m: 0, hull_beam_m: 3.1 },
+      { beamM: 3.05, lengthOverallM: 9.36 },
+    );
+    assert.equal(h.lengthWaterlineM, 9.36);
+    assert.equal(h.sources.lengthWaterlineM, "signalk");
+    // A config gap-filler still beats the LOA stand-in
+    const cfgWins = resolveHull(
+      { waterline_length_m: 8.2, hull_beam_m: 3.1 },
+      { beamM: 3.05, lengthOverallM: 9.36 },
+    );
+    assert.equal(cfgWins.lengthWaterlineM, 8.2);
+    assert.equal(cfgWins.sources.lengthWaterlineM, "config");
   });
 
   test("config fills only what Signal K does not publish", async () => {

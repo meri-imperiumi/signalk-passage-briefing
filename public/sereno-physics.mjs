@@ -1505,13 +1505,18 @@ export function hullTypeUsable(hull) {
  * is the source of truth for its own hull), a configuration value is
  * the gap-filler for what the boat does not publish (displacement
  * and GM are the usual gaps), and what is left missing stays
- * missing. Each carried field records its source so the briefing can
- * say which hull numbers are grounded and which are absent.
+ * missing. LWL has one extra published fallback: a boat that gives
+ * its LOA but not its waterline gets the LOA as the coarsest LWL
+ * stand-in (LWL ≤ LOA always), because a length wrong by ~15% keeps
+ * the kernel running where a missing one would silently drop it to
+ * the legacy fallback. Each carried field records its source so the
+ * briefing can say which hull numbers are grounded and which are
+ * absent.
  *
  * @param {object} cfg - Plugin/simulation config subset: `hull_lwl_m`,
  *   `hull_beam_m`, `hull_canoe_draft_m`, `hull_displacement_kg`,
  *   `hull_gm_m`, `hull_accel_point_m`, `hull_type` (string), plus
- *   the legacy `waterline_length_m` override
+ *   the legacy `waterline_length_m` override (0 = follow the boat)
  * @param {object|null} [design] - Signal K `design.*` snapshot:
  *   `{lengthWaterlineM, lengthOverallM, beamM, canoeDraughtM, maxDraughtM, displacementKg}`
  * @returns {{lengthWaterlineM: number|null, beamM: number|null,
@@ -1529,10 +1534,23 @@ export function resolveHull(cfg, design = null) {
     }
     return { value: null, source: "missing" };
   };
-  const lwl = pick(
-    cfg.hull_lwl_m ?? cfg.waterline_length_m,
-    design?.lengthWaterlineM,
-  );
+  // LWL chain: published waterline > config gap-filler > published
+  // LOA as the coarsest stand-in > missing
+  const lwlPublished = design?.lengthWaterlineM;
+  const lwlOverride = cfg.hull_lwl_m ?? cfg.waterline_length_m;
+  let lwl;
+  if (Number.isFinite(lwlPublished) && lwlPublished > 0) {
+    lwl = { value: lwlPublished, source: "signalk" };
+  } else if (Number.isFinite(lwlOverride) && lwlOverride > 0) {
+    lwl = { value: lwlOverride, source: "config" };
+  } else if (
+    Number.isFinite(design?.lengthOverallM) &&
+    design.lengthOverallM > 0
+  ) {
+    lwl = { value: design.lengthOverallM, source: "signalk" };
+  } else {
+    lwl = { value: null, source: "missing" };
+  }
   const beam = pick(cfg.hull_beam_m, design?.beamM);
   const canoe = pick(cfg.hull_canoe_draft_m, design?.canoeDraughtM);
   const displacement = pick(cfg.hull_displacement_kg, design?.displacementKg);
