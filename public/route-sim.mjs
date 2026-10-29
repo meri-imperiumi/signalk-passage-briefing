@@ -81,6 +81,7 @@ export const SIMULATION_DEFAULTS = {
   hull_canoe_draft_m: 0,
   hull_displacement_kg: 0,
   hull_gm_m: 0,
+  hull_roll_period_s: 0,
   hull_accel_point_m: 0,
   hull_type: "",
   k_heel: 0.35,

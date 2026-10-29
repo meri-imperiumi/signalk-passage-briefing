@@ -238,6 +238,7 @@ const DEFAULTS = {
   hull_canoe_draft_m: 0,
   hull_displacement_kg: 0,
   hull_gm_m: 0,
+  hull_roll_period_s: 0,
   hull_accel_point_m: 0,
   hull_type: "",
   spool_directory: join(homedir(), ".signalk", "spool", "passage-outlook"),
@@ -374,6 +375,7 @@ module.exports = (app) => {
     hull_canoe_draft_m: DEFAULTS.hull_canoe_draft_m,
     hull_displacement_kg: DEFAULTS.hull_displacement_kg,
     hull_gm_m: DEFAULTS.hull_gm_m,
+    hull_roll_period_s: DEFAULTS.hull_roll_period_s,
     hull_accel_point_m: DEFAULTS.hull_accel_point_m,
     hull_type: DEFAULTS.hull_type,
     /** The vessel's published Signal K design.* snapshot (work doc
@@ -1807,6 +1809,7 @@ module.exports = (app) => {
         hull_canoe_draft_m: simulationConfig.hull_canoe_draft_m,
         hull_displacement_kg: simulationConfig.hull_displacement_kg,
         hull_gm_m: simulationConfig.hull_gm_m,
+        hull_roll_period_s: simulationConfig.hull_roll_period_s,
         hull_accel_point_m: simulationConfig.hull_accel_point_m,
         hull_type: simulationConfig.hull_type,
         hull_design: readHullDesign(),
@@ -3029,13 +3032,31 @@ module.exports = (app) => {
         },
         hull_gm_m: {
           type: "number",
-          title: "Metacentric Height GM (meters, roll figures off at 0)",
+          title: "Metacentric Height GM (meters)",
           description:
             "Transverse metacentric height from the boat's stability " +
-            "data. Signal K publishes no GM field, so this is the only " +
-            "source; 0 (default) disables the RMS roll figure and the " +
-            "deck-work roll flag while vertical acceleration still runs.",
+            "data — the boat's stiffness. Signal K publishes no GM " +
+            "field. The roll natural period derived from it follows " +
+            "the IMO ship formula, which runs short for heavy " +
+            "full-keel yachts; if you can, set the measured period " +
+            "(next setting) instead. Either missing or 0 disables the " +
+            "RMS roll figure and the deck-work roll flag while " +
+            "vertical acceleration still runs.",
           default: DEFAULTS.hull_gm_m,
+        },
+        hull_roll_period_s: {
+          type: "number",
+          title: "Roll Natural Period (seconds, measured)",
+          description:
+            "The boat's free roll period, timed at the still dock: " +
+            "push the shrouds (or swing crew weight) and count full " +
+            "cycles — seconds total divided by cycles. Directly " +
+            "measurable without any stability docs, and preferred " +
+            "over the GM-derived period because it is the boat's own " +
+            "number; heavy full-keel cruisers typically sit at 4–5 s. " +
+            "0 (default) derives it from GM, or disables roll if " +
+            "neither is set.",
+          default: DEFAULTS.hull_roll_period_s,
         },
         hull_accel_point_m: {
           type: "number",
@@ -3506,6 +3527,7 @@ module.exports = (app) => {
         hull_canoe_draft_m: Number(config.hull_canoe_draft_m) || 0,
         hull_displacement_kg: Number(config.hull_displacement_kg) || 0,
         hull_gm_m: Number(config.hull_gm_m) || 0,
+        hull_roll_period_s: Number(config.hull_roll_period_s) || 0,
         hull_accel_point_m: Number(config.hull_accel_point_m) || 0,
         hull_type: typeof config.hull_type === "string" ? config.hull_type : "",
         hull_design: readHullDesign(),

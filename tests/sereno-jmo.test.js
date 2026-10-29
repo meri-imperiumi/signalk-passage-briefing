@@ -184,7 +184,7 @@ describe("hull motion response", () => {
     assert.ok(r.azWeightedMs2 > 0 && r.azWeightedMs2 < r.azMs2);
   });
 
-  test("roll needs GM and vanishes in pure head/following seas", async () => {
+  test("roll needs GM or a measured period, and vanishes in pure head/following seas", async () => {
     const p = await physics();
     const full = await response({ headingRad: Math.PI / 2 });
     assert.ok(full.rmsRollDeg != null && full.rmsRollDeg > 0);
@@ -201,6 +201,40 @@ describe("hull motion response", () => {
       sailState: "sailing",
     });
     assert.equal(r.rmsRollDeg, null);
+  });
+
+  test("a measured roll period alone enables roll, and wins over GM", async () => {
+    const p = await physics();
+    // No GM, measured period: the dock roll test is enough
+    const measuredOnly = p.resolveHull(
+      { ...HULL_ARGS, hull_gm_m: 0, hull_roll_period_s: 4.5 },
+      null,
+    );
+    assert.equal(p.hullRollReady(measuredOnly), true);
+    const r = await p.hullMotionResponse({
+      hsMeters: 2,
+      peakPeriodSeconds: 8,
+      waveTravelDirectionRad: 0,
+      headingRad: Math.PI / 2,
+      speedKnots: 5,
+      hull: measuredOnly,
+      sailState: "sailing",
+    });
+    assert.ok(r.rmsRollDeg != null && r.rmsRollDeg > 0);
+    // And the measured period beats the GM-derived one: T_N from
+    // GM 0.9 via the IMO factor is ~2.6 s (near the chop band), a
+    // heavy full-keeler's real 4.5 s sits far off it — the responses
+    // must differ
+    const fromGm = await p.hullMotionResponse({
+      hsMeters: 2,
+      peakPeriodSeconds: 8,
+      waveTravelDirectionRad: 0,
+      headingRad: Math.PI / 2,
+      speedKnots: 5,
+      hull: p.resolveHull(HULL_ARGS, null),
+      sailState: "sailing",
+    });
+    assert.ok(Math.abs(r.rmsRollDeg - fromGm.rmsRollDeg) > 1e-9);
   });
 
   test("bare pole rolls worse than a drawing mainsail", async () => {

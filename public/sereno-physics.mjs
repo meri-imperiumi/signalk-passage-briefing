@@ -1461,17 +1461,22 @@ export function hullMotionReady(hull) {
 
 /**
  * Whether the resolved hull also carries what the roll model needs
- * beyond the motion kernel: a metacentric height. Signal K publishes
- * no GM field, so this is an override setting — without it the hour
- * still gets spectral vertical acceleration but roll stays null and
- * the deck-work flag reports its absence.
+ * beyond the motion kernel: a roll natural period — either measured
+ * directly (the dock roll test, preferred: the IMO A.685 derivation
+ * from GM is ship-calibrated and runs short for heavy full-keel
+ * yachts) or derived from a metacentric height. Signal K publishes
+ * neither field, so these are override settings — without one the
+ * hour still gets spectral vertical acceleration but roll stays null
+ * and the deck-work verdict reports its absence.
  *
  * @param {object|null} hull
  * @returns {boolean}
  */
 export function hullRollReady(hull) {
   return (
-    hullMotionReady(hull) && Number.isFinite(hull.gmMeters) && hull.gmMeters > 0
+    hullMotionReady(hull) &&
+    ((Number.isFinite(hull.gmMeters) && hull.gmMeters > 0) ||
+      (Number.isFinite(hull.rollNaturalPeriodS) && hull.rollNaturalPeriodS > 0))
   );
 }
 
@@ -1532,12 +1537,14 @@ export function resolveHull(cfg, design = null) {
   const canoe = pick(cfg.hull_canoe_draft_m, design?.canoeDraughtM);
   const displacement = pick(cfg.hull_displacement_kg, design?.displacementKg);
   const gm = pick(cfg.hull_gm_m, null);
+  const rollPeriod = pick(cfg.hull_roll_period_s, null);
   return {
     lengthWaterlineM: lwl.value,
     beamM: beam.value,
     canoeDraughtM: canoe.value,
     displacementKg: displacement.value,
     gmMeters: gm.value,
+    rollNaturalPeriodS: rollPeriod.value,
     accelPointM: Number.isFinite(cfg.hull_accel_point_m)
       ? cfg.hull_accel_point_m
       : 0,
@@ -1551,6 +1558,7 @@ export function resolveHull(cfg, design = null) {
       canoeDraughtM: canoe.source,
       displacementKg: displacement.source,
       gmMeters: gm.source,
+      rollNaturalPeriodS: rollPeriod.source,
     },
   };
 }
@@ -1630,9 +1638,15 @@ export function hullMotionResponse({
   const rollUsable = hullRollReady(hull);
   const rollParams = rollUsable
     ? {
-        cwp: ROLL_WATERPLANE_COEFF_DEFAULT,
-        kappa: ROLL_WATERPLANE_COEFF_DEFAULT * ROLL_AFT_BODY_RATIO_FACTOR,
-        gm: hull.gmMeters,
+        // Measured period wins over the GM-derived one — the dock
+        // test is the boat telling you its own T_N, while the IMO
+        // A.685 factor behind the derivation is ship-calibrated and
+        // runs short for heavy full-keel yachts.
+        naturalPeriod:
+          Number.isFinite(hull.rollNaturalPeriodS) &&
+          hull.rollNaturalPeriodS > 0
+            ? hull.rollNaturalPeriodS
+            : rollNaturalPeriodSeconds(beamM, hull.gmMeters),
         mu:
           sailState === "motoring"
             ? ROLL_DAMPING_BARE_POLE
@@ -1698,7 +1712,7 @@ export function hullMotionResponse({
             omega,
             omegaE,
             betaRad,
-            rollNaturalPeriodSeconds(beamM, rollParams.gm),
+            rollParams.naturalPeriod,
             rollParams.mu,
           )
         : null;
