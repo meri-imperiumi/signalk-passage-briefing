@@ -760,10 +760,14 @@ function parseCardinalBounds(text, coverage = null) {
  * `CONVERGENCE ZONE CZ1`, … The name must carry a digit or be one of
  * the conventional CF, L, H so prose ("TROUGH AXIS") is not mistaken
  * for a name. Intensity modifiers ("SHALLOW LOW PRESSURE L") ride
- * ahead of the feature word — NFFN spells them out.
+ * ahead of the feature word — NFFN spells them out. MetService's
+ * Part 2 analysis declares bare `Front F1` / `Area A1` — no cold/warm
+ * qualifier, no trough word — so FRONT and AREA are declarations too;
+ * the name's digit requirement keeps prose (`Area from 25S to 40S`,
+ * `IN THE AREA EAST OF 170W`) from matching.
  */
 const FEATURE_DECLARATION =
-  /^(?:(?:SHALLOW|DEEP|INTENSE|WEAK)\s+)?(?:TROUGH|COLD FRONT|WARM FRONT|SHEAR LINE|RIDGE|CONVERGENCE ZONE|LOW(?:\s+PRESSURE)?|HIGH)\s+([A-Z]\d+|CF|L|H)\b/i;
+  /^(?:(?:SHALLOW|DEEP|INTENSE|WEAK)\s+)?(?:TROUGH|COLD FRONT|WARM FRONT|SHEAR LINE|RIDGE|CONVERGENCE ZONE|LOW(?:\s+PRESSURE)?|HIGH|FRONT|AREA)\s+([A-Z]\d+|CF|L|H)\b/i;
 
 /**
  * Line-start anchors that begin a new semantic block even without a

@@ -1,0 +1,24 @@
+FQPS43 NZKL 281839
+MARINE WEATHER BULLETIN FOR SUBTROPIC
+Area from 25S to 40S, western boundary from 40S 163E to 29S 170E then to 25S 170E, eastern boundary 170W.
+
+Issued by Meteorological Service of New Zealand,
+Wellington issued at 281839UTC Valid until 291200UTC.
+
+Part 1 - WARNINGS
+WARNINGS IN FORCE: NIL
+
+Part 2 - Situation analysis at 281800UTC:
+Front F1 29S 179E 32S 174W 35S 170W, moving east 25kt.
+Area A1 bounded by 26S 170E 29S 179W 34S 179W 34S 167E 29S 170E 26S 170E, slow moving.
+Front F2 36S 161E 38S 166E 40S 170E, moving east 25kt.
+
+Part 3 - Forecast:
+Refer to latest warnings.
+Within 180 nautical miles south of F1: Poor visibility in rain, easing by 290600UTC.
+Within A1: Northwest 25kt at times, poor visibility in rain developing by 290000UTC.
+East of F2: Northwest 25kt at times.
+Outlook for the following 72 hours:
+Front 40S 174W 37S 176W 33S 179W, moving east. West of Front: Westerly quarter 30kt to gale, easing by 311200UTC, areas of heavy westerly quarter swell, easing by 011200UTC.
+
+

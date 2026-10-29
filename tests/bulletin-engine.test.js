@@ -322,6 +322,63 @@ test("unknown feature names fall back to the hemisphere bbox", () => {
   });
 });
 
+test("MetService Front F1 / Area A1 declarations collect as named features", () => {
+  // Blank-line separated, as the WMO set renders Part 2; the fused
+  // TGFTP rendering splits per sentence (BLOCK_START_ANCHOR) before
+  // collection sees it
+  const features = collectFeatures(
+    [
+      "Front F1 29S 179E 32S 174W 35S 170W, moving east 25kt.",
+      "Area A1 bounded by 26S 170E 29S 179W 34S 179W 34S 167E 29S 170E 26S 170E, slow moving.",
+      "Front F2 36S 161E 38S 166E 40S 170E, moving east 25kt.",
+    ].join("\n\n"),
+  );
+  assert.deepEqual(features.get("F1"), [
+    [179, -29],
+    [-174, -32],
+    [-170, -35],
+  ]);
+  assert.equal(features.get("A1").length, 6);
+  assert.deepEqual(features.get("F2"), [
+    [161, -36],
+    [166, -38],
+    [170, -40],
+  ]);
+});
+
+test("live fqps43 TGFTP rendering: each feature collects its own chain", () => {
+  const features = collectFeatures(
+    stripBoilerplate(readFixture("fqps43-nzkl-2026-10-28.txt")),
+  );
+  // Fused Part 2 lines split per sentence, so F1 is the front's own
+  // three-point chain — not the concatenation of every analysis pair
+  assert.deepEqual(features.get("F1"), [
+    [179, -29],
+    [-174, -32],
+    [-170, -35],
+  ]);
+  assert.deepEqual(features.get("F2"), [
+    [161, -36],
+    [166, -38],
+    [170, -40],
+  ]);
+  assert.equal(features.get("A1").length, 6);
+});
+
+test("prose around MetService feature grammar collects nothing", () => {
+  const features = collectFeatures(
+    [
+      // The masthead's area statement: FROM carries no name
+      "Area from 25S to 40S, western boundary from 40S 163E to 29S 170E then to 25S 170E, eastern boundary 170W.",
+      // Area prose never leads a block
+      "IN THE AREA EAST OF 170W, EXPECT MODERATE SOUTHERLY SWELLS.",
+      // The Outlook's unnamed front: digit-leading, not a designator
+      "Front 40S 174W 37S 176W 33S 179W, moving east.",
+    ].join("\n\n"),
+  );
+  assert.equal(features.size, 0);
+});
+
 test("tropical systems are collected as named points under bare and prefixed names", () => {
   const features = collectFeatures(
     [
