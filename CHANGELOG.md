@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-10-30
+
 ### Fixed
 - The downwind-sail advisor judged the envelope ceiling by the sustained wind alone: `evaluateDownwindSail` compared `maxTwsKnots` against the hour's mean TWS, while gusts were only gated by their *factor* (gust/base ≥ 2 = squally air) — so a 19–24 kt stretch with gusts to 30 kt against a Parasailor whose configured ceiling is 12.9 m/s ≈ 25 kt passed every gate and recommended a 14-hour deployment, the timeline reading `Deploy Parasailor — smoother ride (measured) · wind 19–24 kt · gusts to 30 kt` with the gust line disproving the recommendation beside it. The gusts answer to the same envelope ceiling now: an hour whose gust speed crosses `maxTwsKnots` fails with a new `gust above envelope` reason (the squall-factor gate keeps its precedence — cycling air still names itself first, and a sustained breach still names `wind above envelope`), so such a window either never opens or breaks at the gust wall with the honest `gusts past the envelope` take-down label. `route-sim` feeds the hourly gust into the advisor and the corpus backtest (`bin/blog-spinnaker-backtest.js`) gates the learned envelopes the same way, so the crew's demonstrated maximum stays a maximum for the gusts too.
 
