@@ -463,6 +463,104 @@ function parseCoordinateChain(text) {
 }
 
 /**
+ * Eastward distance from one meridian to another, in degrees
+ * [0, 360).
+ *
+ * @param {number} from
+ * @param {number} to
+ * @returns {number}
+ */
+function eastwardSpan(from, to) {
+  return (((to - from) % 360) + 360) % 360;
+}
+
+/**
+ * Clamps a parsed bounds box into the bulletin's declared area (the
+ * `EQUATOR TO 25S BETWEEN 160E AND 120W` statement NFFN prints in
+ * its header). Latitude clamps into the area band; longitude clamps
+ * in the area's unwrapped eastward frame — both boxes treated as the
+ * eastward arcs they are, so a seam-crossing pair stays contiguous —
+ * and a box entirely outside the declared area returns null: the
+ * prose describes other ocean's conditions. The result shifts into
+ * the raw ±180 frame so callers see chart-ready coordinates.
+ *
+ * @param {number[]} bbox - [minLon, minLat, maxLon, maxLat]
+ * @param {number[]} area - Declared area, maxLon possibly +360
+ * @returns {number[]|null} Clamped box, null when disjoint
+ */
+function clampBoundsToArea(bbox, area) {
+  const [areaMinLon, areaMinLat, areaMaxLon, areaMaxLat] = area;
+  const minLat = Math.max(bbox[1], areaMinLat);
+  const maxLat = Math.min(bbox[3], areaMaxLat);
+  if (minLat >= maxLat) {
+    return null;
+  }
+  // A full-circle "bound" (EAST OF x AND WEST OF x) bounds nothing
+  if (eastwardSpan(bbox[0], bbox[2]) % 360 === 0) {
+    return null;
+  }
+  // The box brought into the area's frame; a box sticking out west
+  // of the area's west edge takes its other-turn representative
+  let minLon = areaMinLon + eastwardSpan(areaMinLon, bbox[0]);
+  let maxLon = minLon + eastwardSpan(bbox[0], bbox[2]);
+  let lo = Math.max(minLon, areaMinLon);
+  let hi = Math.min(maxLon, areaMaxLon);
+  if (lo > hi) {
+    minLon -= 360;
+    maxLon -= 360;
+    lo = Math.max(minLon, areaMinLon);
+    hi = Math.min(maxLon, areaMaxLon);
+    if (lo > hi) {
+      return null;
+    }
+  }
+  while (lo >= 180) {
+    lo -= 360;
+    hi -= 360;
+  }
+  while (lo < -180) {
+    lo += 360;
+    hi += 360;
+  }
+  return [lo, minLat, hi, maxLat];
+}
+
+/**
+ * Parses the bulletin-level declared area from its header lines: the
+ * `EQUATOR TO 25S BETWEEN 160E AND 120W` statement NFFN prints under
+ * the bulletin title. Loose cardinal bounds inside the bulletin ("IN
+ * THE AREA EAST OF 170W, EXPECT MODERATE SOUTHERLY SWELLS") close
+ * against this area instead of the dateline defaults, so a one-sided
+ * phrase yields the issuer's waters, not half a world. Scanned per
+ * line before the first section anchor; the statement must carry
+ * both a latitude and a longitude bound — anything less (a lone
+ * band, an issuer sentence) is not an area. Bulletins without such a
+ * statement — most NWS products state their areas per section —
+ * return null and parse exactly as before.
+ *
+ * @param {string} text - Cleaned bulletin text
+ * @returns {number[]|null} [minLon, minLat, maxLon, maxLat] with
+ *   maxLon unwrapped (+360) when the area crosses the seam
+ */
+function parseCoverageArea(text) {
+  for (const line of text.split(/\r?\n/)) {
+    if (SECTION_ANCHORS.test(line.trim())) {
+      break;
+    }
+    const bbox = parseCardinalBounds(line);
+    if (
+      bbox &&
+      bbox[1] !== -90 &&
+      bbox[3] !== 90 &&
+      !(bbox[0] === -180 && bbox[2] === 180)
+    ) {
+      return bbox;
+    }
+  }
+  return null;
+}
+
+/**
  * Parses cardinal bounding statements (`SOUTH OF 12S AND WEST OF
  * 173W`) into a [minLon, minLat, maxLon, maxLat] box. When both an
  * east-of and a west-of bound are present the box spans east of the
@@ -473,11 +571,15 @@ function parseCoordinateChain(text) {
  * directly.
  *
  * @param {string} text
+ * @param {number[]|null} [coverage] - The bulletin's declared area
+ *   (parseCoverageArea). When present the box clamps into it:
+ *   defaulted sides close at the area's edges, disjoint boxes return
+ *   null. Omitted, the box keeps the dateline defaults.
  * @returns {number[]|null} [minLon, minLat, maxLon, maxLat] (maxLon
  *   may exceed 180 for seam-crossing boxes), null when no bounds
- *   found
+ *   found or the box sits outside the declared area
  */
-function parseCardinalBounds(text) {
+function parseCardinalBounds(text, coverage = null) {
   let minLat = -90;
   let maxLat = 90;
   let found = false;
@@ -533,25 +635,34 @@ function parseCardinalBounds(text) {
   // when y < x). Only one: half a world against the fixed bound.
   const eastOf = text.match(/EAST OF\s+(\d+(?:\.\d+)?)\s*([EW])/i);
   const westOf = text.match(/WEST OF\s+(\d+(?:\.\d+)?)\s*([EW])/i);
-  // NFFN phrasing: "BETWEEN 165W AND 135W" — a longitude pair
+  // NFFN phrasing: "BETWEEN 165W AND 135W" — a longitude pair. The
+  // pair spans the shorter (≤180°) eastward arc: "BETWEEN 160E AND
+  // 120W" is the 80° Fiji arc across the seam, not the numeric
+  // min/max sweep the long way through the Americas
   const between = text.match(
     /BETWEEN\s+(\d+(?:\.\d+)?)\s*([EW])\s+AND\s+(\d+(?:\.\d+)?)\s*([EW])/i,
   );
+  let betweenPair = null;
+  if (between) {
+    const a = hemisphereDegrees(between[1], between[2].toUpperCase());
+    const b = hemisphereDegrees(between[3], between[4].toUpperCase());
+    let east = a;
+    let span = eastwardSpan(a, b);
+    if (span > 180) {
+      east = b;
+      span = 360 - span;
+    }
+    betweenPair = [east, east + span];
+  }
   const eastBound = eastOf
     ? hemisphereDegrees(eastOf[1], eastOf[2].toUpperCase())
-    : between
-      ? Math.min(
-          hemisphereDegrees(between[1], between[2].toUpperCase()),
-          hemisphereDegrees(between[3], between[4].toUpperCase()),
-        )
+    : betweenPair
+      ? betweenPair[0]
       : null;
   const westBound = westOf
     ? hemisphereDegrees(westOf[1], westOf[2].toUpperCase())
-    : between
-      ? Math.max(
-          hemisphereDegrees(between[1], between[2].toUpperCase()),
-          hemisphereDegrees(between[3], between[4].toUpperCase()),
-        )
+    : betweenPair
+      ? betweenPair[1]
       : null;
 
   let minLon;
@@ -565,17 +676,34 @@ function parseCardinalBounds(text) {
     found = true;
   } else if (eastBound != null) {
     minLon = eastBound;
-    maxLon = 180;
+    // A lone east bound is a half-world ray eastward; with a known
+    // declared area it closes at the area's east edge when that sits
+    // within the ray, and lands outside everything otherwise
+    maxLon = coverage
+      ? minLon + Math.min(eastwardSpan(minLon, coverage[2]), 180)
+      : 180;
     found = true;
   } else if (westBound != null) {
-    minLon = -180;
     maxLon = westBound;
+    // Mirror image: the ray closes at the declared area's west edge
+    minLon = coverage
+      ? maxLon - Math.min(eastwardSpan(coverage[0], maxLon), 180)
+      : -180;
     found = true;
+  } else if (coverage) {
+    // Latitude-only bounds: the declared area is the longitude span
+    minLon = coverage[0];
+    maxLon = coverage[2];
   } else {
     minLon = -180;
     maxLon = 180;
   }
-  return found ? [minLon, minLat, maxLon, maxLat] : null;
+  if (!found) {
+    return null;
+  }
+  return coverage
+    ? clampBoundsToArea([minLon, minLat, maxLon, maxLat], coverage)
+    : [minLon, minLat, maxLon, maxLat];
 }
 
 /**
@@ -971,12 +1099,18 @@ function composeFeatureBounds(text, features) {
  * ("WEST OF CF") resolve to a composed polygon; with no such feature
  * known they fall back to the numeric bbox path.
  *
+ * The declared-area coverage (parseCoverageArea) clamps only the
+ * numeric bbox path: chains, axis bands and storm points carry the
+ * issuer's own precise coordinates, which may legitimately sit
+ * outside the stated bulletin area.
+ *
  * @param {string} blockText
  * @param {Map<string, number[][]>} [features] - `collectFeatures` map
+ * @param {number[]|null} [coverage] - Bulletin's declared area
  * @returns {{type: "polygon", coordinates: number[][], bufferNm?: number}|
  *   {type: "bbox", coordinates: number[]}|null}
  */
-function extractGeometry(blockText, features = new Map()) {
+function extractGeometry(blockText, features = new Map(), coverage = null) {
   // A storm declaration block is its own geometry: the analysed
   // position of the named system, typed "point". Declarations are
   // found per paragraph, so a coalesced block leading with the
@@ -1014,7 +1148,7 @@ function extractGeometry(blockText, features = new Map()) {
   if (featurePolygon) {
     return featurePolygon;
   }
-  const bbox = parseCardinalBounds(blockText);
+  const bbox = parseCardinalBounds(blockText, coverage);
   if (bbox) {
     return { type: "bbox", coordinates: bbox };
   }
@@ -1607,6 +1741,9 @@ function filterBulletin({
     };
   }
   const features = collectFeatures(cleaned);
+  // The bulletin's own declared area ("EQUATOR TO 25S BETWEEN 160E
+  // AND 120W."): loose cardinal bounds inside clamp into it
+  const coverage = parseCoverageArea(cleaned);
   const header = cleaned.split(/\r?\n/, 1)[0]?.trim() ?? "";
   const blocks = segmentSections(cleaned)
     .flatMap((sectionBlocks) =>
@@ -1615,7 +1752,7 @@ function filterBulletin({
         : sectionBlocks,
     )
     .map((blockText) => {
-      const geometry = extractGeometry(blockText, features);
+      const geometry = extractGeometry(blockText, features, coverage);
       if (!intersectsTrack(geometry, track)) {
         return null; // Discard rule: not on our waters
       }
@@ -1916,6 +2053,7 @@ module.exports = {
   parseCoordinatePoints,
   parseCoordinateChain,
   parseCardinalBounds,
+  parseCoverageArea,
   collectFeatures,
   composeFeatureBounds,
   extractGeometry,

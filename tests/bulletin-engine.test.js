@@ -21,6 +21,7 @@ const {
   filterBulletin,
   navtexSubject,
   parseCardinalBounds,
+  parseCoverageArea,
   parseCoordinateChain,
   parseCoordinatePoints,
   resolveBulletinSource,
@@ -356,6 +357,147 @@ test("cardinal bounds translate to a bbox", () => {
     [179, -25, 180, 90],
   );
   assert.equal(parseCardinalBounds("no geography here"), null);
+});
+
+/** The 2026-10-28 NFFN bulletin (work doc #57 session report): the
+ * swells line's lone EAST OF published half a world, pole to pole. */
+const NFFN_SWELLS_BULLETIN = [
+  "FQPS01 NFFN 281800",
+  "MARINE WEATHER BULLETIN FOR ISLANDS AREA",
+  "EQUATOR TO 25S BETWEEN 160E AND 120W.",
+  "ISSUED BY FIJI METEOROLOGICAL SERVICE OCT 282000 UTC.",
+  "",
+  "PART 1 : WARNING NIL.",
+  "",
+  "PARTS 2 AND 3 : SYNOPSIS AND FORECAST VALID UNTIL OCT 291800 UTC.",
+  "",
+  " TROUGH T1 13S 163E 09S 172E  SLOW MOVING. POOR VISIBILITY IN",
+  "OCCASIONAL SHOWERS AND ISOLATED THUNDERSTORMS WITHIN 090 NAUTICAL",
+  "MILES OF T1.",
+  "",
+  "TROUGH T2 08S 180 07S 170W 09S 150W 19S 120W SLOW MOVING. POOR",
+  "VISIBILITY IN SHOWERS, HEAVY AT TIMES AND FEW THUNDERSTORMS WITHIN",
+  "120 NAUTICAL MILES OF T2.",
+  "",
+  "IN THE AREA EAST OF 170W, EXPECT MODERATE SOUTHERLY SWELLS.",
+].join("\n");
+
+const FIJI_AREA = parseCoverageArea(
+  [
+    "MARINE WEATHER BULLETIN FOR ISLANDS AREA",
+    "EQUATOR TO 25S BETWEEN 160E AND 120W.",
+    "ISSUED BY FIJI METEOROLOGICAL SERVICE OCT 282000 UTC.",
+  ].join("\n"),
+);
+
+test("declared area parses from the NFFN header", () => {
+  // EQUATOR is Fiji's word for 0; the 160E→120W pair is the 80° arc
+  // across the seam, unwrapped to maxLon 240
+  assert.deepEqual(FIJI_AREA, [160, -25, 240, 0]);
+
+  // A bulletin whose header states no area (NWS products state areas
+  // per section) parses to null and behaves exactly as before
+  assert.equal(
+    parseCoverageArea(
+      "GALE WARNING. Within 300 nm of a line 45S 170E to 50S 172E.",
+    ),
+    null,
+  );
+  // A lone latitude band is not an area
+  assert.equal(parseCoverageArea("FOR WATERS SOUTH OF 25S"), null);
+  // A two-band statement (AMMC style) parses to nothing usable
+  assert.equal(
+    parseCoverageArea(
+      "High Seas Forecast for Western METAREA 10\n12S TO 30S BETWEEN 90E AND 125E, AND 30S TO 50S BETWEEN 80E AND 129E",
+    ),
+    null,
+  );
+});
+
+test("loose cardinal bounds clamp into the declared area", () => {
+  // The report's case: EAST OF 170W is the area slice 170W→120W,
+  // equator→25S — not the dateline, pole to pole
+  assert.deepEqual(
+    parseCardinalBounds(
+      "IN THE AREA EAST OF 170W, EXPECT MODERATE SOUTHERLY SWELLS.",
+      FIJI_AREA,
+    ),
+    [-170, -25, -120, 0],
+  );
+
+  // A lone west bound closes at the area's west edge
+  assert.deepEqual(
+    parseCardinalBounds(
+      "IN THE AREA WEST OF 140W, EXPECT ROUGH SEAS.",
+      FIJI_AREA,
+    ),
+    [160, -25, 220, 0],
+  );
+  // Latitude-only bounds take the area's longitude span
+  assert.deepEqual(
+    parseCardinalBounds(
+      "IN THE AREA SOUTH OF 15S, EXPECT ROUGH SEAS.",
+      FIJI_AREA,
+    ),
+    [160, -25, 240, -15],
+  );
+  // A well-defined box inside the area keeps its longitudes, lat
+  // clamped into the area band
+  assert.deepEqual(
+    parseCardinalBounds("BETWEEN 165W AND 135W", FIJI_AREA),
+    [-165, -25, -135, 0],
+  );
+  // A box outside the declared area is other ocean's text: no
+  // geometry, the block's note rides text-only if at all
+  assert.equal(
+    parseCardinalBounds(
+      "IN THE AREA EAST OF 110W, EXPECT LIGHT SWELLS.",
+      FIJI_AREA,
+    ),
+    null,
+  );
+  // Without coverage the loose defaults stand, byte for byte
+  assert.deepEqual(parseCardinalBounds("EAST OF 170W"), [-170, -90, 180, 90]);
+});
+
+test("longitude BETWEEN pairs pick the shorter eastward arc", () => {
+  // 160E→120W is the 80° Fiji arc across the seam, not the numeric
+  // min/max sweep through the Americas
+  assert.deepEqual(
+    parseCardinalBounds("BETWEEN 160E AND 120W"),
+    [160, -90, 240, 90],
+  );
+  // Both-west pairs stay exactly as the numeric pair read them
+  assert.deepEqual(
+    parseCardinalBounds("BETWEEN 165W AND 135W"),
+    [-165, -90, -135, 90],
+  );
+});
+
+test("swells line clamps to the declared area (2026-10-28 report)", () => {
+  // A Neiafu-style vessel east of 170W keeps the swells block with
+  // the issuer's waters as its extent
+  const bulletin = filterBulletin({
+    rawText: NFFN_SWELLS_BULLETIN,
+    source: "spool",
+    track: [[-165, -18]],
+  });
+  const swells = bulletin.blocks.find((b) => /EAST OF 170W/.test(b.text));
+  assert.ok(swells, "swells block kept");
+  assert.equal(swells.geometryType, "bbox");
+  assert.deepEqual(swells.geometry.coordinates, [-170, -25, -120, 0]);
+
+  // A vessel west of 170W reads no swells block: the clamped area no
+  // longer reaches halfway around the world
+  const westBulletin = filterBulletin({
+    rawText: NFFN_SWELLS_BULLETIN,
+    source: "spool",
+    track: [[178, -17]],
+  });
+  assert.ok(
+    !westBulletin.blocks.some((b) => /EAST OF 170W/.test(b.text)),
+    "swells block dropped west of its area",
+  );
 });
 
 test("extractIssuer: issuing authority from the bulletin header", () => {
