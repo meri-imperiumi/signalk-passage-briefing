@@ -317,6 +317,9 @@ describe("createWeatherFetcher", () => {
     });
     const payload = await fetchTrack({ waypoints });
     assert.equal(payload.metadata.source, "weather-api");
+    // A provider answer carries no fallback marker: the checklist
+    // note only fires when the window actually degraded
+    assert.equal(payload.metadata.weatherApiFallback, undefined);
   });
 
   test("auto falls back to Open-Meteo on failure", async () => {
@@ -331,6 +334,10 @@ describe("createWeatherFetcher", () => {
     const payload = await fetchTrack({ waypoints });
     assert.equal(payload.metadata.source, "api");
     assert.ok(payload.metadata.models.includes("forecast:best_match"));
+    // The degradation is visible, not a clean [ OK ] (audit fix): the
+    // payload carries why the window fell back, and the plugin's
+    // compile records it as the checklist row's note
+    assert.equal(payload.metadata.weatherApiFallback, "no forecast loaded yet");
   });
 
   test("auto falls back when no server Weather API exists", async () => {

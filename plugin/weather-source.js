@@ -413,6 +413,11 @@ function createWeatherFetcher({
   const offline = () =>
     typeof isOnline === "function" ? isOnline() === false : false;
   return async function fetchTrackWeather({ waypoints, forecastDays } = {}) {
+    /** Set when the Weather API attempt failed in auto mode and the
+     * window is falling back to Open-Meteo: the payload carries the
+     * reason (`metadata.weatherApiFallback`) so the source checklist
+     * can show the degradation instead of a clean [ OK ]. */
+    let fallbackError = null;
     if (weatherApiFetcher !== null) {
       try {
         const payload = await weatherApiFetcher({ waypoints, forecastDays });
@@ -437,6 +442,7 @@ function createWeatherFetcher({
         // auto, online: this window falls back to Open-Meteo; the
         // next one tries the Weather API again (self-heals once the
         // provider has loaded its forecast)
+        fallbackError = error;
       }
     } else if (offline()) {
       // No local source and no link: nothing to fetch (work doc #55)
@@ -444,11 +450,17 @@ function createWeatherFetcher({
     }
     // Bare `fetch` resolves at call time, so test and runtime
     // overrides of globalThis.fetch after plugin start still apply
-    return fetchWeatherAlongTrack({
+    const payload = await fetchWeatherAlongTrack({
       waypoints,
       forecastDays,
       fetchImpl: fetchImpl ?? fetch,
     });
+    if (fallbackError != null) {
+      payload.metadata.weatherApiFallback = String(
+        fallbackError?.message ?? fallbackError,
+      );
+    }
+    return payload;
   };
 }
 

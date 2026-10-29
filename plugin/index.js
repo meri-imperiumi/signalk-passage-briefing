@@ -1512,6 +1512,12 @@ module.exports = (app) => {
         forecastDays: 2,
       }),
     );
+    if (payload?.metadata?.weatherApiFallback != null) {
+      sourceStatus?.record({
+        ...WEATHER_SOURCE,
+        note: `Answered by Open-Meteo — Weather API: ${payload.metadata.weatherApiFallback}`,
+      });
+    }
     payload.metadata.mode = "here";
     attachWeatherViewer(payload);
     const bulletin = await bulletinForTrack(waypoints);
@@ -1768,6 +1774,12 @@ module.exports = (app) => {
       payload = await withSourceStatus(WEATHER_SOURCE, () =>
         trackWeatherFetcher({ waypoints, forecastDays }),
       );
+      if (payload?.metadata?.weatherApiFallback != null) {
+        sourceStatus?.record({
+          ...WEATHER_SOURCE,
+          note: `Answered by Open-Meteo — Weather API: ${payload.metadata.weatherApiFallback}`,
+        });
+      }
     } catch (error) {
       if (!offline) {
         throw error;
