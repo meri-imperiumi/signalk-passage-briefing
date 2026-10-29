@@ -581,8 +581,12 @@ function planetaryEvents({ from, hours, lat, lon, cloudCoverAt }) {
     if (!nautical) {
       continue;
     }
-    // Closest night-hour separation per pair; only the final scan
-    // hour decides whether the minimum was close enough
+    // Closest *visible* night-hour separation per pair: an hour only
+    // holds the minimum when both bodies clear the haze line there —
+    // the geometric minimum can sit below the horizon at this
+    // latitude, and gating only the final hour dropped conjunctions
+    // that were well placed earlier in the night. An improvement that
+    // fails the altitude gate leaves the previous best standing.
     for (let i = 0; i < PLANETS.length; i++) {
       for (let j = i + 1; j < PLANETS.length; j++) {
         const a = PLANETS[i];
@@ -590,7 +594,13 @@ function planetaryEvents({ from, hours, lat, lon, cloudCoverAt }) {
         const key = `${a.name}|${b.name}`;
         const separation = angularSeparationDeg(a.body, b.body, date, lat, lon);
         const previous = closest.get(key);
-        if (!previous || separation < previous.separation) {
+        if (previous && separation >= previous.separation) {
+          continue;
+        }
+        if (
+          bodyAltitudeDeg(a.body, date, lat, lon) >= MIN_ALTITUDE_DEG &&
+          bodyAltitudeDeg(b.body, date, lat, lon) >= MIN_ALTITUDE_DEG
+        ) {
           closest.set(key, { separation, date });
         }
       }
