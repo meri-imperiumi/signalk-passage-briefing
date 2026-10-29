@@ -225,6 +225,13 @@ function shouldRetainSubject(subject, retained = RETAINED_SUBJECTS) {
  * section into semantic blocks on blank lines. The preamble before
  * the first anchor is its own section.
  *
+ * Bulletins wrapped in single newlines on the wire (MetService's
+ * TGFTP products print each Part 2/3 sentence on its own line) split
+ * additionally on `BLOCK_START_ANCHOR`: a declaration or named
+ * reference starts a new block where the blank-line rendering would
+ * have had a paragraph break — the engine sees the same block
+ * structure whichever way the issuer typeset it.
+ *
  * @param {string} text - Cleaned bulletin text
  * @returns {string[][]} Sections of non-empty blocks
  */
@@ -254,11 +261,22 @@ function segmentSections(text) {
       paragraph = [];
     };
     for (const line of sectionLines) {
-      if (line.trim().length === 0) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) {
         flush();
-      } else {
-        paragraph.push(line);
+        continue;
       }
+      // A line starting a new declaration or named reference splits
+      // here when the previous line ended a sentence — mid-sentence
+      // wraps in NWS prose never split
+      if (
+        paragraph.length > 0 &&
+        /[.:]\s*$/.test(paragraph[paragraph.length - 1]) &&
+        BLOCK_START_ANCHOR.test(trimmed)
+      ) {
+        flush();
+      }
+      paragraph.push(line);
     }
     flush();
     return blocks;
@@ -746,6 +764,23 @@ function parseCardinalBounds(text, coverage = null) {
  */
 const FEATURE_DECLARATION =
   /^(?:(?:SHALLOW|DEEP|INTENSE|WEAK)\s+)?(?:TROUGH|COLD FRONT|WARM FRONT|SHEAR LINE|RIDGE|CONVERGENCE ZONE|LOW(?:\s+PRESSURE)?|HIGH)\s+([A-Z]\d+|CF|L|H)\b/i;
+
+/**
+ * Line-start anchors that begin a new semantic block even without a
+ * blank line: issuers wrap bulletins in single newlines on the wire
+ * (MetService TGFTP products print each Part 2/3 sentence on its own
+ * line), and the sentence boundary is where the blank-line rendering
+ * would have split. A feature declaration, a `WITHIN … OF <name>`
+ * reference or band, a side-of-feature bound, or an Outlook header
+ * starts the next sentence. Callers guard on the previous line
+ * ending one (period or colon), so mid-sentence line wraps in NWS
+ * prose never split; anchored so an unanchored WITHIN phrase inside
+ * a longer line is prose, not a boundary.
+ */
+const BLOCK_START_ANCHOR = new RegExp(
+  `^(?:${FEATURE_DECLARATION.source}|WITHIN\\s+(?:\\d+(?:\\.\\d+)?\\s*(?:NM|NAUTICAL\\s+MILES?)?\\s+(?:(?:NORTH|SOUTH|EAST|WEST)\\s+OF\\s+)?(?:CF|L|H|[A-Z]\\d+)|(?:CF|L|H|[A-Z]\\d+))\\b|(?:NORTH|SOUTH|EAST|WEST)\\s+OF\\s+(?:CF|L|H|[A-Z]\\d+)\\b|OUTLOOK\\b)`,
+  "i",
+);
 
 /** Name-shaped token referenced by cardinal bounds. */
 const FEATURE_NAME = "(CF|L|H|[A-Z]\\d+)";

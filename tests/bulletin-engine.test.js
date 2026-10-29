@@ -112,6 +112,79 @@ test("segmentBlocks anchors on PART headings and blank lines", () => {
   assert.match(warning, /DEVELOPING TROUGH/);
 });
 
+test("single-newline rendering splits per sentence on declarations and references", () => {
+  // MetService TGFTP rendering: no blank lines inside the parts — the
+  // wire form of the Part 2/3 bodies, where the blank-line rendering
+  // would have one paragraph per sentence
+  const blocks = segmentBlocks(
+    [
+      "Part 3 - Forecast:",
+      "Refer to latest warnings.",
+      "Within 180 nautical miles south of F1: Poor visibility in rain, easing by 290600UTC.",
+      "Within A1: Northwest 25kt at times, poor visibility in rain developing by 290000UTC.",
+      "East of F2: Northwest 25kt at times.",
+      "Outlook for the following 72 hours:",
+      "Front 40S 174W 37S 176W 33S 179W, moving east. West of Front: Westerly quarter 30kt to gale, easing by 311200UTC.",
+    ].join("\n"),
+  );
+  // The Part 3 anchor and "Refer to latest warnings." stay one block
+  // (boilerplate, dropped downstream); each named reference sentence
+  // splits into its own block
+  assert.ok(
+    blocks.some((b) => /^Within 180 nautical miles south of F1/.test(b)),
+    "distance-band reference split",
+  );
+  assert.ok(
+    blocks.some((b) => /^Within A1:/.test(b)),
+    "area reference split",
+  );
+  assert.ok(
+    blocks.some((b) => /^East of F2: Northwest 25kt at times\.$/.test(b)),
+    "side-of-feature reference split",
+  );
+  // The Outlook header stays fused with its front chain and the
+  // West-of-Front prose: the chain is the outlook's own geometry
+  const outlook = blocks.find((b) =>
+    /Outlook for the following 72 hours/.test(b),
+  );
+  assert.ok(outlook, "outlook block found");
+  assert.match(outlook, /Front 40S 174W/);
+  assert.match(outlook, /West of Front/);
+});
+
+test("a fused NFFN trough declaration splits from its predecessor", () => {
+  // Some wire feeds drop the blank line between the trough paragraphs:
+  // the T2 declaration opens its own block the same way a blank line
+  // would have made it
+  const blocks = segmentBlocks(
+    [
+      "TROUGH T1 13S 163E 09S 172E  SLOW MOVING. POOR VISIBILITY IN",
+      "OCCASIONAL SHOWERS WITHIN 090 NAUTICAL MILES OF T1.",
+      "TROUGH T2 08S 180 07S 170W 09S 150W 19S 120W SLOW MOVING. POOR",
+      "VISIBILITY IN SHOWERS, HEAVY AT TIMES WITHIN",
+      "120 NAUTICAL MILES OF T2.",
+    ].join("\n"),
+  );
+  const trough1 = blocks.find((b) => /^TROUGH T1/.test(b));
+  const trough2 = blocks.find((b) => /^TROUGH T2/.test(b));
+  assert.ok(trough1, "trough 1 leads its own block");
+  assert.ok(trough2, "trough 2 splits from trough 1's paragraph");
+  assert.match(trough1, /WITHIN 090 NAUTICAL MILES OF T1/);
+  assert.match(trough2, /120 NAUTICAL MILES OF T2/);
+});
+
+test("mid-sentence wraps never split, even when a wrap line opens with a reference", () => {
+  const blocks = segmentBlocks(
+    [
+      "EXPECT SOUTHEAST WINDS 25 KT OR GREATER",
+      "EAST OF F2 AT 291800UTC.",
+    ].join("\n"),
+  );
+  // The wrap line opens with a side-of-feature bound, but the previous
+  // line does not end a sentence: the wrap continues the paragraph
+  assert.equal(blocks.length, 1, `blocks ${JSON.stringify(blocks)}`);
+});
+
 // --- Geographic extraction ---------------------------------------------------
 
 test("coordinate chains parse with hemisphere letters and closing", () => {
