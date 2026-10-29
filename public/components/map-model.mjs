@@ -612,7 +612,9 @@ export function regionShapes(regions, referenceLon = null) {
     const geometry = region?.feature?.geometry;
     const rings = [];
     if (geometry?.type === "Polygon") {
-      const points = unwrapFrame(geometry.coordinates ?? [], referenceLon);
+      // GeoJSON Polygon coordinates are an array of rings; the outer
+      // ring draws (the engine publishes exactly one, no holes)
+      const points = unwrapFrame(geometry.coordinates[0] ?? [], referenceLon);
       if (points.length > 0) {
         rings.push(points);
       }

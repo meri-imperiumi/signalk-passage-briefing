@@ -197,11 +197,13 @@ test("map model", async (t) => {
             geometry: {
               type: "Polygon",
               coordinates: [
-                [-180, -30],
-                [-180, -10],
-                [-169, -10],
-                [-169, -30],
-                [-180, -30],
+                [
+                  [-180, -30],
+                  [-180, -10],
+                  [-169, -10],
+                  [-169, -30],
+                  [-180, -30],
+                ],
               ],
             },
             properties: {
@@ -218,6 +220,14 @@ test("map model", async (t) => {
       assert.equal(ours[0].dashed, true);
       assert.equal(ours[0].ours, true);
       assert.equal(ours[0].rings.length, 1);
+      // The ring survives as the five corner points, not collapsed
+      // into one garbage "point" (the plain-Polygon regression this
+      // assertion pins: real published regions are spec-clean
+      // coordinates: [ring], unlike the bare rings these fixtures
+      // carried before)
+      assert.equal(ours[0].rings[0].length, 5);
+      assert.deepEqual(ours[0].rings[0][0], [-180, -30]);
+      assert.deepEqual(ours[0].rings[0][2], [-169, -10]);
       assert.equal(ours[0].coverage, null);
       assert.equal(ours[0].derived, "extracted");
 
@@ -231,10 +241,12 @@ test("map model", async (t) => {
             geometry: {
               type: "Polygon",
               coordinates: [
-                [0, 0],
-                [0, 1],
-                [1, 1],
-                [0, 0],
+                [
+                  [0, 0],
+                  [0, 1],
+                  [1, 1],
+                  [0, 0],
+                ],
               ],
             },
             properties: {
@@ -257,10 +269,12 @@ test("map model", async (t) => {
             geometry: {
               type: "Polygon",
               coordinates: [
-                [0, 0],
-                [0, 1],
-                [1, 1],
-                [0, 0],
+                [
+                  [0, 0],
+                  [0, 1],
+                  [1, 1],
+                  [0, 0],
+                ],
               ],
             },
           },
@@ -302,6 +316,50 @@ test("map model", async (t) => {
 
       // Geometry-less entries draw nothing
       assert.deepEqual(regionShapes({ broken: { feature: {} } }), []);
+    },
+  );
+
+  await t.test(
+    "regionShapes: the clamped swells region draws in the boat's frame (work doc #57)",
+    () => {
+      // What geometryToRegionGeometry publishes for the Fiji swells
+      // box after the declared-area clamp: a spec-clean plain Polygon
+      // (no seam crossing), 170W–120W, equator–25S
+      const regions = {
+        "metarea-area-swells": {
+          name: "MODERATE SOUTHERLY SWELLS",
+          description:
+            "IN THE AREA EAST OF 170W, EXPECT MODERATE SOUTHERLY SWELLS.",
+          feature: {
+            geometry: {
+              type: "Polygon",
+              coordinates: [
+                [
+                  [-170, -25],
+                  [-170, 0],
+                  [-120, 0],
+                  [-120, -25],
+                  [-170, -25],
+                ],
+              ],
+            },
+            properties: {
+              sourcePlugin: "signalk-passage-briefing",
+              geometryType: "bbox",
+              derived: "extracted",
+            },
+          },
+        },
+      };
+      // The Neiafu vessel sits west of the box: the ring unwraps into
+      // the boat's frame as one 50°-wide band, not a wrapped sliver
+      const specs = regionShapes(regions, -173.98);
+      assert.equal(specs.length, 1);
+      const lons = specs[0].rings[0].map(([lon]) => lon);
+      assert.equal(Math.min(...lons), -170);
+      assert.equal(Math.max(...lons), -120);
+      assert.equal(specs[0].dashed, true);
+      assert.equal(specs[0].severe, false);
     },
   );
 
