@@ -52,13 +52,6 @@
  */
 const RESOURCE_TYPE = "logentries";
 
-/**
- * The `logentries` listing contract requires an explicit window or
- * limit (a bare listing answers 400); these bound "all history".
- */
-const ALL_HISTORY_FROM = "1970-01-01T00:00:00.000Z";
-const ALL_HISTORY_TO = "9999-12-31T23:59:59.999Z";
-
 /** Lookback added before a windowed read: the entries just before the
  * window carry the sail state its first changes classify against, so
  * listing a month no longer parses the whole log (a 1000-day logbook
@@ -570,8 +563,8 @@ async function readLogbookEntries(app, { from, to } = {}) {
   let resourceMap;
   try {
     resourceMap = await app.resourcesApi.listResources(RESOURCE_TYPE, {
-      from: isoWindowBound(from) ?? ALL_HISTORY_FROM,
-      to: isoWindowBound(to) ?? ALL_HISTORY_TO,
+      from: isoWindowBound(from),
+      to: isoWindowBound(to),
     });
   } catch (error) {
     throw new Error(
@@ -610,8 +603,8 @@ async function readLogbookEntries(app, { from, to } = {}) {
 async function readLogbookEntriesRest({ baseUrl, token, from, to } = {}) {
   const base = (baseUrl ?? "http://localhost:3000").replace(/\/+$/, "");
   const query = new URLSearchParams({
-    from: isoWindowBound(from) ?? ALL_HISTORY_FROM,
-    to: isoWindowBound(to) ?? ALL_HISTORY_TO,
+    from: isoWindowBound(from),
+    to: isoWindowBound(to),
   });
   const url = `${base}/signalk/v2/api/resources/${RESOURCE_TYPE}?${query}`;
   const response = await fetch(url, {

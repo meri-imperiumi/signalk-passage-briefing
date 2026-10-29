@@ -393,8 +393,12 @@ describe("readLogbookEntries", () => {
     assert.equal(entries.length, 2);
     assert.equal(entries[0].datetime, "2023-03-19T09:00:00.000Z");
     assert.equal(entries[1].datetime, "2023-03-20T08:00:00.000Z");
-    // The listing contract requires an explicit window or limit
-    assert.ok(queries[0].from && queries[0].to);
+    // A windowless read sends no bounds: the provider's own bare-listing
+    // path reads the dates that exist on disk. Sending epoch/eternity
+    // instead made the provider enumerate millions of phantom dates
+    // (9999 − epoch) and OOM the server (from-only windows too)
+    assert.equal(queries[0].from, null);
+    assert.equal(queries[0].to, null);
   });
 
   test("no resources API or no provider fails loudly with the reason", async () => {
