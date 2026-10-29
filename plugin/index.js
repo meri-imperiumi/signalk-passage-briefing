@@ -3965,6 +3965,9 @@ module.exports = (app) => {
                 routeListCache.at = Date.now();
               } catch (error) {
                 routeListCache.error = error.message;
+                // The cache keeps serving the stale list; without
+                // this line a failing resources store is invisible
+                app.debug?.(`Route list refresh failed: ${error.message}`);
               } finally {
                 routeListCache.inFlight = null;
               }
