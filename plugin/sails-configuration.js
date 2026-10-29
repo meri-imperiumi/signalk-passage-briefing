@@ -147,15 +147,6 @@ function sailsMatchingStateKey(sails, sailStateKey) {
   return sails.filter((sail) => padded.includes(`_${sail.nameKey}_`));
 }
 
-module.exports = {
-  MS_TO_KNOTS,
-  DOWNWIND_FAMILIES,
-  normalizeSailName,
-  readSailsConfiguration,
-  sailsMatchingStateKey,
-  classifySail,
-};
-
 /**
  * The downwind sail inventory shaped for the deployment advisor (work
  * doc #41): family, the measured-vs-drive claim, the configured wind
