@@ -986,11 +986,24 @@ module.exports = (app) => {
           break;
         }
       }
+      // The raw console reads the whole set, same as the in-force case
+      const readable = cached
+        .slice(0, MERGE_BULLETINS)
+        .filter(
+          (entry) =>
+            entry.zone != null ||
+            entry.format === "ukho-json" ||
+            textNearTrack(entry.text, track) !== false,
+        );
+      const texts = readable
+        .map((entry) => bulletinMetaForEntry(entry)?.bulletinText ?? "")
+        .filter(Boolean);
       return {
         empty: true,
         ...(meta ?? {}),
         issuedAt:
           meta?.issuedAt ?? cached[0]?.fetchedAt ?? new Date(0).toISOString(),
+        bulletinText: texts.join("\n\n") || (meta?.bulletinText ?? ""),
         blocks: [],
         wider: [],
       };
@@ -1008,24 +1021,32 @@ module.exports = (app) => {
     }
     // The headline belongs to the bulletin that actually matched: the
     // newest entry *with retained blocks*, never the cache's newest
-    // entry whatever ocean it came from
-    // The headline belongs to the bulletin that actually matched: the
-    // newest entry *with retained blocks*, never the cache's newest
     // entry whatever ocean it came from. The raw console reads the
-    // whole set: every kept bulletin's text, newest first — at a
-    // METAREA boundary the crew reads Islands AND Subtropic.
+    // whole set: every cached bulletin for our waters (zone-tagged,
+    // or plausibly covering the track), newest first — the crew's
+    // reading material and the parse's safety net, whatever the
+    // filtered blocks retained. The bulletins are human-written and
+    // reformat without notice.
     const meta = bulletinMetaForEntry(merged[0].entry) ?? {
       header: "",
       issuedAt: merged[0].entry.fetchedAt ?? new Date(0).toISOString(),
       bulletinText: merged[0].entry.text,
       source: merged[0].entry.source ?? "api",
     };
+    const readable = cached
+      .slice(0, MERGE_BULLETINS)
+      .filter(
+        (entry) =>
+          entry.zone != null ||
+          entry.format === "ukho-json" ||
+          textNearTrack(entry.text, track) !== false,
+      );
+    const texts = readable
+      .map((entry) => bulletinMetaForEntry(entry)?.bulletinText ?? "")
+      .filter(Boolean);
     return {
       ...meta,
-      bulletinText: merged
-        .map(({ entry }) => bulletinMetaForEntry(entry)?.bulletinText ?? "")
-        .filter(Boolean)
-        .join("\n\n"),
+      bulletinText: texts.join("\n\n") || meta.bulletinText,
       blocks,
       wider,
     };
