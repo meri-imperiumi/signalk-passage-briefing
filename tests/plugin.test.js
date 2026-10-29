@@ -1390,6 +1390,20 @@ describe("plugin", () => {
       "SITUATION IS MODERATE OVER REMAINDER WATERS.",
       "NNNN",
     ].join("\n");
+    // A second issuer on a second feed: its front sits on the route's
+    // dateline crossing, so the merged console reads both bulletins
+    const SECOND = [
+      "FQPS43 NZKL 021200Z AUG 26",
+      "MARINE WEATHER BULLETIN FOR SUBTROPIC",
+      "Area from 25S to 40S, western boundary 170E, eastern boundary 170W.",
+      "",
+      "Issued by Meteorological Service of New Zealand,",
+      "Wellington issued at 021200UTC Valid until 031200UTC.",
+      "",
+      "Part 2 - Situation analysis at 021200UTC:",
+      "Front F9 24S 180 27S 179E 30S 176E, moving east 20kt.",
+      "NNNN",
+    ].join("\n");
 
     const app = createMockApp();
     // Tonga → Opua: crosses the antimeridian
@@ -1413,7 +1427,12 @@ describe("plugin", () => {
       },
     };
     const plugin = pluginFactory(app);
-    plugin.start({ bulletin_urls: ["https://met.test/navarea.txt"] });
+    plugin.start({
+      bulletin_urls: [
+        "https://met.test/navarea.txt",
+        "https://met.test/second.txt",
+      ],
+    });
     plugin.registerWithRouter(app.router);
     const feed = app.getDeltaHandlers()[0];
     const call = async (path) => {
@@ -1454,7 +1473,8 @@ describe("plugin", () => {
       if (String(url).includes("met.test")) {
         return {
           ok: true,
-          text: async () => NAVAREA,
+          text: async () =>
+            String(url).includes("second.txt") ? SECOND : NAVAREA,
           json: async () => ({}),
         };
       }
@@ -1463,7 +1483,10 @@ describe("plugin", () => {
     try {
       res = await call("/api/bulletin/refresh");
       assert.equal(res.code, null);
-      assert.deepEqual(res.payload.fetched, ["https://met.test/navarea.txt"]);
+      assert.deepEqual(res.payload.fetched, [
+        "https://met.test/navarea.txt",
+        "https://met.test/second.txt",
+      ]);
 
       // Briefing refresh attaches the filtered bulletin to the payload
       res = await call("/api/briefing/refresh");
@@ -1480,6 +1503,22 @@ describe("plugin", () => {
       // Provenance (work doc #31): the feed URL the text arrived
       // from rides every surviving block
       assert.equal(trough.sourceUrl, "https://met.test/navarea.txt");
+      // The raw console reads the whole set: one text per kept
+      // bulletin, both issuers' full texts joined — not just the
+      // newest entry's
+      console.log(
+        "DBG9 blocks:",
+        JSON.stringify(bulletin.blocks.map((b) => b.text.slice(0, 40))),
+      );
+      console.log(
+        "DBG9 merged entry text head:",
+        JSON.stringify(bulletin.bulletinText.slice(0, 80)),
+      );
+      assert.match(bulletin.bulletinText, /TROUGH T1/);
+      assert.match(bulletin.bulletinText, /Front F9/);
+      // The raw console reads the whole set: one text per kept
+      // bulletin, not just the newest entry's
+      assert.match(bulletin.bulletinText, /TROUGH/);
     } finally {
       globalThis.fetch = originalFetch;
     }

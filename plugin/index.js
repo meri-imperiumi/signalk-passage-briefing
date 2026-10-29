@@ -1009,13 +1009,26 @@ module.exports = (app) => {
     // The headline belongs to the bulletin that actually matched: the
     // newest entry *with retained blocks*, never the cache's newest
     // entry whatever ocean it came from
+    // The headline belongs to the bulletin that actually matched: the
+    // newest entry *with retained blocks*, never the cache's newest
+    // entry whatever ocean it came from. The raw console reads the
+    // whole set: every kept bulletin's text, newest first — at a
+    // METAREA boundary the crew reads Islands AND Subtropic.
     const meta = bulletinMetaForEntry(merged[0].entry) ?? {
       header: "",
       issuedAt: merged[0].entry.fetchedAt ?? new Date(0).toISOString(),
       bulletinText: merged[0].entry.text,
       source: merged[0].entry.source ?? "api",
     };
-    return { ...meta, blocks, wider };
+    return {
+      ...meta,
+      bulletinText: merged
+        .map(({ entry }) => bulletinMetaForEntry(entry)?.bulletinText ?? "")
+        .filter(Boolean)
+        .join("\n\n"),
+      blocks,
+      wider,
+    };
   }
 
   /**

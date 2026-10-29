@@ -860,7 +860,7 @@ const FEATURE_DECLARATION =
  * a longer line is prose, not a boundary.
  */
 const BLOCK_START_ANCHOR = new RegExp(
-  `^(?:${FEATURE_DECLARATION.source}|WITHIN\\s+(?:\\d+(?:\\.\\d+)?\\s*(?:NM|NAUTICAL\\s+MILES?)?\\s+(?:(?:NORTH|SOUTH|EAST|WEST)\\s+OF\\s+)?(?:CF|L|H|[A-Z]\\d+)|(?:CF|L|H|[A-Z]\\d+))\\b|(?:NORTH|SOUTH|EAST|WEST)\\s+OF\\s+(?:CF|L|H|[A-Z]\\d+)\\b|OUTLOOK\\b)`,
+  `^(?:${FEATURE_DECLARATION.source}|WITHIN\\s+(?:(?:\\d+(?:\\.\\d+)?\\s*(?:NM|NAUTICAL\\s+MILES?)?\\s*)?(?:(?:NORTH|SOUTH|EAST|WEST)\\s+)?OF\\s+)?(?:CF|L|H|[A-Z]\\d+)\\b|(?:NORTH(?:EAST|WEST)?|SOUTH(?:EAST|WEST)?|EAST|WEST)\\s+OF\\s+(?:CF|L|H|[A-Z]\\d+)\\b|OUTLOOK\\b)`,
   "i",
 );
 
