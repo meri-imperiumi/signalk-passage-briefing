@@ -185,6 +185,8 @@ const SOURCE_REFRESH_MS = {
   ephemeris: 24 * 60 * 60 * 1000,
   reentry: 12 * 60 * 60 * 1000,
   launch: 6 * 60 * 60 * 1000,
+  /** Hull data changes only when the boat's data or config changes. */
+  hull: 24 * 60 * 60 * 1000,
 };
 
 /**
@@ -504,6 +506,12 @@ module.exports = (app) => {
     label: "Reentry watch (Space-Track TIP)",
     kind: "reentry",
     expectedRefreshMs: SOURCE_REFRESH_MS.reentry,
+  };
+  const HULL_SOURCE = {
+    id: "hull-data",
+    label: "Hull description (design.* / settings)",
+    kind: "signalk",
+    expectedRefreshMs: SOURCE_REFRESH_MS.hull,
   };
   const LAUNCH_SOURCE = {
     id: "launch-watch",
@@ -1861,10 +1869,74 @@ module.exports = (app) => {
    * @param {number} [forecastDays]
    * @returns {Promise<{routeId: string, cached: boolean, cachedAt: string|null, fetchedAt?: string, offline?: boolean}>}
    */
+  /** Cached dynamic import of the shared physics module (CJS host,
+   * ESM module — same pattern as the route-sim import). */
+  let hullPhysicsPromise = null;
+  const hullPhysics = () =>
+    (hullPhysicsPromise ??= import("../public/sereno-physics.mjs"));
+
+  /**
+   * Records the hull description's state on the Data Sources
+   * checklist (work doc #56): which hull terms are grounded and from
+   * where, and what the motion kernels can therefore run. A boat
+   * that publishes and configures nothing shows the row absent —
+   * information (the legacy kernel is judging the motion), not a
+   * failure.
+   */
+  async function recordHullSource() {
+    if (!sourceStatus) {
+      return;
+    }
+    try {
+      const physics = await hullPhysics();
+      const hull = physics.resolveHull(
+        simulationConfig,
+        simulationConfig.hull_design,
+      );
+      const s = hull.sources;
+      const grounded = [
+        [hull.lengthWaterlineM, s.lengthWaterlineM, "LWL"],
+        [hull.beamM, s.beamM, "beam"],
+        [hull.canoeDraughtM, s.canoeDraughtM, "canoe draught"],
+        [hull.displacementKg, s.displacementKg, "displacement"],
+      ]
+        .filter(([value]) => value != null)
+        .map(([value, source, label]) => `${label} ${value} (${source})`);
+      const complete = grounded.length === 4;
+      const roll =
+        hull.rollNaturalPeriodS != null
+          ? `roll: measured period ${hull.rollNaturalPeriodS} s`
+          : hull.gmMeters != null
+            ? `roll: GM-derived (GM ${hull.gmMeters} m)`
+            : "roll: off — no GM or measured period";
+      if (!grounded.length && !hull.gmMeters && !hull.rollNaturalPeriodS) {
+        sourceStatus.record({ ...HULL_SOURCE, absent: true });
+        return;
+      }
+      sourceStatus.record({
+        ...HULL_SOURCE,
+        note: [
+          complete
+            ? "motion: spectral kernel (Jensen, Mansour & Olsen 2004)"
+            : "incomplete hull — motion on the legacy kernel",
+          grounded.length
+            ? grounded.join(", ")
+            : "no hull terms published or set",
+          roll,
+        ].join("; "),
+      });
+    } catch (error) {
+      app.debug?.(`Hull source status failed: ${error.message}`);
+    }
+  }
+
   async function refreshBriefingQueued(
     routeId,
     forecastDays = simulationForecastDays,
   ) {
+    // Hull description state on the checklist (work doc #56): cheap,
+    // not fetch-gated — the boat's data changes when it changes
+    recordHullSource();
     const offline = !isOnline();
     let coordinates;
     if (typeof app.resourcesApi?.getResource === "function") {
@@ -3549,6 +3621,10 @@ module.exports = (app) => {
         downwindSails: downwindSailCache,
         downwind_night_policy: config.downwind_night_policy,
       };
+      // The hull row rides every config apply (the settings include
+      // the gap-fillers); before start it no-ops — the post-start
+      // record below covers that first pass
+      recordHullSource();
       stateMachine = new PassageStateMachine();
       db = new PassageDatabase(app.getDataDirPath());
 
@@ -3556,6 +3632,7 @@ module.exports = (app) => {
       // get their checklist entries immediately, even before the
       // first cycle runs
       sourceStatus = createSourceStatus({ dataDir: app.getDataDirPath() });
+      recordHullSource();
       // Acknowledgement state survives restarts (work doc #30): the
       // factory runs before getDataDirPath exists, so this loads here
       const hazardState = loadHazardState(app.getDataDirPath());
@@ -3776,6 +3853,7 @@ module.exports = (app) => {
         // the webapp's simulation runs on the current boat (work doc
         // #56)
         simulationConfig.hull_design = readHullDesign();
+        recordHullSource();
         res.json(simulationConfig);
       });
 
