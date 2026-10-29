@@ -36,6 +36,9 @@ function buildPayload({
   rainHour = null,
   /** Forecast gust override (kt); default keeps gusts at tws + 5. */
   gust = null,
+  /** Per-hour gust overrides (kt) — the gust ceiling breaking a
+   * deployment window mid-forecast. */
+  gustByHour = null,
 } = {}) {
   const track = sampleRoutePoints(route);
   const waypoints = track.map((w) => ({
@@ -49,7 +52,8 @@ function buildPayload({
           tws: twsByHour != null ? (twsByHour[h] ?? tws) : tws,
           twd,
           mslp: 1013,
-          gust: gust ?? tws + 5,
+          gust:
+            gustByHour != null ? (gustByHour[h] ?? gust) : (gust ?? tws + 5),
           precip: h === rainHour ? 2.5 : 0,
           precipProbability: h === rainHour ? 80 : 10,
         },
@@ -1935,6 +1939,47 @@ test("squally air kills the downwind deployment (work doc #41)", async () => {
     },
   });
   assert.deepEqual(result.deploymentEvents, []);
+});
+
+test("gusts past the envelope ceiling break the deployment window", async () => {
+  const { simulatePassage } = await simPromise;
+  // The 2025-11 session window: sustained 17 kn sits inside the 25 kn
+  // envelope and the gust factor (≤ 1.9) stays clear of the squall
+  // bar — but the gusts themselves cross the ceiling from hour 3.
+  // The window opens in daylight and breaks at the gust wall instead
+  // of flying the sail over its wind.
+  const result = simulatePassage({
+    payload: buildPayload({
+      twd: 180,
+      tws: 17,
+      // The forecast grid starts at 00:00 UTC; the run starts 06:00,
+      // so the calm-then-squally-gusted stretch rides forecast hours
+      // 6-11 (gust wall from 09:00 UTC)
+      gustByHour: { 6: 19, 7: 19, 8: 19, 9: 31, 10: 31, 11: 31 },
+    }),
+    startTime: new Date("2026-06-21T06:00:00Z"),
+    config: {
+      downwindSails: [
+        {
+          name: "Parasailor",
+          claim: "comfort",
+          minTwaDeg: 130,
+          minTwsKnots: 5,
+          maxTwsKnots: 25,
+        },
+      ],
+    },
+  });
+  const deploy = result.deploymentEvents.find((e) => !e.takeDown);
+  assert.ok(deploy, JSON.stringify(result.deploymentEvents));
+  assert.equal(deploy.sailName, "Parasailor");
+  // The window's own gust stamp stays inside the envelope: a deploy
+  // reading "gusts to 31" past a 25 kn ceiling must not exist
+  assert.ok(deploy.gustMaxKnots <= 25, JSON.stringify(deploy));
+  const takeDown = result.deploymentEvents.find((e) => e.takeDown);
+  assert.ok(takeDown, JSON.stringify(result.deploymentEvents));
+  assert.equal(takeDown.breakReason, "gust above envelope");
+  assert.equal(takeDown.breakLabel, "gusts past the envelope");
 });
 
 test("no downwind sails in the inventory, no deployments", async () => {

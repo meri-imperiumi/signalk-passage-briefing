@@ -50,6 +50,29 @@ test("the gates fire in order with honest reasons", () => {
     "squall gusts",
     "the squall gate fires before the envelope ceiling",
   );
+  // The gusts answer to the envelope ceiling too: a calm-factor hour
+  // (19-24 kn mean, gusts to 30 past a 25 kn Parasailor) is too much
+  // wind for the sail — the mean passing the gate is not enough
+  assert.equal(
+    evaluateDownwindSail({ ...base, gustKnots: 18 }),
+    "gust above envelope",
+    "gusts past the envelope ceiling kill the hour",
+  );
+  assert.equal(
+    evaluateDownwindSail({ ...base, gustKnots: 13 }),
+    null,
+    "gusts inside the envelope keep the hour",
+  );
+  assert.equal(
+    evaluateDownwindSail({ ...base, twsKnots: 20, gustKnots: 22 }),
+    "wind above envelope",
+    "the sustained breach names itself before the gust breach",
+  );
+  assert.equal(
+    evaluateDownwindSail({ ...base, gustFactor: 2.4, gustKnots: 18 }),
+    "squall gusts",
+    "squall cycling keeps its precedence over the gust ceiling",
+  );
   assert.equal(
     evaluateDownwindSail({ ...base, storm: true }),
     "squall window",

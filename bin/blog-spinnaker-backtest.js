@@ -206,6 +206,7 @@ async function main() {
           awsKnots: hour.awsKnots ?? NaN,
           hsMeters: hour.hsMeters ?? undefined,
           gustFactor: hour.gustFactor ?? undefined,
+          gustKnots: hour.gustKnots ?? undefined,
           // This crew's own practice: a third of their flown
           // downwind hours are night hours — the learned nightOk
           // (the configured default stays conservative)

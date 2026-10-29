@@ -76,6 +76,10 @@ export const DOWNWIND_HS_CEILING_M = 3.5;
  * @param {number} params.awsKnots - Apparent wind speed (kn)
  * @param {number} [params.hsMeters] - Significant wave height (m)
  * @param {number} [params.gustFactor] - Gust / base wind ratio
+ * @param {number} [params.gustKnots] - Gust speed (kn); bound by the
+ *   envelope's ceiling like the sustained wind — the gusts are what
+ *   the sail is actually hit with, a mean inside the envelope does
+ *   not fly it through gusts past that envelope
  * @param {boolean} [params.underCanvas] - Whether the plan's rig
  *   carries canvas at the hour — false (motoring or drifting) means
  *   no downwind sail flies
@@ -99,6 +103,7 @@ export function evaluateDownwindSail({
   awsKnots,
   hsMeters,
   gustFactor,
+  gustKnots,
   underCanvas,
   rigChanged,
   night = false,
@@ -144,6 +149,13 @@ export function evaluateDownwindSail({
   }
   if (maxTws != null && twsKnots > maxTws) {
     return "wind above envelope";
+  }
+  // The gusts answer to the same ceiling: a 19-24 kn hour with gusts
+  // to 30 past a 25 kn envelope is too much wind for the sail, and
+  // the gust factor gate above never sees it (the ratio reads calm
+  // squall-free air) — the hour is judged by what it carries
+  if (maxTws != null && Number.isFinite(gustKnots) && gustKnots > maxTws) {
+    return "gust above envelope";
   }
   if (!Number.isFinite(awsKnots) || awsKnots < DOWNWIND_FILL_MIN_AWS_KNOTS) {
     return "below fill floor";
@@ -230,8 +242,9 @@ export function collectDownwindWindows(hours, options = {}) {
  *
  * @param {Array<{hourMs: number, twsKnots: number, twaDeg: number,
  *   awsKnots: number, hsMeters?: number, gustFactor?: number,
- *   night?: boolean, underCanvas?: boolean, rigChanged?: boolean,
- *   storm?: boolean}>} hours - Chronological forecast hours
+ *   gustKnots?: number, night?: boolean, underCanvas?: boolean,
+ *   rigChanged?: boolean, storm?: boolean}>} hours - Chronological
+ *   forecast hours
  * @param {object} [options]
  * @param {Array<{name: string, claim: "comfort"|"drive",
  *   minTwsKnots?: number|null, maxTwsKnots?: number|null,
@@ -289,6 +302,7 @@ export function deploymentPlan(hours, options = {}) {
         awsKnots: hour.awsKnots,
         hsMeters: hour.hsMeters,
         gustFactor: hour.gustFactor,
+        gustKnots: hour.gustKnots,
         underCanvas: hour.underCanvas,
         rigChanged: hour.rigChanged,
         storm: hour.storm,

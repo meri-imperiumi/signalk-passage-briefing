@@ -1144,6 +1144,7 @@ function runDeploymentPass(
           : Math.abs(((row.twaRad / DEG + 540) % 360) - 180),
       awsKnots: row.awsKnots ?? 0,
       hsMeters: row.hsMeters ?? undefined,
+      gustKnots: row.gustKnots ?? undefined,
       gustFactor:
         row.gustKnots != null && row.twsKnots > 1
           ? row.gustKnots / row.twsKnots
@@ -1241,13 +1242,15 @@ function runDeploymentPass(
                       : "night"
                     : d.breakReason === "wind above envelope"
                       ? "wind building past the envelope"
-                      : d.breakReason === "point of sail"
-                        ? "wind angle leaving the reach"
-                        : d.breakReason === "below fill floor"
-                          ? "wind dying"
-                          : d.breakReason === "wind below envelope"
+                      : d.breakReason === "gust above envelope"
+                        ? "gusts past the envelope"
+                        : d.breakReason === "point of sail"
+                          ? "wind angle leaving the reach"
+                          : d.breakReason === "below fill floor"
                             ? "wind dying"
-                            : null;
+                            : d.breakReason === "wind below envelope"
+                              ? "wind dying"
+                              : null;
       if (breakLabel != null) {
         const untilRow = hourly.find(
           (row) => Date.parse(row.timestamp) === d.untilMs,
