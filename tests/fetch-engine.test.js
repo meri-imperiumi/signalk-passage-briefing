@@ -410,6 +410,31 @@ describe("fetchWeatherAlongTrack", () => {
     assert.equal(payload.metadata.source, "api");
   });
 
+  test("a permanent 4xx answers once instead of burning the retry budget", async () => {
+    // The retry ladder is for 429/5xx/network errors; a 400 (an
+    // Open-Meteo parameter rejection, say) will not heal — retrying
+    // it three times cost ~12 s of a metered online window (audit
+    // fix). One request, then the classified error.
+    let attempts = 0;
+    const refusing = async (url) => {
+      attempts += 1;
+      if (String(url).includes("/v1/forecast")) {
+        return {
+          ok: false,
+          status: 400,
+          statusText: "Bad Request",
+          text: async () => JSON.stringify({ reason: "bad parameter" }),
+        };
+      }
+      return mockOpenMeteo()(url);
+    };
+    await assert.rejects(
+      fetchWeatherAlongTrack({ waypoints: WAYPOINTS, fetchImpl: refusing }),
+      /returned 400: bad parameter/,
+    );
+    assert.equal(attempts, 1);
+  });
+
   test("empty waypoints rejected", async () => {
     await assert.rejects(
       fetchWeatherAlongTrack({ waypoints: [], fetchImpl: mockOpenMeteo() }),

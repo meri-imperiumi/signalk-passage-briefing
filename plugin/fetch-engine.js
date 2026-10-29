@@ -358,12 +358,17 @@ async function fetchJson(url, fetchImpl, timeoutMs, tries = 3) {
   for (let attempt = 0; attempt < tries; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // The server answered with a permanent refusal (any 4xx but 429):
+    // retrying cannot help, and the backoff would burn the online
+    // window against a parameter error that will not heal
+    let permanent = false;
     try {
       const response = await fetchImpl(url, { signal: controller.signal });
       if (response.status === 429 || response.status >= 500) {
         lastError = new Error(await describe(response));
       } else if (!response.ok) {
-        throw new Error(await describe(response));
+        lastError = new Error(await describe(response));
+        permanent = true;
       } else {
         return await response.json();
       }
@@ -371,6 +376,9 @@ async function fetchJson(url, fetchImpl, timeoutMs, tries = 3) {
       lastError = error;
     } finally {
       clearTimeout(timer);
+    }
+    if (permanent) {
+      throw lastError;
     }
     await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
   }
