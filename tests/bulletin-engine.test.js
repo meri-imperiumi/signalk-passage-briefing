@@ -671,6 +671,56 @@ test("declared area parses from the NFFN header", () => {
   );
 });
 
+test("MetService area statements parse as declared coverage", () => {
+  // Boundary-walk form (Subtropic): west chain 163E–170E, east
+  // meridian 170W unwraps to 190
+  assert.deepEqual(
+    parseCoverageArea(
+      "Area from 25S to 40S, western boundary from 40S 163E to 29S 170E then to 25S 170E, eastern boundary 170W.",
+    ),
+    [163, -40, 190, -25],
+  );
+  // Forties: same walk, southern band
+  assert.deepEqual(
+    parseCoverageArea(
+      "Area from 40S to 55S, western boundary from 40S 163E to 45S 160E then to 55S 160E, eastern boundary 170W.",
+    ),
+    [160, -55, 190, -40],
+  );
+  // Flat form (Pacific): an AND/TO longitude pair, no seam crossing
+  assert.deepEqual(
+    parseCoverageArea("Area from 25S to 55S and 170W to 120W."),
+    [-170, -55, -120, -25],
+  );
+  // The ice edge quantifies to nothing usable
+  assert.equal(
+    parseCoverageArea(
+      "Area from 55S to southern ice edge between 160E and 120W.",
+    ),
+    null,
+  );
+  // The live fixture's own masthead line parses
+  assert.deepEqual(
+    parseCoverageArea(
+      stripBoilerplate(readFixture("fqps43-nzkl-2026-10-28.txt")),
+    ),
+    [163, -40, 190, -25],
+  );
+});
+
+test("latitude-only bounds inside a MetService bulletin take its span", () => {
+  const coverage = parseCoverageArea(
+    "Area from 25S to 40S, western boundary from 40S 163E to 29S 170E then to 25S 170E, eastern boundary 170W.",
+  );
+  assert.deepEqual(
+    parseCardinalBounds(
+      "IN THE AREA SOUTH OF 35S, EXPECT ROUGH SEAS.",
+      coverage,
+    ),
+    [163, -40, 190, -35],
+  );
+});
+
 test("loose cardinal bounds clamp into the declared area", () => {
   // The report's case: EAST OF 170W is the area slice 170W→120W,
   // equator→25S — not the dateline, pole to pole

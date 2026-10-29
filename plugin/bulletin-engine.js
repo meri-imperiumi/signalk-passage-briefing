@@ -576,24 +576,84 @@ function clampBoundsToArea(bbox, area) {
 /**
  * Parses the bulletin-level declared area from its header lines: the
  * `EQUATOR TO 25S BETWEEN 160E AND 120W` statement NFFN prints under
- * the bulletin title. Loose cardinal bounds inside the bulletin ("IN
- * THE AREA EAST OF 170W, EXPECT MODERATE SOUTHERLY SWELLS") close
- * against this area instead of the dateline defaults, so a one-sided
- * phrase yields the issuer's waters, not half a world. Scanned per
- * line before the first section anchor; the statement must carry
- * both a latitude and a longitude bound — anything less (a lone
- * band, an issuer sentence) is not an area. Bulletins without such a
- * statement — most NWS products state their areas per section —
- * return null and parse exactly as before.
+ * the bulletin title, or MetService's boundary walk (`Area from 25S
+ * to 40S, western boundary from 40S 163E to 29S 170E then to 25S
+ * 170E, eastern boundary 170W.`) and its flat form (`Area from 25S
+ * to 55S and 170W to 120W.`). Loose cardinal bounds inside the
+ * bulletin ("IN THE AREA EAST OF 170W, EXPECT MODERATE SOUTHERLY
+ * SWELLS") close against this area instead of the dateline defaults,
+ * so a one-sided phrase yields the issuer's waters, not half a world.
+ * Scanned per line before the first section anchor; the statement
+ * must carry both a latitude and a longitude bound — anything less
+ * (a lone band, an issuer sentence, an ice-edge reference) is not an
+ * area. Bulletins without such a statement — most NWS products state
+ * their areas per section — return null and parse exactly as before.
  *
  * @param {string} text - Cleaned bulletin text
  * @returns {number[]|null} [minLon, minLat, maxLon, maxLat] with
  *   maxLon unwrapped (+360) when the area crosses the seam
  */
+/**
+ * MetService states its area as a boundary walk — `Area from 25S to
+ * 40S, western boundary from 40S 163E to 29S 170E then to 25S 170E,
+ * eastern boundary 170W.` — or flat, `Area from 25S to 55S and 170W
+ * to 120W.` Either form is a latitude band plus a longitude span; the
+ * walk's east meridian unwraps against the western chain so a
+ * seam-crossing area reads as the eastward arc it is.
+ *
+ * @param {string} line - One header line
+ * @param {RegExpMatchArray} latPair - The `Area from X to Y` match
+ * @returns {number[]|null} [minLon, minLat, maxLon, maxLat], or null
+ *   when the line states no usable longitude span
+ */
+function coverageFromAreaStatement(line, latPair) {
+  const latA = hemisphereDegrees(latPair[1], latPair[2].toUpperCase());
+  const latB = hemisphereDegrees(latPair[3], latPair[4].toUpperCase());
+  const minLat = Math.min(latA, latB);
+  const maxLat = Math.max(latA, latB);
+  // Flat form: the longitude span is an AND/TO pair
+  const flat = line.match(
+    /AND\s+(\d+(?:\.\d+)?)\s*([EW])\s+TO\s+(\d+(?:\.\d+)?)\s*([EW])/i,
+  );
+  if (flat) {
+    const a = hemisphereDegrees(flat[1], flat[2].toUpperCase());
+    const b = hemisphereDegrees(flat[3], flat[4].toUpperCase());
+    let east = a;
+    let span = eastwardSpan(a, b);
+    if (span > 180) {
+      east = b;
+      span = 360 - span;
+    }
+    return [east, minLat, east + span, maxLat];
+  }
+  // Boundary-walk form: the coordinate pairs on the line are the
+  // western chain (the lone eastern meridian carries no latitude, so
+  // it parses as no point); the eastern boundary closes east of it
+  const eastern = line.match(/EASTERN BOUNDARY\s+(\d+(?:\.\d+)?)\s*([EW])/i);
+  const points = parseCoordinatePoints(line);
+  if (!eastern || points.length === 0) {
+    return null;
+  }
+  const westLons = points.map(([lon]) => lon);
+  const minLon = Math.min(...westLons);
+  const meanLon = (minLon + Math.max(...westLons)) / 2;
+  const eastLon = hemisphereDegrees(eastern[1], eastern[2].toUpperCase());
+  return [minLon, minLat, unwrapLon(eastLon, meanLon), maxLat];
+}
+
 function parseCoverageArea(text) {
   for (const line of text.split(/\r?\n/)) {
     if (SECTION_ANCHORS.test(line.trim())) {
       break;
+    }
+    const areaFrom = line.match(
+      /^AREA FROM\s+(\d+(?:\.\d+)?)\s*([NS])\s+TO\s+(\d+(?:\.\d+)?)\s*([NS])/i,
+    );
+    if (areaFrom) {
+      const walked = coverageFromAreaStatement(line, areaFrom);
+      if (walked) {
+        return walked;
+      }
     }
     const bbox = parseCardinalBounds(line);
     if (

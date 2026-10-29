@@ -59,6 +59,26 @@ const RESOURCE_TYPE = "logentries";
 const ALL_HISTORY_FROM = "1970-01-01T00:00:00.000Z";
 const ALL_HISTORY_TO = "9999-12-31T23:59:59.999Z";
 
+/** Lookback added before a windowed read: the entries just before the
+ * window carry the sail state its first changes classify against, so
+ * listing a month no longer parses the whole log (a 1000-day logbook
+ * means 1000 file reads and YAML parses per full listing — enough to
+ * exhaust the server heap). */
+const STATE_LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
+
+/** Normalizes a window bound (Date | ISO string) to the ISO-8601 the
+ * logentries listing contract expects, or null when absent. */
+function isoWindowBound(value) {
+  if (value == null) {
+    return null;
+  }
+  const ms = new Date(value).getTime();
+  if (!Number.isFinite(ms)) {
+    throw new Error(`Invalid logbook window bound: ${String(value)}`);
+  }
+  return new Date(ms).toISOString();
+}
+
 /**
  * m/s → knots (1852 m per NM).
  */
@@ -530,20 +550,28 @@ function normalizeLogEntry(entry) {
  * that read the logbook (backfill, event diagnostics) can say why
  * they found nothing instead of silently reporting zero events.
  *
+ * The read honors an optional window: the provider then only loads
+ * the entries in it. Without a window the read stays the explicit
+ * epoch-to-eternity range — callers that need the whole log ask for
+ * it, and everything else should pass one.
+ *
  * @param {object} app - Signal K plugin `app`
+ * @param {object} [options]
+ * @param {Date|string} [options.from] - Window start (inclusive)
+ * @param {Date|string} [options.to] - Window end (inclusive)
  * @returns {Promise<Array<object>>} Normalized entries, oldest first
  * @throws {Error} When the resources API or the `logentries` provider
  *   is unavailable
  */
-async function readLogbookEntries(app) {
+async function readLogbookEntries(app, { from, to } = {}) {
   if (typeof app?.resourcesApi?.listResources !== "function") {
     throw new Error("Resources API not available on this server");
   }
   let resourceMap;
   try {
     resourceMap = await app.resourcesApi.listResources(RESOURCE_TYPE, {
-      from: ALL_HISTORY_FROM,
-      to: ALL_HISTORY_TO,
+      from: isoWindowBound(from) ?? ALL_HISTORY_FROM,
+      to: isoWindowBound(to) ?? ALL_HISTORY_TO,
     });
   } catch (error) {
     throw new Error(
@@ -575,13 +603,15 @@ async function readLogbookEntries(app) {
  *   (default `http://localhost:3000`)
  * @param {string} [options.token] - Bearer token (readonly suffices
  *   for reads)
+ * @param {Date|string} [options.from] - Window start (inclusive)
+ * @param {Date|string} [options.to] - Window end (inclusive)
  * @returns {Promise<Array<object>>} Normalized entries, oldest first
  */
-async function readLogbookEntriesRest({ baseUrl, token } = {}) {
+async function readLogbookEntriesRest({ baseUrl, token, from, to } = {}) {
   const base = (baseUrl ?? "http://localhost:3000").replace(/\/+$/, "");
   const query = new URLSearchParams({
-    from: ALL_HISTORY_FROM,
-    to: ALL_HISTORY_TO,
+    from: isoWindowBound(from) ?? ALL_HISTORY_FROM,
+    to: isoWindowBound(to) ?? ALL_HISTORY_TO,
   });
   const url = `${base}/signalk/v2/api/resources/${RESOURCE_TYPE}?${query}`;
   const response = await fetch(url, {
@@ -608,9 +638,13 @@ async function readLogbookEntriesRest({ baseUrl, token } = {}) {
 
 /**
  * Reads the logbook through the resources API and extracts
- * sail-change events, optionally bounded to a window (state tracking
- * always starts from the oldest entry so mid-history ranges still
- * classify correctly).
+ * sail-change events, optionally bounded to a window. A window bounds
+ * the provider read too — padded with a fixed state lookback so the
+ * first in-window changes still classify against recent prior state
+ * (a change whose previous rig predates the lookback degrades to a
+ * generic `SAIL_CHANGE`; the entry's own rig snapshot stays exact).
+ * Pre-read `entries` skip the provider entirely and keep the
+ * unbounded state tracking of a full listing.
  *
  * @param {object} [options]
  * @param {object} [options.app] - Signal K plugin `app`; omitted when
@@ -630,7 +664,15 @@ async function readLogbookSailEvents({
   entries,
   knownSailKeys,
 } = {}) {
-  const all = entries || (await readLogbookEntries(app));
+  // The read reaches back past the window so state tracking
+  // classifies the first in-window change; extraction sees those
+  // lookback entries too, and the range filter below drops their
+  // events again
+  const readFrom =
+    from != null && entries == null
+      ? new Date(new Date(from).getTime() - STATE_LOOKBACK_MS)
+      : undefined;
+  const all = entries || (await readLogbookEntries(app, { from: readFrom, to }));
   const events = extractSailEvents(all, { knownSailKeys });
   if (from == null && to == null) {
     return events;

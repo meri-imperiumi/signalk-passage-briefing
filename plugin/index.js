@@ -159,6 +159,11 @@ const BRIEF_AGE_HOURS_PATH = "navigation.briefing.ageHours";
  * this line (work doc #13); here mode keeps its 3h TTL. */
 const ROUTE_TTL_MS = 26 * 60 * 60 * 1000;
 
+/** Padding added before a backfill window's logbook read: sail-event
+ * wind windows look back 15 minutes from each event, so a padded read
+ * covers every in-window event without listing the whole log. */
+const WIND_READ_PAD_MS = 60 * 60 * 1000;
+
 /**
  * Minimum spacing between automatic (edge-triggered) payload fetches
  * (work doc #34 session): every online↔metered transition fires a
@@ -4297,7 +4302,17 @@ module.exports = (app) => {
             req.query.source === "history" &&
             typeof req.query.baseUrl === "string"
               ? createHistoryWindStats({ baseUrl: req.query.baseUrl })
-              : createLogbookWindStats(await readLogbookEntries(app));
+              : createLogbookWindStats(
+                  await readLogbookEntries(app, {
+                    from:
+                      from != null
+                        ? new Date(
+                            Date.parse(from) - WIND_READ_PAD_MS,
+                          ).toISOString()
+                        : undefined,
+                    to,
+                  }),
+                );
           const summary = await backfillSailEvents({
             db,
             events,
