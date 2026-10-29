@@ -197,21 +197,22 @@ class PassageDatabase {
   }
 
   /**
-   * One-time migration (work doc #26): clears the learned matrix and
-   * its derived stores so the next backfill rebuilds everything under
-   * the new learning rules — the no-sails gate, and a learning engine
-   * whose recency rule no longer lets one bare-poles entry erase a
-   * bin's real rig. Classifying and dropping just the poisoned cells
-   * was considered, but whatever rig they had overwritten is
-   * unrecoverable from the matrix alone: the honest move is a full
-   * re-learn from the logbook. The logbook files themselves are
+   * One-time migrations (work doc #26): version 1 cleared the learned
+   * matrix and its derived stores for the no-sails gate and the
+   * recency rule; version 2 clears them again because the logbook
+   * wind stats' TWA derivation changed semantics — a compass wind
+   * direction without a heading is no longer folded and binned as a
+   * point of sail (it stays unknown), so every cell's TWA bin may
+   * have been learned from meaningless values. The honest move is a
+   * full re-learn from the logbook: whatever the old bins held was
+   * trained on the wrong axis. The logbook files themselves are
    * untouched — this only empties the derived store. Until a backfill
    * runs the matrix is empty and suggestions degrade to "keep the
    * current rig".
    */
   resetLearnedMatrix() {
     const version = this.db.prepare("PRAGMA user_version").get().user_version;
-    if (version >= 1) {
+    if (version >= 2) {
       return;
     }
     this.db.exec(`
@@ -219,7 +220,7 @@ class PassageDatabase {
       DELETE FROM wind_history_cache;
       DELETE FROM logbook_sail_events;
     `);
-    this.db.prepare("PRAGMA user_version = 1").run();
+    this.db.prepare("PRAGMA user_version = 2").run();
   }
 
   /**

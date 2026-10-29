@@ -178,26 +178,31 @@ describe("extractSailEvents", () => {
       {
         datetime: "2023-03-20T10:00:00.000Z",
         text: "Motor stopped, sailing with Main, Genoa 1",
+        heading: 90,
         wind: { speed: 11.2, direction: 210 },
       },
       {
         datetime: "2023-03-20T12:00:00.000Z",
         text: "Sailing with Main, Genoa 1",
+        heading: 90,
         wind: { speed: 12, direction: 220 },
       },
       {
         datetime: "2023-03-20T14:19:16.099Z",
         text: "Sails set: Main (1st reef), Genoa 1",
+        heading: 90,
         wind: { speed: 15.5, direction: 225 },
       },
       {
         datetime: "2023-03-20T15:49:51.097Z",
         text: "Sails set: Main, Genoa 1",
+        heading: 90,
         wind: { speed: 13, direction: 230 },
       },
       {
         datetime: "2023-03-20T17:00:00.000Z",
         text: "Sails down, motoring. Thunder.",
+        heading: 90,
         wind: { speed: 6, direction: 180 },
       },
       {
@@ -212,6 +217,7 @@ describe("extractSailEvents", () => {
     assert.equal(events[0].eventType, "REEF_INCREASE");
     assert.equal(events[0].sailState, "GENOA_1_MAIN_1_REEF");
     assert.equal(events[0].twsKnots, 15.5);
+    // 225° from − 90° heading = 135° off the wind
     assert.equal(events[0].twaDeg, 135);
     assert.match(events[0].notes, /Sails set/);
     // Shake-out
@@ -219,7 +225,36 @@ describe("extractSailEvents", () => {
     // Bare poles (manual suffix ignored)
     assert.equal(events[2].eventType, "SAIL_CHANGE");
     assert.equal(events[2].sailState, "NO_SAILS");
-    assert.equal(events[2].twaDeg, 180);
+    // 180° from − 90° heading = 90° off the wind
+    assert.equal(events[2].twaDeg, 90);
+  });
+
+  test("a wind-angle snapshot wins over the compass direction", () => {
+    const events = extractSailEvents([
+      {
+        datetime: "2023-03-20T10:00:00.000Z",
+        text: "Sails set: Main (1st reef), Genoa 1",
+        heading: 0,
+        wind: { speed: 15.5, direction: 225, angle: -90 },
+      },
+    ]);
+    assert.equal(events.length, 1);
+    // angleTrue −90° (wind from the port side) folds to |TWA| 90 —
+    // the bow-relative snapshot, not the 225° compass direction
+    assert.equal(events[0].twaDeg, 90);
+  });
+
+  test("direction without heading leaves the TWA unknown", () => {
+    const events = extractSailEvents([
+      {
+        datetime: "2023-03-20T10:00:00.000Z",
+        text: "Sails set: Main (1st reef), Genoa 1",
+        wind: { speed: 15.5, direction: 225 },
+      },
+    ]);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].twsKnots, 15.5);
+    assert.equal(events[0].twaDeg, null);
   });
 
   test("skips duplicate state declarations and sorts out of order input", () => {
@@ -288,6 +323,18 @@ describe("normalizeLogEntry", () => {
     // Logbook fields beyond the consumer shape are dropped
     assert.equal(entry.id, undefined);
     assert.equal(entry.origin, undefined);
+  });
+
+  test("extracts the wind angle and the vessel heading from the telemetry", () => {
+    const entry = normalizeLogEntry({
+      datetime: "2023-03-20T14:19:16.099Z",
+      telemetry: [
+        { path: "environment.wind.angleTrue", value: -1.5707963267948966 },
+        { path: "navigation.headingTrue", value: 1.5707963267948966 },
+      ],
+    });
+    approx(entry.wind.angle, -90);
+    approx(entry.heading, 90);
   });
 
   test("takes the first usable pathvalue when a path repeats", () => {

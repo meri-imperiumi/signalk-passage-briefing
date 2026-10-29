@@ -163,12 +163,15 @@ describe("sqlite db", () => {
   });
 });
 
-describe("learned-matrix reset migration (work doc #26)", () => {
+describe("learned-matrix reset migration (work doc #26, v2)", () => {
   test("the reset clears the derived stores exactly once", () => {
     const db = makeDb("nosails-migration");
     try {
-      // Fresh construction runs the migration on empty tables
-      assert.equal(db.db.prepare("PRAGMA user_version").get().user_version, 1);
+      // Fresh construction runs the migration on empty tables. v2 is
+      // the logbook-TWA semantics change: a compass direction without
+      // a heading is no longer binned as a point of sail, so cells
+      // learned under v1 trained on the wrong axis
+      assert.equal(db.db.prepare("PRAGMA user_version").get().user_version, 2);
 
       // Seed the derived stores, then re-run migrate: the version
       // marker keeps the reset from wiping live data
@@ -236,7 +239,52 @@ describe("learned-matrix reset migration (work doc #26)", () => {
         0,
       );
       assert.equal(db.getSailEvents({ limit: 100 }).length, 0);
-      assert.equal(db.db.prepare("PRAGMA user_version").get().user_version, 1);
+      assert.equal(db.db.prepare("PRAGMA user_version").get().user_version, 2);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("a v1 database re-learns under the v2 TWA rules", () => {
+    const db = makeDb("nosails-reset");
+    try {
+      // Simulate a database learned under the old rules — the v1
+      // version marker with cells whose TWA bins came from folded
+      // compass directions
+      db.db.prepare("PRAGMA user_version = 1").run();
+      db.upsertMatrixBin({
+        twsBin: 3,
+        twaBin: 4,
+        night: true,
+        preferredSail: "NO_SAILS",
+        avgTwsTrigger: 16,
+        peakGustTrigger: 20,
+        sampleCount: 2,
+      });
+      db.upsertWindHistory({
+        timestamp: "2023-03-20T09:28:00.000Z",
+        twsAvg: 16,
+        twsPeak: 20,
+        twaAvg: 140,
+      });
+      db.recordSailEvent({
+        timestamp: "2023-03-20T09:28:00.000Z",
+        eventType: "SAIL_CHANGE",
+        sailState: "NO_SAILS",
+      });
+
+      db.migrate();
+
+      // Everything derived is gone; the logbook files outside the
+      // store are the source of truth and the next backfill rebuilds
+      assert.equal(db.getMatrixBins().length, 0);
+      assert.equal(
+        db.getWindHistory("2023-03-20T00:00:00Z", "2023-03-21T00:00:00Z")
+          .length,
+        0,
+      );
+      assert.equal(db.getSailEvents({ limit: 100 }).length, 0);
+      assert.equal(db.db.prepare("PRAGMA user_version").get().user_version, 2);
     } finally {
       db.close();
     }

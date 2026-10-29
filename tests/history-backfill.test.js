@@ -44,23 +44,30 @@ describe("wind helpers", () => {
 });
 
 describe("createLogbookWindStats", () => {
+  // Direction snapshots convert to TWA only with the entry's heading
+  // (direction − heading): the fixtures carry a 30° heading, so the
+  // window's directions 210°/220° are 180°/170° off the wind
   const entries = [
     {
       datetime: "2023-03-20T08:00:00.000Z",
+      heading: 30,
       wind: { speed: 10, direction: 200 },
     },
     {
       datetime: "2023-03-20T09:20:00.000Z",
       text: "Motor stopped, sailing with Main",
+      heading: 30,
       wind: { speed: 12, direction: 210 },
     },
     {
       datetime: "2023-03-20T09:28:00.000Z",
       text: "Sails set: Main (1st reef)",
+      heading: 30,
       wind: { speed: 16, direction: 220 },
     },
     {
       datetime: "2023-03-20T11:00:00.000Z",
+      heading: 30,
       wind: { speed: 20, direction: 230 },
     },
   ];
@@ -71,8 +78,8 @@ describe("createLogbookWindStats", () => {
     assert.equal(stats.samples, 2);
     assert.equal(stats.twsAvg, 14);
     assert.equal(stats.twsPeak, 16);
-    // Circular mean of 150 (from 210°) and 140 (from 220°)
-    assert.equal(Math.round(stats.twaAvg), 145);
+    // Circular mean of 180 (210° from, 30° heading) and 170 (220° from)
+    assert.equal(Math.round(stats.twaAvg), 175);
   });
 
   test("window is bounded at 15 minutes before the event", () => {
@@ -88,6 +95,28 @@ describe("createLogbookWindStats", () => {
   test("null when the window has no wind data", () => {
     const getStats = createLogbookWindStats(entries);
     assert.equal(getStats({ timestamp: "2023-03-20T10:30:00.000Z" }), null);
+  });
+
+  test("a compass direction without a heading is no TWA — the bin trains TWS only", () => {
+    // A direction snapshot is wind-relative-to-north; folding it onto
+    // 0..180 and binning it as a point of sail filled the matrix with
+    // arbitrary compass values (the audit fix). Without the heading
+    // the angle stays unknown and the window's TWA average reads 0.
+    const getStats = createLogbookWindStats([
+      {
+        datetime: "2023-03-20T09:20:00.000Z",
+        wind: { speed: 12, direction: 210 },
+      },
+      {
+        datetime: "2023-03-20T09:28:00.000Z",
+        text: "Sails set: Main (1st reef)",
+        wind: { speed: 16, direction: 220 },
+      },
+    ]);
+    const stats = getStats({ timestamp: "2023-03-20T09:28:00.000Z" });
+    assert.equal(stats.samples, 2);
+    assert.equal(stats.twsAvg, 14);
+    assert.equal(stats.twaAvg, 0);
   });
 });
 

@@ -25,9 +25,24 @@
  * tokens) and normalizes the resource representation into the shape
  * the event extractor and the wind-stats builder consume: position
  * from the `navigation.position` pathvalue, wind snapshots from
- * `environment.wind.speedOverGround` (m/s → knots) and
- * `environment.wind.directionTrue` (radians → degrees). This module
- * is the *only* place that knows the resource representation.
+ * `environment.wind.speedOverGround` (m/s → knots), the wind's
+ * relative angle from `environment.wind.angleTrue` (radians →
+ * degrees, signed, relative to the bow), the compass direction from
+ * `environment.wind.directionTrue` (radians → degrees, FROM
+ * convention) and the vessel heading from `navigation.headingTrue`
+ * (radians → degrees). This module is the *only* place that knows the
+ * resource representation.
+ *
+ * TWA derivation ({@link twaDegFromEntry}): the learned matrix bins
+ * by |true wind angle| (angle to the bow, 0..180) — the same quantity
+ * the History-API wind stats fold from `environment.wind.angleTrue`.
+ * An entry's own angle snapshot is used directly; a direction
+ * snapshot only converts with the entry's heading
+ * (direction − heading, folded). A direction without a heading is
+ * wind-relative-to-north and says nothing about the point of sail —
+ * reporting it as TWA would fill the matrix's close-hauled…running
+ * bins with compass values, so the angle stays unknown (null) and
+ * the observation trains TWS only.
  *
  * @file logbook-source.js
  */
@@ -343,11 +358,7 @@ function extractSailEvents(entries, { knownSailKeys } = {}) {
       entry.wind && typeof entry.wind.speed === "number"
         ? {
             twsKnots: entry.wind.speed,
-            twaDeg: foldTwaDegrees(
-              typeof entry.wind.direction === "number"
-                ? entry.wind.direction
-                : null,
-            ),
+            twaDeg: twaDegFromEntry(entry),
           }
         : {};
 
@@ -394,18 +405,50 @@ function foldTwaDegrees(degrees) {
 }
 
 /**
+ * |TWA| of a normalized logbook entry, folded to the 0..180 range the
+ * learned matrix bins use. The entry's own wind-angle snapshot wins
+ * (`environment.wind.angleTrue`, relative to the bow — the same
+ * quantity the History-API source of record folds); a compass
+ * direction converts only with the entry's heading
+ * (direction − heading). A direction without a heading is not a wind
+ * angle — the answer is null (unknown), never a compass value
+ * masquerading as a point of sail.
+ *
+ * @param {{wind?: {angle?: number, direction?: number}, heading?: number}} entry
+ *   Normalized entry (see {@link normalizeLogEntry})
+ * @returns {number|null} |TWA| in 0..180 degrees, null when unknown
+ */
+function twaDegFromEntry(entry) {
+  const wind = entry?.wind;
+  if (wind && Number.isFinite(wind.angle)) {
+    return foldTwaDegrees(wind.angle);
+  }
+  if (
+    wind &&
+    Number.isFinite(wind.direction) &&
+    Number.isFinite(entry?.heading)
+  ) {
+    return foldTwaDegrees(wind.direction - entry.heading);
+  }
+  return null;
+}
+
+/**
  * Normalizes a `logentries` resource entry into the shape the event
  * extractor and wind-stats builder consume: `datetime` and `text`
  * pass through; `position` comes from the `navigation.position`
  * pathvalue; the wind snapshot comes from
- * `environment.wind.speedOverGround` (m/s → kn) and
- * `environment.wind.directionTrue` (rad → deg). The same path may
- * appear more than once (multiple `$source`s per the Multiple Values
- * logic) — the first usable value wins. Unknown paths and logbook
- * fields are ignored: this consumer needs the snapshot only.
+ * `environment.wind.speedOverGround` (m/s → kn), the wind's compass
+ * direction from `environment.wind.directionTrue` (rad → deg, FROM
+ * convention), the wind's angle to the bow from
+ * `environment.wind.angleTrue` (rad → deg, signed) and the vessel
+ * heading from `navigation.headingTrue` (rad → deg). The same path
+ * may appear more than once (multiple `$source`s per the Multiple
+ * Values logic) — the first usable value wins. Unknown paths and
+ * logbook fields are ignored: this consumer needs the snapshot only.
  *
  * @param {object} entry - Resource entry (`{id, datetime, text, telemetry[], …}`)
- * @returns {{datetime?: string, text?: string, position?: {latitude: number, longitude: number}, wind?: {speed?: number, direction?: number}}|null}
+ * @returns {{datetime?: string, text?: string, position?: {latitude: number, longitude: number}, wind?: {speed?: number, direction?: number, angle?: number}, heading?: number}|null}
  *   Normalized entry, or null for non-objects
  */
 function normalizeLogEntry(entry) {
@@ -453,6 +496,22 @@ function normalizeLogEntry(entry) {
         Number.isFinite(value)
       ) {
         out.wind = { ...out.wind, direction: value * RAD_TO_DEG };
+      }
+    } else if (path === "environment.wind.angleTrue") {
+      if (
+        out.wind?.angle === undefined &&
+        typeof value === "number" &&
+        Number.isFinite(value)
+      ) {
+        out.wind = { ...out.wind, angle: value * RAD_TO_DEG };
+      }
+    } else if (path === "navigation.headingTrue") {
+      if (
+        out.heading === undefined &&
+        typeof value === "number" &&
+        Number.isFinite(value)
+      ) {
+        out.heading = value * RAD_TO_DEG;
       }
     }
   }
@@ -596,4 +655,5 @@ module.exports = {
   readLogbookEntriesRest,
   readLogbookSailEvents,
   foldTwaDegrees,
+  twaDegFromEntry,
 };

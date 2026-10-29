@@ -28,6 +28,7 @@
  */
 
 const { twsBinIndex, twaBinIndex, emaUpdate } = require("./sqlite-db.js");
+const { twaDegFromEntry } = require("./logbook-source.js");
 
 /**
  * Lazy handle on the shared physics module (ESM, imported from this
@@ -136,7 +137,14 @@ function circularMeanDegrees(degreesList) {
  * @returns {(event: {timestamp: string}) => WindWindowStats|null}
  */
 function createLogbookWindStats(entries, windowMinutes = WINDOW_MINUTES) {
-  // Pre-index the wind-carrying entries once, sorted by time.
+  // Pre-index the wind-carrying entries once, sorted by time. The
+  // TWA derivation matches extractSailEvents: the entry's wind-angle
+  // snapshot when present, else the compass direction converted with
+  // the entry's heading. A direction without a heading is
+  // wind-relative-to-north, not a point of sail — binning it as TWA
+  // filled the matrix's close-hauled…running bins with arbitrary
+  // compass values, so it stays unknown (null) and the observation
+  // trains TWS only.
   const windEntries = entries
     .map((entry) => ({
       time: new Date(entry.datetime).getTime(),
@@ -144,10 +152,7 @@ function createLogbookWindStats(entries, windowMinutes = WINDOW_MINUTES) {
         entry.wind && typeof entry.wind.speed === "number"
           ? entry.wind.speed
           : null,
-      twaDeg:
-        entry.wind && typeof entry.wind.direction === "number"
-          ? foldTwaDegrees(entry.wind.direction)
-          : null,
+      twaDeg: twaDegFromEntry(entry),
     }))
     .filter((e) => Number.isFinite(e.time) && e.twsKnots != null)
     .sort((a, b) => a.time - b.time);
