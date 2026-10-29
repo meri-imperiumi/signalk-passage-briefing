@@ -18,6 +18,7 @@ const {
   chartUrlForZone,
   chartsForZones,
   loadSynoptic,
+  loadSynopticFailure,
   loadSynopticMap,
   refreshSynoptics,
 } = require("../plugin/synoptic-source.js");
@@ -173,6 +174,56 @@ describe("conversion and cache", () => {
     assert.match(result.failed[0].error, /404/);
     assert.ok(await loadSynoptic(dir, 1));
     assert.equal(await loadSynoptic(dir, 11), null);
+    // The failure note is recorded for the 404 hint…
+    const failure = await loadSynopticFailure(dir, 11);
+    assert.match(failure.error, /404/);
+    // …and a later successful refresh clears it (audit fix): a stale
+    // note must not ride a current cache's "no chart" answer
+    const ok = await refreshSynoptics({
+      dataDir: dir,
+      zones: [11],
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => fixtureTif(16, 8),
+      }),
+    });
+    assert.deepEqual(ok.fetched, [11]);
+    assert.equal(await loadSynopticFailure(dir, 11), null);
+  });
+
+  test("a skipped cycle (same chart cached) also clears a stale failure note", async () => {
+    const dir = dataDir();
+    // Seed a failure note directly, then land the chart on a refresh
+    const failing = await refreshSynoptics({
+      dataDir: dir,
+      zones: [11],
+      fetchImpl: async () => ({ ok: false, status: 404, statusText: "Nope" }),
+    });
+    assert.deepEqual(
+      failing.failed.map((f) => f.zone),
+      [11],
+    );
+    const ok = await refreshSynoptics({
+      dataDir: dir,
+      zones: [11],
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => fixtureTif(16, 8),
+      }),
+    });
+    assert.deepEqual(ok.fetched, [11]);
+    // Same-chart skip must not resurrect the note either
+    const skip = await refreshSynoptics({
+      dataDir: dir,
+      zones: [11],
+      fetchImpl: async () => {
+        throw new Error("should not fetch");
+      },
+    });
+    assert.deepEqual(skip.skipped, [11]);
+    assert.equal(await loadSynopticFailure(dir, 11), null);
   });
 });
 

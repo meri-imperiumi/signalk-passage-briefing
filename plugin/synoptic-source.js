@@ -128,6 +128,11 @@ async function refreshSynoptics({
       cached.validHour === pick.validHour;
     if (sameChart) {
       skipped.push(pick.zone);
+      // The zone's chart is current: a stale failure note from an
+      // earlier cycle must not ride the 404's lastFailure hint
+      if (index._lastFailures) {
+        delete index._lastFailures[pick.zone];
+      }
       continue;
     }
     // Candidate mirrors of the same chart, tried in order (e.g. the
@@ -162,6 +167,11 @@ async function refreshSynoptics({
           width: chart.width,
           height: chart.height,
         };
+        // The zone now carries a fresh chart: its old failure note is
+        // history, not a live hint
+        if (index._lastFailures) {
+          delete index._lastFailures[pick.zone];
+        }
         fetched.push(pick.zone);
         break;
       } catch (error) {
