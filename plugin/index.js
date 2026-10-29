@@ -969,12 +969,10 @@ module.exports = (app) => {
       }
     }
     if (merged.length === 0) {
-      // Nothing on our waters: an empty console is the honest answer,
-      // not the newest cache entry's foreign text. But a populated
-      // cache with nothing surviving the track filter is a different
-      // state from a missing one — the empty shape keeps the newest
-      // entry's issue time (the console dates the calm) without ever
-      // rendering its foreign text
+      // Nothing on our waters: the filtered console is empty, but the
+      // raw reading console is not — the crew offshore reads the
+      // bulletin itself. The newest zone-tagged entry is their ocean's
+      // text; the empty flag tells the console nothing is in force.
       if (cached.length === 0) {
         return null;
       }
@@ -988,13 +986,9 @@ module.exports = (app) => {
           break;
         }
       }
-      // No bulletinText: the newest entry's text is other ocean's
-      // bulletin — the console dates the calm, it does not render the
-      // foreign wall of text
-      const { bulletinText: _foreign, ...metaClean } = meta ?? {};
       return {
         empty: true,
-        ...metaClean,
+        ...(meta ?? {}),
         issuedAt:
           meta?.issuedAt ?? cached[0]?.fetchedAt ?? new Date(0).toISOString(),
         blocks: [],
@@ -3592,7 +3586,12 @@ module.exports = (app) => {
           // No cached here payload yet: the first compile schedules
         }
       })();
-      bulletinStations = Array.isArray(config.bulletin_stations)
+      // The configured stations EXTEND the defaults (union, deduped
+      // by zone/header/station): a config snapshot saved by the UI
+      // before a default issuer was added must not shadow it — the
+      // Subtropic bulletin died exactly this way on the boat (the old
+      // single-station snapshot persisted over the NZKL default)
+      const configuredStations = Array.isArray(config.bulletin_stations)
         ? config.bulletin_stations.filter(
             (station) =>
               station &&
@@ -3601,6 +3600,21 @@ module.exports = (app) => {
               typeof station.station === "string",
           )
         : [];
+      const stationKey = (station) =>
+        [
+          station.zone,
+          station.header.toUpperCase(),
+          station.station.toUpperCase(),
+        ].join("/");
+      bulletinStations = [
+        ...configuredStations,
+        ...DEFAULTS.bulletin_stations.filter(
+          (station) =>
+            !configuredStations.some(
+              (configured) => stationKey(configured) === stationKey(station),
+            ),
+        ),
+      ];
       // Spool ingestion (SPEC §2.2): files the HF gateway drops into
       // the spool directory ride the same bulletin cache and warning
       // publication as the online fetches — the offline lifeline the

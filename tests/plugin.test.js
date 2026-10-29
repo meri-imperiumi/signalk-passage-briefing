@@ -1492,6 +1492,54 @@ describe("plugin", () => {
     plugin.stop();
   });
 
+  test("configured stations extend the defaults (stale snapshots never shadow an issuer)", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    // A config snapshot saved by the UI before NZKL joined the defaults:
+    // the single NFFN station must not shadow the new issuer
+    const app = createMockApp();
+    app.getSelfPath = (path) =>
+      path === "navigation.position"
+        ? { latitude: -21.1, longitude: -175.2 }
+        : null;
+    const plugin = pluginFactory(app);
+    plugin.start({
+      bulletin_stations: [{ zone: 14, header: "fqps01", station: "NFFN" }],
+    });
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const fetched = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes("tgftp.nws.noaa.gov")) {
+        fetched.push(u);
+        return { ok: true, text: async () => `${u}\nNNNN` };
+      }
+      return mockOpenMeteo()(url);
+    };
+    try {
+      // The oneshot window resolves the zone from the vessel position
+      feed({
+        updates: [
+          { values: [{ path: "network.internet.state", value: "online" }] },
+        ],
+      });
+      await plugin.__settle();
+      assert.ok(
+        fetched.some((u) => u.includes("fqps01.nffn")),
+        "the configured station fetched",
+      );
+      assert.ok(
+        fetched.some((u) => u.includes("fqps43.nzkl")),
+        `the default station fetched alongside the snapshot: ${fetched.join(", ")}`,
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    plugin.stop();
+  });
+
   test("bulletins: nothing in force serves the empty shape, not a missing cache", async () => {
     const { mockOpenMeteo } = require("./openmeteo-mock.js");
     // Atlantic warning text: no coordinate anywhere near the Pacific
@@ -1580,27 +1628,24 @@ describe("plugin", () => {
       await plugin.__settle();
 
       // Route serve: the Tonga→Opua track is nowhere near the
-      // Atlantic text — the empty shape rides, never foreign text
+      // Atlantic text — the empty shape rides, with the cached text
+      // as the reading console
       res = await call("/api/briefing", { query: { route: "r1" } });
       const bulletin = res.payload.payload.metareaBulletin;
       assert.ok(bulletin, "empty shape attached, not a missing cache");
       assert.equal(bulletin.empty, true);
       assert.deepEqual(bulletin.blocks, []);
       assert.match(bulletin.issuedAt, /^2026/);
-      assert.ok(
-        !bulletin.bulletinText,
-        "the foreign bulletin text must not ride the empty shape",
-      );
+      assert.match(bulletin.bulletinText, /HIGH SEAS FORECAST/);
 
-      // Standalone bulletin route: same merged view
+      // Standalone bulletin route: same merged view — and the raw
+      // reading console keeps the cached text (the crew's offshore
+      // reading material, applicability aside)
       res = await call("/api/bulletin");
       assert.equal(res.payload.empty, true);
       assert.deepEqual(res.payload.blocks, []);
       assert.match(res.payload.issuedAt, /^2026/);
-      assert.ok(
-        !res.payload.bulletinText,
-        "the foreign bulletin text must not ride the empty shape",
-      );
+      assert.match(res.payload.bulletinText, /HIGH SEAS FORECAST/);
     } finally {
       globalThis.fetch = originalFetch;
     }
