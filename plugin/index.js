@@ -973,8 +973,36 @@ module.exports = (app) => {
     }
     if (merged.length === 0) {
       // Nothing on our waters: an empty console is the honest answer,
-      // not the newest cache entry's foreign text
-      return null;
+      // not the newest cache entry's foreign text. But a populated
+      // cache with nothing surviving the track filter is a different
+      // state from a missing one — the empty shape keeps the newest
+      // entry's issue time (the console dates the calm) without ever
+      // rendering its foreign text
+      if (cached.length === 0) {
+        return null;
+      }
+      // The newest entry with a usable meta dates the calm; an entry
+      // whose text carries no area (an open-meteo stub, a routing
+      // frame) parses to no meta and must not blank the issue time
+      let meta = null;
+      for (const entry of cached.slice(0, MERGE_BULLETINS)) {
+        meta = bulletinMetaForEntry(entry);
+        if (meta) {
+          break;
+        }
+      }
+      // No bulletinText: the newest entry's text is other ocean's
+      // bulletin — the console dates the calm, it does not render the
+      // foreign wall of text
+      const { bulletinText: _foreign, ...metaClean } = meta ?? {};
+      return {
+        empty: true,
+        ...metaClean,
+        issuedAt:
+          meta?.issuedAt ?? cached[0]?.fetchedAt ?? new Date(0).toISOString(),
+        blocks: [],
+        wider: [],
+      };
     }
     const blocks = [];
     const seen = new Set();

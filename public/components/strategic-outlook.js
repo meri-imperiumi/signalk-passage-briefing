@@ -404,8 +404,32 @@ strong.sev {
     }
     const normalized =
       typeof bulletin === "string" ? { bulletinText: bulletin } : bulletin;
-    this._bulletinEl.textContent =
-      normalized?.bulletinText || "No bulletin cached";
+    // Cached-but-nothing-in-force is a different state from nothing
+    // cached: an empty window is the honest calm, not a missing feed —
+    // and the newest cache entry's foreign text must not render as if
+    // it described these waters (the newest entry's own issue time
+    // still dates the calm)
+    if (normalized?.empty) {
+      const issued = normalized.issuedAt;
+      const ageHours =
+        issued != null
+          ? (Date.now() - new Date(issued).getTime()) / 3600000
+          : null;
+      const ageText =
+        ageHours == null
+          ? ""
+          : ageHours < 1
+            ? `${Math.max(1, Math.round(ageHours * 60))} min`
+            : `${ageHours.toFixed(1)} h`;
+      this._bulletinEl.textContent =
+        `Nothing in force on your waters` +
+        (ageText.length > 0
+          ? ` — newest bulletin received ${ageText} ago`
+          : "");
+    } else {
+      this._bulletinEl.textContent =
+        normalized?.bulletinText || "No bulletin cached";
+    }
 
     // Filtered blocks replace the raw wall of text (work doc #4 §5):
     // only geographically relevant paragraphs, severe keywords lit

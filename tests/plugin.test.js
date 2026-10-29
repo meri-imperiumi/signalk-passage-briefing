@@ -1492,6 +1492,122 @@ describe("plugin", () => {
     plugin.stop();
   });
 
+  test("bulletins: nothing in force serves the empty shape, not a missing cache", async () => {
+    const { mockOpenMeteo } = require("./openmeteo-mock.js");
+    // Atlantic warning text: no coordinate anywhere near the Pacific
+    // track, so nothing survives the filter — the honest answer is
+    // "cached, nothing in force" (empty shape), not a missing cache
+    // Atlantic waters text, no severe keyword, no coordinate anywhere
+    // near the Pacific track: nothing survives the filter — the honest
+    // answer is "cached, nothing in force" (empty shape), not a
+    // missing cache. A GALE/STORM line would be conservatively kept
+    // for any track; this text is the honest quiet bulletin.
+    const NAVAREA = [
+      "FQNT01 KNHC 011200Z AUG 26",
+      "HIGH SEAS FORECAST",
+      "NWS OCEAN PREDICTION CENTER MIAMI FL",
+      "SYNOPSIS FORECAST VALID UNTIL 021200Z AUG 26.",
+      "EXPECT WINDS 25 KT IN THE OUTLOOK AREA EAST OF THE BASIN.",
+      "NNNN",
+    ].join("\n");
+
+    const app = createMockApp();
+    app.resourcesApi = {
+      async getResource(resType, resId) {
+        if (resType === "routes" && resId === "r1") {
+          return {
+            name: "Tonga to Opua",
+            feature: {
+              geometry: {
+                coordinates: [
+                  [-175.2, -21.1],
+                  [174.3, -35.3],
+                ],
+              },
+            },
+          };
+        }
+        throw new Error("not found");
+      },
+    };
+    const plugin = pluginFactory(app);
+    app.getSelfPath = (path) =>
+      path === "navigation.position"
+        ? { latitude: -21.1, longitude: -175.2 }
+        : null;
+    plugin.start({
+      // The zone ladder's station is the Fiji bulletin — the NHC text
+      // rides the custom feed configured for the same zone's waters
+      bulletin_stations: [{ zone: 14, header: "fqps01", station: "NFFN" }],
+      bulletin_urls: ["https://met.test/navarea.txt"],
+    });
+    plugin.registerWithRouter(app.router);
+    const feed = app.getDeltaHandlers()[0];
+    const call = async (path, query = {}) => {
+      const r = app.getRoutes().find((x) => x.path === path);
+      const res = {
+        code: null,
+        payload: null,
+        status(c) {
+          this.code = c;
+          return this;
+        },
+        json(p) {
+          this.payload = p;
+        },
+      };
+      await r.handler({ query }, res);
+      return res;
+    };
+    feed({
+      updates: [
+        { values: [{ path: "network.internet.state", value: "online" }] },
+      ],
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      if (String(url).includes("met.test")) {
+        return { ok: true, text: async () => NAVAREA };
+      }
+      if (String(url).includes("tgftp.nws.noaa.gov")) {
+        return { ok: true, text: async () => NAVAREA };
+      }
+      return mockOpenMeteo()(url);
+    };
+    try {
+      let res = await call("/api/bulletin/refresh");
+      assert.equal(res.code, null);
+      await plugin.__settle();
+
+      // Route serve: the Tonga→Opua track is nowhere near the
+      // Atlantic text — the empty shape rides, never foreign text
+      res = await call("/api/briefing", { query: { route: "r1" } });
+      const bulletin = res.payload.payload.metareaBulletin;
+      assert.ok(bulletin, "empty shape attached, not a missing cache");
+      assert.equal(bulletin.empty, true);
+      assert.deepEqual(bulletin.blocks, []);
+      assert.match(bulletin.issuedAt, /^2026/);
+      assert.ok(
+        !bulletin.bulletinText,
+        "the foreign bulletin text must not ride the empty shape",
+      );
+
+      // Standalone bulletin route: same merged view
+      res = await call("/api/bulletin");
+      assert.equal(res.payload.empty, true);
+      assert.deepEqual(res.payload.blocks, []);
+      assert.match(res.payload.issuedAt, /^2026/);
+      assert.ok(
+        !res.payload.bulletinText,
+        "the foreign bulletin text must not ride the empty shape",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    plugin.stop();
+  });
+
   test("zone sources: TGFTP fast path and UKHO structured warnings merge", async () => {
     const { mockOpenMeteo } = require("./openmeteo-mock.js");
     const TGFTP_TEXT = [
