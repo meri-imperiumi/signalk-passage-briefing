@@ -327,17 +327,31 @@ function measuredAz(
  * reconstruction works AND the window carries enough context (wind +
  * heading) for the model.
  *
+ * With a complete hull (work doc #56) each point also carries the
+ * spectral kernel's W_f-weighted a_z for the same window, so the
+ * report can compare the two motion kernels against the measured
+ * attitude reconstruction — the #45 harness question, answered per
+ * run.
+ *
  * @param {object[]} samples - Full sample series
  * @param {object} [params]
  * @param {number} [params.windowMinutes=15] - SPEC §7.2 window span
  * @param {number} [params.waterlineLengthM] - Vessel waterline (m)
  * @param {number} [params.g] - Gravity override for the measured side
+ * @param {object} [params.hull] - Resolved hull (work doc #56);
+ *   when complete, points gain a `jmoAz` field
  * @returns {Promise<Array<{tMs: number, measuredAz: number, base: number,
- *   sinHeel: number, resonance: number, steepness: number}>>}
+ *   sinHeel: number, resonance: number, steepness: number, jmoAz:
+ *   number|null}>>}
  */
 async function evaluationPoints(
   samples,
-  { windowMinutes = 15, waterlineLengthM = DEFAULT_WATERLINE_M, g } = {},
+  {
+    windowMinutes = 15,
+    waterlineLengthM = DEFAULT_WATERLINE_M,
+    g,
+    hull = null,
+  } = {},
 ) {
   const physics = await loadPhysics();
   const windowMs = windowMinutes * 60000;
@@ -417,7 +431,27 @@ async function evaluationPoints(
       sinHeel: Math.abs(Math.sin((heelDeg * Math.PI) / 180)),
       resonance,
       steepness,
+      jmoAz: null,
     });
+    // Spectral kernel on the same window (work doc #56): same wave
+    // assumption as the legacy side, W_f-weighted acceleration at
+    // the evaluation point
+    if (physics.hullMotionReady(hull) && waves.hsMeters > 0) {
+      const motion = physics.hullMotionResponse({
+        hsMeters: waves.hsMeters,
+        peakPeriodSeconds: physics.peakPeriodFromEnergyPeriod(
+          waves.tpSeconds > 0 ? waves.tpSeconds : 1,
+        ),
+        waveTravelDirectionRad:
+          mid.waveTravelRad ??
+          (mid.headingRad + mid.awaRad + Math.PI) % (2 * Math.PI),
+        headingRad: mid.headingRad,
+        speedKnots: stw,
+        hull,
+        sailState: mid.sailState ?? null,
+      });
+      points[points.length - 1].jmoAz = motion.azWeightedMs2;
+    }
   }
   return points;
 }
@@ -636,6 +670,10 @@ async function queryHistoryValues({
  * @param {number} [params.options.waterlineLengthM]
  * @param {number} [params.options.kHeel=0.35] - Starting guess
  * @param {number} [params.options.kPitch=0.4] - Starting guess
+ * @param {object} [params.options.hull] - Hull description (work doc
+ *   #56): `beam_m`, `canoe_draft_m`, `displacement_kg`, `gm_m`,
+ *   `accel_point_m`, `type` — when complete, the report compares the
+ *   spectral kernel against the legacy calibration
  * @param {string} [params.options.token]
  * @param {string} [params.options.provider]
  * @param {typeof fetch} [params.fetchImpl]
@@ -680,6 +718,7 @@ async function runBacktest({
   const points = await evaluationPoints(samples, {
     windowMinutes,
     waterlineLengthM,
+    hull: options.hull ?? null,
   });
 
   const startLoss = lossAt(points, startHeel, startPitch);
@@ -693,6 +732,47 @@ async function runBacktest({
     points.length > 0
       ? await confusionMatrix(points, kHeel, kPitch)
       : { tiers: [], matrix: [] };
+  // Kernel comparison (work doc #56): the spectral kernel's MAE and
+  // per-band mean residual against the same measured series, only
+  // over the windows it could evaluate
+  const physics = await loadPhysics();
+  const jmoPoints = points.filter((p) => p.jmoAz != null);
+  const kernels = {
+    hull: options.hull ?? null,
+    legacy: {
+      mae: tuned == null ? null : round4(tuned),
+      note: "tuned (k_heel, k_pitch) above",
+    },
+    jmo:
+      jmoPoints.length === 0
+        ? { available: false, note: "incomplete hull — not evaluated" }
+        : {
+            available: true,
+            windows: jmoPoints.length,
+            mae: round4(
+              jmoPoints.reduce(
+                (sum, p) => sum + Math.abs(p.jmoAz - p.measuredAz),
+                0,
+              ) / jmoPoints.length,
+            ),
+            perBandResidual: physics.COMFORT_TIERS.map((tier) => {
+              const band = jmoPoints.filter(
+                (p) => physics.rateAcceleration(p.measuredAz) === tier,
+              );
+              return {
+                tier,
+                windows: band.length,
+                meanResidual:
+                  band.length === 0
+                    ? null
+                    : round4(
+                        band.reduce((s, p) => s + (p.jmoAz - p.measuredAz), 0) /
+                          band.length,
+                      ),
+              };
+            }),
+          },
+  };
 
   return {
     generatedAt: new Date().toISOString(),
@@ -709,6 +789,7 @@ async function runBacktest({
       iterations: optimized.iterations,
     },
     confusionMatrix: matrix,
+    kernels,
   };
 }
 
@@ -718,6 +799,33 @@ async function runBacktest({
  */
 function round4(value) {
   return Math.round(value * 10000) / 10000;
+}
+
+/**
+ * Builds the resolved hull object (work doc #56) from CLI-style
+ * options for the kernel comparison: an async wrapper over the
+ * physics module's resolveHull so the CLI never imports the ESM
+ * module itself (same dynamic-import pattern as loadPhysics).
+ *
+ * @param {object} [hullOptions] - `beam_m`, `canoe_draft_m`,
+ *   `displacement_kg`, `gm_m`, `accel_point_m`, `type`, `lwl_m`
+ * @returns {Promise<object|null>} Resolved hull, null when nothing
+ *   was supplied
+ */
+async function resolveHullForOptions(hullOptions = {}) {
+  const physics = await loadPhysics();
+  return physics.resolveHull(
+    {
+      hull_lwl_m: hullOptions.lwl_m,
+      hull_beam_m: hullOptions.beam_m,
+      hull_canoe_draft_m: hullOptions.canoe_draft_m,
+      hull_displacement_kg: hullOptions.displacement_kg,
+      hull_gm_m: hullOptions.gm_m,
+      hull_accel_point_m: hullOptions.accel_point_m,
+      hull_type: hullOptions.type,
+    },
+    null,
+  );
 }
 
 module.exports = {
@@ -739,4 +847,5 @@ module.exports = {
   confusionMatrix,
   queryHistoryValues,
   runBacktest,
+  resolveHullForOptions,
 };

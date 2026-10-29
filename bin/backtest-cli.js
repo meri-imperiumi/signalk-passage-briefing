@@ -18,6 +18,16 @@
  *   --provider <id>       History provider ID
  *   --k-heel / --k-pitch  Starting guesses (default plugin values)
  *   --waterline <m>       Waterline length override
+ *   --hull-beam <m>       Hull beam (work doc #56 kernel comparison)
+ *   --hull-draft <m>      Canoe-body draught
+ *   --hull-displacement <kg>  Displacement
+ *   --hull-gm <m>         Metacentric height (enables roll figures)
+ *   --hull-type <form>    monohull | catamaran | trimaran
+ *
+ * With a complete hull (--hull-beam/draft/displacement), the report
+ * compares the spectral motion kernel (work doc #56) against the
+ * legacy calibration: MAE and per-band residuals against the same
+ * attitude-reconstructed series.
  *
  * The auth token is read from SIGNALK_TOKEN. The JSON report is
  * written to --output (default ./backtest-report.json).
@@ -26,7 +36,7 @@
  */
 
 const { writeFile } = require("node:fs/promises");
-const { runBacktest } = require("../plugin/backtest.js");
+const { runBacktest, resolveHullForOptions } = require("../plugin/backtest.js");
 
 /**
  * Parses the command line into options.
@@ -100,6 +110,27 @@ async function main() {
       waterline_length_m: args.waterline ? Number(args.waterline) : undefined,
       kHeel: args["k-heel"] ? Number(args["k-heel"]) : undefined,
       kPitch: args["k-pitch"] ? Number(args["k-pitch"]) : undefined,
+      hull:
+        args["hull-beam"] || args["hull-displacement"]
+          ? await resolveHullForOptions({
+              beam_m: args["hull-beam"] ? Number(args["hull-beam"]) : undefined,
+              canoe_draft_m: args["hull-draft"]
+                ? Number(args["hull-draft"])
+                : undefined,
+              displacement_kg: args["hull-displacement"]
+                ? Number(args["hull-displacement"])
+                : undefined,
+              gm_m: args["hull-gm"] ? Number(args["hull-gm"]) : undefined,
+              accel_point_m: args["hull-accel-point"]
+                ? Number(args["hull-accel-point"])
+                : undefined,
+              type:
+                typeof args["hull-type"] === "string"
+                  ? args["hull-type"]
+                  : undefined,
+              lwl_m: args.waterline ? Number(args.waterline) : undefined,
+            })
+          : null,
     },
   });
 
@@ -119,10 +150,23 @@ async function main() {
     );
   }
   console.log(renderMatrix(report.confusionMatrix));
+  if (report.kernels?.jmo?.available) {
+    console.error(
+      `Kernel comparison: legacy MAE ${report.kernels.legacy.mae} vs ` +
+        `spectral MAE ${report.kernels.jmo.mae} m/s² ` +
+        `(${report.kernels.jmo.windows} windows)`,
+    );
+    for (const band of report.kernels.jmo.perBandResidual) {
+      console.error(
+        `  ${band.tier.padEnd(10)} n=${String(band.windows).padStart(5)} ` +
+          `residual ${band.meanResidual == null ? "—" : band.meanResidual}`,
+      );
+    }
+  }
   console.error(`Report written to ${output}`);
 }
 
-module.exports = { parseArgs, renderMatrix };
+module.exports = { parseArgs, renderMatrix, resolveHullForOptions };
 
 if (require.main === module) {
   main().catch((error) => {
