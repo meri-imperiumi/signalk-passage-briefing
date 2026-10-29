@@ -953,6 +953,103 @@ function stormReferenceGeometry(text, features, bufferNm) {
 }
 
 /**
+ * Closes a feature chain into a strip of the stated width on the
+ * stated side of it: `Within 180 nautical miles south of F1` is the
+ * band between the front axis and the parallel 180 nm south of it —
+ * the chain offset by the band on one side, not a ring around it.
+ * The ring keeps the chain's unwrapped frame, so seam-crossing fronts
+ * compose contiguous strips.
+ *
+ * @param {number[][]} points - Feature chain [[lon, lat], …]
+ * @param {string} side - NORTH|SOUTH|EAST|WEST (as matched, uppercased)
+ * @param {number} bandNm - Stated band width
+ * @returns {{type: "polygon", coordinates: number[][]}} Closed ring
+ */
+function sideBandPolygon(points, side, bandNm) {
+  const lats = points.map(([, lat]) => lat);
+  const meanLat =
+    ((Math.min(...lats) + Math.max(...lats)) / 2) * (Math.PI / 180);
+  const bandDeg = bandNm / 60;
+  const offset = ([lon, lat]) => {
+    if (side === "NORTH") {
+      return [lon, lat + bandDeg];
+    }
+    if (side === "SOUTH") {
+      return [lon, lat - bandDeg];
+    }
+    const dlon = bandDeg / Math.max(0.2, Math.cos(meanLat));
+    return side === "EAST" ? [lon + dlon, lat] : [lon - dlon, lat];
+  };
+  const ring = [...points, ...[...points].reverse().map(offset)];
+  ring.push([...ring[0]]);
+  return { type: "polygon", coordinates: ring };
+}
+
+/**
+ * Geometry for a block that bounds itself against a collected feature
+ * by distance AND side — `Within 180 nautical miles south of F1:` —
+ * or that references a collected area outright: `Within A1:`. The
+ * side-band form is a one-sided strip (sideBandPolygon); the named
+ * form is the feature's own ring. A distance with no side keeps the
+ * symmetric handling of the storm-reference path; null otherwise so
+ * the caller falls through the other geometry paths.
+ *
+ * @param {string} text - Block text
+ * @param {Map<string, number[][]>} features - `collectFeatures` map
+ * @returns {object|null} `extractGeometry`-compatible shape
+ */
+function featureReferenceGeometry(text, features) {
+  if (!features || features.size === 0) {
+    return null;
+  }
+  // "Within 180 nautical miles south of F1": the name rides the band
+  // match, so the side token must sit between the distance and it —
+  // "WITHIN 090 NAUTICAL MILES OF T1" (no side) matches the distance
+  // group but resolves side-null and defers to the symmetric path
+  const band = text.match(
+    /\bWITHIN\s+(\d+(?:\.\d+)?)\s*(?:NM|NAUTICAL\s+MILES?)?\s+(?:(NORTH|SOUTH|EAST|WEST)\s+OF\s+)?((?:CF|L|H|[A-Z]\d+))\b/i,
+  );
+  if (band) {
+    const [, distance, side, name] = band;
+    const points = lookupFeature(name, features);
+    if (!points) {
+      return null;
+    }
+    const bufferNm = Number.parseFloat(distance);
+    if (!side) {
+      return null; // Symmetric band: storm-reference path's shape
+    }
+    if (points.length === 1) {
+      const [lon, lat] = points[0];
+      return quadrantRing({
+        lat,
+        lon,
+        radiiNm: { ne: bufferNm, se: bufferNm, sw: bufferNm, nw: bufferNm },
+      });
+    }
+    return sideBandPolygon(points, side.toUpperCase(), bufferNm);
+  }
+  // "Within A1": the collected area's own ring
+  const named = text.match(
+    new RegExp(`\\bWITHIN\\s+(${FEATURE_NAME})\\b`, "i"),
+  );
+  if (named) {
+    const points = lookupFeature(named[1], features);
+    if (!points || points.length < 2) {
+      return null;
+    }
+    const ring = [...points];
+    const first = ring[0];
+    const last = ring[ring.length - 1];
+    if (first[0] !== last[0] || first[1] !== last[1]) {
+      ring.push([...first]);
+    }
+    return { type: "polygon", coordinates: ring };
+  }
+  return null;
+}
+
+/**
  * Collects named synoptic features from a full bulletin: blocks that
  * declare a feature and carry its defining coordinate chain —
  * `COLD FRONT CF 16S 150W 20S 140W 25S 132W` — mapped name →
@@ -1037,11 +1134,13 @@ function clipChainToLatBand(pts, minLat, maxLat) {
 /**
  * Builds the polygon for bounds that reference a named feature
  * instead of a longitude — `SOUTH OF 09S AND WEST OF CF`, `SOUTH OF
- * 10S, BETWEEN 150W AND CF`. The feature's chain forms the slanted
- * edge, clipped to the block's latitude bounds; the open side closes
- * on the BETWEEN meridian when one is given, otherwise on the
- * antimeridian extended a margin past the seam so areas west of a
- * front still match vessels in the western Pacific. The front's
+ * 10S, BETWEEN 150W AND CF`, or MetService's bare `East of F2:`. The
+ * feature's chain forms the slanted edge, clipped to the block's
+ * latitude bounds — explicit digits when the phrase states them,
+ * the feature's own latitudinal extent when it does not; the open
+ * side closes on the BETWEEN meridian when one is given, otherwise
+ * on the antimeridian extended a margin past the seam so areas west
+ * of a front still match vessels in the western Pacific. The front's
  * trend south of its last point is approximated by its end meridian.
  *
  * @param {string} text - Block text
@@ -1053,15 +1152,6 @@ function clipChainToLatBand(pts, minLat, maxLat) {
 function composeFeatureBounds(text, features) {
   const southOf = text.match(/SOUTH OF\s+(\d+(?:\.\d+)?)\s*([NS])/i);
   const northOf = text.match(/NORTH OF\s+(\d+(?:\.\d+)?)\s*([NS])/i);
-  if (!southOf && !northOf) {
-    return null; // Feature refs come as area phrases with a lat bound
-  }
-  const maxLat = southOf
-    ? hemisphereDegrees(southOf[1], southOf[2].toUpperCase())
-    : 90;
-  const minLat = northOf
-    ? hemisphereDegrees(northOf[1], northOf[2].toUpperCase())
-    : -90;
 
   // Which side of which feature: WEST OF/EAST OF name, or BETWEEN a
   // meridian and a name (the name is then the opposite bound).
@@ -1114,6 +1204,20 @@ function composeFeatureBounds(text, features) {
   if (!feature) {
     return null; // Unknown name: fall back to the numeric bbox path
   }
+  // Latitude bounds: explicit digits win; the opposite unstated side
+  // keeps its poleward default. A bare side-of-feature phrase
+  // (MetService Part 3: `East of F2:`) states neither — the band is
+  // where the feature itself lives, not the whole bulletin area
+  const maxLat = southOf
+    ? hemisphereDegrees(southOf[1], southOf[2].toUpperCase())
+    : northOf
+      ? 90
+      : Math.max(...feature.map(([, lat]) => lat));
+  const minLat = northOf
+    ? hemisphereDegrees(northOf[1], northOf[2].toUpperCase())
+    : southOf
+      ? -90
+      : Math.min(...feature.map(([, lat]) => lat));
 
   // Unwrap the chain into a contiguous frame and orient it
   // north-end-first so the caps attach to the right ends
@@ -1208,7 +1312,14 @@ function extractGeometry(blockText, features = new Map(), coverage = null) {
     };
   }
   // "WITHIN 180 NAUTICAL MILES OF TD01F": the block distances itself
-  // from a collected feature instead of carrying coordinates
+  // from a collected feature instead of carrying coordinates. A stated
+  // SIDE (MetService: "Within 180 nautical miles south of F1") or a
+  // bare named area ("Within A1") is one-sided and resolves first —
+  // the symmetric band must not swallow the side
+  const sideReference = featureReferenceGeometry(blockText, features);
+  if (sideReference) {
+    return sideReference;
+  }
   const reference = stormReferenceGeometry(blockText, features, bufferNm);
   if (reference) {
     return reference;
@@ -2125,6 +2236,8 @@ module.exports = {
   resolveNamedEndpoints,
   stormDeclarationPoint,
   stormReferenceGeometry,
+  featureReferenceGeometry,
+  sideBandPolygon,
   ukhoBlocksFromWarnings,
   hemisphereDegrees,
   parseCoordinatePoints,

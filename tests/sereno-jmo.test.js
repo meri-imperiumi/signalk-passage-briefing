@@ -493,6 +493,131 @@ describe("serenoComfort with the hull kernel", () => {
   });
 });
 
+describe("roll vote in the tier (Minerva calibration)", () => {
+  test("rateRoll bands", async () => {
+    const { rateRoll } = await physics();
+    assert.equal(rateRoll(4.9), null);
+    assert.equal(rateRoll(5), "sporty");
+    assert.equal(rateRoll(8.6), "sporty");
+    assert.equal(rateRoll(9), "rough");
+    assert.equal(rateRoll(12.4), "rough");
+    assert.equal(rateRoll(13), "miserable");
+    assert.equal(rateRoll(null), null);
+  });
+
+  test("a rolling hour caps the tier at the roll verdict", async () => {
+    const { serenoComfort, resolveHull, rateRoll } = await physics();
+    const hull = resolveHull(HULL_ARGS, null);
+    // Steep beam seas near the roll period: a_z alone would read
+    // easy-ish (W_f discounts the chop), but the crew rolls hard
+    const comfort = serenoComfort(
+      { hsMeters: 2.2, tpSeconds: m_tp(4), waveTravelDirectionRad: 0 },
+      {
+        sogKnots: 5,
+        headingRad: Math.PI / 2,
+        waterlineLengthM: 9.4,
+        kHeel: 0.35,
+        kPitch: 0.4,
+        sailState: "sailing",
+        hull,
+      },
+      { twsKnots: 6, twaRad: Math.PI / 2 },
+    );
+    assert.equal(
+      comfort.acceleration.rollComfort,
+      rateRoll(comfort.acceleration.rmsRollDeg),
+    );
+    assert.equal(comfort.comfort, "miserable");
+  });
+
+  test("below 5° roll does not vote", async () => {
+    const { serenoComfort, resolveHull } = await physics();
+    const hull = resolveHull(HULL_ARGS, null);
+    const comfort = serenoComfort(
+      { hsMeters: 0.5, tpSeconds: m_tp(8), waveTravelDirectionRad: 0 },
+      {
+        sogKnots: 5,
+        headingRad: Math.PI,
+        waterlineLengthM: 9.4,
+        kHeel: 0.35,
+        kPitch: 0.4,
+        sailState: "sailing",
+        hull,
+      },
+      { twsKnots: 8, twaRad: Math.PI },
+    );
+    assert.equal(comfort.acceleration.rollComfort, null);
+    // No roll vote: the a_z verdict stands alone
+    assert.equal(comfort.comfort, comfort.motionComfort);
+  });
+
+  function m_tp(mwp) {
+    // peak period from the PM energy-period relation
+    return mwp * 1.167;
+  }
+});
+
+describe("crew rules of thumb (bergie, 2026-10)", () => {
+  // Long swells matter less than steep chop of the same height
+  test("big but long reads calmer than small but steep", async () => {
+    const { hullMotionResponse, resolveHull, peakPeriodFromEnergyPeriod } =
+      await physics();
+    const hull = resolveHull(HULL_ARGS, null);
+    const run = (hs, mwp) =>
+      hullMotionResponse({
+        hsMeters: hs,
+        peakPeriodSeconds: peakPeriodFromEnergyPeriod(mwp),
+        waveTravelDirectionRad: 0,
+        headingRad: Math.PI / 2,
+        speedKnots: 5,
+        hull,
+        sailState: "sailing",
+      });
+    const bigLong = run(3.0, 12);
+    const smallSteep = run(1.2, 6);
+    assert.ok(
+      bigLong.azWeightedMs2 < smallSteep.azWeightedMs2,
+      `3 m @ 12 s (${bigLong.azWeightedMs2.toFixed(2)}) beats 1.2 m @ 6 s (${smallSteep.azWeightedMs2.toFixed(2)})`,
+    );
+    assert.ok(
+      bigLong.rmsRollDeg < smallSteep.rmsRollDeg,
+      `roll ${bigLong.rmsRollDeg.toFixed(1)}° beats ${smallSteep.rmsRollDeg.toFixed(1)}°`,
+    );
+  });
+
+  // Head seas hobby-horse (vertical acceleration), beam seas roll
+  test("direction splits the vectors: head = a_z, beam = roll", async () => {
+    const { hullMotionResponse, resolveHull, peakPeriodFromEnergyPeriod } =
+      await physics();
+    const hull = resolveHull(HULL_ARGS, null);
+    const run = (headingRad) =>
+      hullMotionResponse({
+        hsMeters: 2,
+        peakPeriodSeconds: peakPeriodFromEnergyPeriod(6.5),
+        waveTravelDirectionRad: 0,
+        headingRad,
+        speedKnots: 5,
+        hull,
+        sailState: "sailing",
+      });
+    const head = run(Math.PI);
+    const beam = run(Math.PI / 2);
+    const following = run(0);
+    assert.ok(
+      head.azWeightedMs2 > following.azWeightedMs2,
+      "head seas hobby-horse harder than following",
+    );
+    assert.ok(head.azWeightedMs2 > beam.azWeightedMs2);
+    assert.ok(
+      beam.rmsRollDeg > head.rmsRollDeg + 5,
+      `beam roll ${beam.rmsRollDeg.toFixed(1)}° dominates head ${head.rmsRollDeg.toFixed(1)}°`,
+    );
+    assert.ok(
+      Math.abs(following.rmsRollDeg) < 1e-9 && Math.abs(head.rmsRollDeg) < 1e-9,
+    );
+  });
+});
+
 describe("route-sim hull plumbing", () => {
   test("SIMULATION_DEFAULTS carry the follow-Signal-K hull fields", async () => {
     const routeSim = import("../public/route-sim.mjs");

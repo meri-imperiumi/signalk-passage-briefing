@@ -19,6 +19,7 @@ const {
   parseAdvisory,
   extractGeometry,
   filterBulletin,
+  featureReferenceGeometry,
   isMastheadBlock,
   navtexSubject,
   parseCardinalBounds,
@@ -363,6 +364,131 @@ test("live fqps43 TGFTP rendering: each feature collects its own chain", () => {
     [170, -40],
   ]);
   assert.equal(features.get("A1").length, 6);
+});
+
+test("Part 3 distance-and-side bands compose from the declared front", () => {
+  const features = collectFeatures(
+    "Front F1 29S 179E 32S 174W 35S 170W, moving east 25kt.",
+  );
+  const geometry = featureReferenceGeometry(
+    "Within 180 nautical miles south of F1: Poor visibility in rain, easing by 290600UTC.",
+    features,
+  );
+  assert.equal(geometry.type, "polygon");
+  const ring = geometry.coordinates;
+  // South band: 180 nm = 3° below the front axis, closed at the ends
+  const southLats = ring.map(([, lat]) => lat);
+  assert.ok(Math.min(...southLats) < -35 - 2.5, "band extends 3° south");
+  // A vessel south of the front within 180 nm is inside; north of it
+  // is not — the side is the point of the grammar
+  assert.equal(ringContains(ring, -176, -33.5), true);
+  assert.equal(ringContains(ring, -176, -27.5), false);
+  // West of the front's start (179E) the band does not exist
+  assert.equal(ringContains(ring, 174.3, -33.5), false);
+});
+
+test("Within a collected area references the area's own ring", () => {
+  const features = collectFeatures(
+    "Area A1 bounded by 26S 170E 29S 179W 34S 179W 34S 167E 29S 170E 26S 170E, slow moving.",
+  );
+  const geometry = featureReferenceGeometry(
+    "Within A1: Northwest 25kt at times, poor visibility in rain developing by 290000UTC.",
+    features,
+  );
+  assert.equal(geometry.type, "polygon");
+  // Inside A1 (167E–179W, 26S–34S)
+  assert.equal(ringContains(geometry.coordinates, 172.8, -30), true);
+  // North of A1's 26S boundary: outside
+  assert.equal(ringContains(geometry.coordinates, 172.8, -24), false);
+  // A distance with no stated side defers to the symmetric path
+  assert.equal(
+    featureReferenceGeometry(
+      "WITHIN 090 NAUTICAL MILES OF T1, EXPECT POOR VISIBILITY.",
+      new Map([
+        [
+          "T1",
+          [
+            [160, -9],
+            [163, -11],
+          ],
+        ],
+      ]),
+    ),
+    null,
+  );
+});
+
+test("bare East of F2 composes the side polygon at the front's extent", () => {
+  const features = collectFeatures(
+    "Front F2 36S 161E 38S 166E 40S 170E, moving east 25kt.",
+  );
+  const geometry = featureReferenceGeometry(
+    "East of F2: Northwest 25kt at times.",
+    features,
+  );
+  // No WITHIN, no side token pair: the named branch declines, and the
+  // side polygon comes from the bounds composer
+  assert.equal(geometry, null);
+  const composed = extractGeometry(
+    "East of F2: Northwest 25kt at times.",
+    features,
+  );
+  assert.equal(composed.type, "polygon");
+  // East of the front at the front's own latitudes
+  assert.equal(ringContains(composed.coordinates, 168, -38), true);
+  // West of the front: outside
+  assert.equal(ringContains(composed.coordinates, 155, -38), false);
+  // At the ridge latitudes well north of F2: outside
+  assert.equal(ringContains(composed.coordinates, 168, -30), false);
+});
+
+test("live fqps43: the Part 3 forecast sentences reach the waters they cover", () => {
+  const raw = readFixture("fqps43-nzkl-2026-10-28.txt");
+
+  // A vessel inside A1 reads A1's forecast, not the whole analysis
+  const inA1 = filterBulletin({
+    rawText: raw,
+    source: "api",
+    track: [[172.8, -30]],
+  });
+  const a1 = inA1.blocks.find((b) => /^Within A1:/.test(b.text));
+  assert.ok(a1, "Within-A1 forecast retained for a vessel inside A1");
+  assert.equal(a1.geometryType, "polygon");
+  assert.ok(
+    inA1.blocks.every((b) => !/^Part 2/.test(b.text)),
+    "situation-analysis boilerplate on the console",
+  );
+
+  // A vessel south of F1 within 180 nm reads F1's rain band
+  const southOfF1 = filterBulletin({
+    rawText: raw,
+    source: "api",
+    track: [[-176, -33.5]],
+  });
+  const f1 = southOfF1.blocks.find((b) =>
+    /^Within 180 nautical miles south of F1/.test(b.text),
+  );
+  assert.ok(f1, "F1 rain band retained south of the front");
+  assert.equal(f1.geometryType, "polygon");
+
+  // A vessel east of F2 reads F2's wind note
+  const eastOfF2 = filterBulletin({
+    rawText: raw,
+    source: "api",
+    track: [[168, -38]],
+  });
+  assert.ok(
+    eastOfF2.blocks.some((b) => /^East of F2:/.test(b.text)),
+    "East-of-F2 wind note retained east of the front",
+  );
+
+  // At Minerva (18.3S) none of the subtropic area applies: empty
+  const minerva = filterBulletin({
+    rawText: raw,
+    source: "api",
+    track: [[174.3, -18.3]],
+  });
+  assert.equal(minerva.blocks.length, 0);
 });
 
 test("prose around MetService feature grammar collects nothing", () => {

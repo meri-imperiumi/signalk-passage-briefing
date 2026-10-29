@@ -1785,6 +1785,48 @@ export const DECK_WORK_ROLL_LIMIT_DEG = 4;
 export const TASKS_ACCELERATION_LIMIT_G = 0.2;
 
 /**
+ * Roll RMS bands (degrees) at or above which the roll metric votes a
+ * Sereno tier of its own (work doc #56, Minerva calibration): ≥ 5°
+ * caps the hour at Sporty, ≥ 9° at Rough, ≥ 13° at Miserable; below 5°
+ * roll does not vote at all.
+ *
+ * Provenance: the 4° line is PredictWind's published RMS deck-work
+ * limit (below it the crew works on deck freely — comfort is not the
+ * constraint, so no vote); the 5° floor sits just above it. The upper
+ * cuts are calibrated against this crew's own day-level verdicts on
+ * the Minerva passage (2026-10-23/24/25) with the measured roll
+ * period: 8.6° RMS → "sporty", 12.4° RMS → "rough"/"miserable" —
+ * three data points, so the cuts are a first calibration to be
+ * refined by the corpus backtest, and the payload labels roll
+ * figures as model estimates.
+ */
+export const ROLL_BANDS_DEG = [5, 9, 13];
+
+/**
+ * Rates an RMS roll angle on the Sereno scale ({@link ROLL_BANDS_DEG}).
+ * Below the first band roll does not vote — the hour is judged on the
+ * other vectors alone.
+ *
+ * @param {number|null} rollDeg - RMS roll (degrees), null when unknown
+ * @returns {string|null} "sporty" | "rough" | "miserable" | null
+ */
+export function rateRoll(rollDeg) {
+  if (!Number.isFinite(rollDeg)) {
+    return null;
+  }
+  if (rollDeg < ROLL_BANDS_DEG[0]) {
+    return null;
+  }
+  if (rollDeg < ROLL_BANDS_DEG[1]) {
+    return "sporty";
+  }
+  if (rollDeg < ROLL_BANDS_DEG[2]) {
+    return "rough";
+  }
+  return "miserable";
+}
+
+/**
  * Crew-action verdict for an hour: do the spectral motion numbers
  * allow deck work? Two independent PredictWind limits — RMS roll for
  * moving on deck, weighted acceleration for tasks and seasickness —
@@ -1976,14 +2018,32 @@ export function serenoComfort(sea, vessel, wind) {
   const motionValue = vessel.downwindStabilized
     ? acceleration.value * DOWNWIND_STABILIZER_DAMPING
     : acceleration.value;
-  const motionComfort = rateAcceleration(
+  // The roll metric votes its own tier (work doc #56, Minerva
+  // calibration): a_z cannot see roll, and the crew's worst days were
+  // roll days. The downwind-sail damping applies to the roll figure
+  // too — the stabilizer's whole purpose is roll — though the 0.78
+  // ratio was measured on a_z pairs, so this is the documented
+  // assumption of that reuse. The slatting multiplier stays out: bare
+  // poles already double roll through the damping ratio, and the
+  // three-way rule suppresses the slatting flag for drawing sails.
+  const rollDeg =
+    acceleration.rmsRollDeg == null
+      ? null
+      : vessel.downwindStabilized
+        ? acceleration.rmsRollDeg * DOWNWIND_STABILIZER_DAMPING
+        : acceleration.rmsRollDeg;
+  const rollComfort = rateRoll(rollDeg);
+  let motionComfort = rateAcceleration(
     slatting ? motionValue * SLATTING_MULTIPLIER : motionValue,
   );
+  if (rollComfort != null) {
+    motionComfort = worseComfort(motionComfort, rollComfort);
+  }
   const comfort = worseComfort(awsComfort, motionComfort);
   return {
     awsKnots,
     awsComfort,
-    acceleration: { ...acceleration, value: motionValue },
+    acceleration: { ...acceleration, value: motionValue, rollComfort },
     motionComfort,
     comfort: slatting ? worseComfort(comfort, "rough") : comfort,
     slatting,
