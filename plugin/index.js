@@ -35,6 +35,7 @@ const {
 } = require("./sails-configuration.js");
 const {
   filterBulletin,
+  parseCoverageArea,
   resolveBulletinSource,
   textNearTrack,
   ukhoBlocksFromWarnings,
@@ -708,10 +709,6 @@ module.exports = (app) => {
     return match ? decodeURIComponent(match[1]) : null;
   }
 
-  /** Cache entries merged into one serve-time console (work doc #9:
-   * UKHO structured warnings and portal text from several zones ride
-   * the same cache). */
-  const MERGE_BULLETINS = 4;
   /**
    * Trims a route plan to the actual progress (work doc #28): the
    * briefing is forward-looking, so when the course provider reports
@@ -933,6 +930,28 @@ module.exports = (app) => {
       return null;
     }
     const track = waypoints.map((w) => [w.lon, w.lat]);
+    // The bulletins for OUR waters: the zone-tagged issuers (the
+    // TGFTP stations pulled for our zones), the UKHO coordinates, and
+    // any entry whose declared coverage contains the track — the
+    // Islands bulletin for South Minerva even when its features sit
+    // 1000 nm north. No cap: a capped slice cut the newest issuer the
+    // moment another feed joined the cache, and the crew's
+    // current-area bulletin vanished while it still applied.
+    const ours = cached.filter((entry) => {
+      if (entry.zone != null || entry.format === "ukho-json") {
+        return true;
+      }
+      const coverage = parseCoverageArea(entry.text);
+      // A stated declared area decides — the Islands bulletin covers
+      // South Minerva even when its features sit 1000 nm north. An
+      // entry without one (NAVAREA/NAVTEX texts state no coverage)
+      // falls back to the conservative textNearTrack gate: the
+      // unplaced case keeps, never loses.
+      if (coverage != null) {
+        return bboxIntersectsTrack(coverage, track);
+      }
+      return textNearTrack(entry.text, track) !== false;
+    });
     // Area gate (bergie session, Tonga fix): an entry whose own
     // coordinates all sit in another ocean is that ocean's bulletin —
     // it must not reach the console, neither as severe-but-ungeometric
@@ -943,29 +962,29 @@ module.exports = (app) => {
     const merged = [];
     const widerSeen = new Set();
     const wider = [];
-    for (const entry of cached.slice(0, MERGE_BULLETINS)) {
-      if (
-        entry.zone == null &&
-        entry.format !== "ukho-json" &&
-        textNearTrack(entry.text, track) === false
-      ) {
-        continue;
-      }
+    for (const entry of ours) {
       const blocks = blocksForEntry(entry, track);
-      // Wider-area severe warnings from the same bulletins: the map
-      // draws them muted, the console never sees them
+      if (blocks.length > 0) {
+        merged.push({ entry, blocks });
+      }
+    }
+    // Wider-area severe warnings from the same bulletins: the map
+    // draws them muted, the console never sees them. Every cached
+    // entry contributes — a gale in another METAREA is map context,
+    // not console noise.
+    for (const entry of cached) {
       for (const block of widerBlocksForEntry(
         entry,
-        new Set(blocks.map((b) => b.text)),
+        new Set(
+          merged.find((m) => m.entry === entry)?.blocks.map((b) => b.text) ??
+            [],
+        ),
       )) {
         if (wider.length >= WIDER_BLOCK_LIMIT || widerSeen.has(block.text)) {
           continue;
         }
         widerSeen.add(block.text);
         wider.push(block);
-      }
-      if (blocks.length > 0) {
-        merged.push({ entry, blocks });
       }
     }
     if (merged.length === 0) {
@@ -980,22 +999,14 @@ module.exports = (app) => {
       // whose text carries no area (an open-meteo stub, a routing
       // frame) parses to no meta and must not blank the issue time
       let meta = null;
-      for (const entry of cached.slice(0, MERGE_BULLETINS)) {
+      for (const entry of ours) {
         meta = bulletinMetaForEntry(entry);
         if (meta) {
           break;
         }
       }
       // The raw console reads the whole set, same as the in-force case
-      const readable = cached
-        .slice(0, MERGE_BULLETINS)
-        .filter(
-          (entry) =>
-            entry.zone != null ||
-            entry.format === "ukho-json" ||
-            textNearTrack(entry.text, track) !== false,
-        );
-      const texts = readable
+      const texts = ours
         .map((entry) => bulletinMetaForEntry(entry)?.bulletinText ?? "")
         .filter(Boolean);
       return {
@@ -1033,15 +1044,7 @@ module.exports = (app) => {
       bulletinText: merged[0].entry.text,
       source: merged[0].entry.source ?? "api",
     };
-    const readable = cached
-      .slice(0, MERGE_BULLETINS)
-      .filter(
-        (entry) =>
-          entry.zone != null ||
-          entry.format === "ukho-json" ||
-          textNearTrack(entry.text, track) !== false,
-      );
-    const texts = readable
+    const texts = ours
       .map((entry) => bulletinMetaForEntry(entry)?.bulletinText ?? "")
       .filter(Boolean);
     return {
