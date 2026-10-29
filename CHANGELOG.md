@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.15.4] - 2026-10-29
+
 ### Added
 - The spool directory is actually watched (SPEC §2.2): the `spool_directory` configuration knob and the README's "via a GRIB/text spool when offline offshore" described an ingest path that never existed — the watcher module parsed spooled bulletins, but nothing in the plugin ever read the directory, so a gale warning dropped into the spool by the HF gateway sat there unread while the boat was offline. The plugin now creates the watcher at start (closed on stop): each `*.txt`/`*.emc`/`*.text` file ingests into the same bulletin cache the online fetches use (keyed by its spool path, a re-dropped file updates in place, the newest issue time wins), the warnings republish to the plotter on change, the ticker rescans each minute so files dropped before the watcher could attach are caught, and the Data Sources checklist carries a "Spool bulletins" row (file count, or absent when the directory is empty).
 
