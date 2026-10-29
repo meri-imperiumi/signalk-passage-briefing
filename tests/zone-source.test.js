@@ -154,6 +154,85 @@ function mockFetch(handlers) {
   };
 }
 
+test("fetch ladder: every configured station for a zone fetches", async () => {
+  const entries = await fetchZoneBulletins({
+    zones: [14],
+    tgftpStations: [
+      { zone: 14, header: "fqps01", station: "NFFN" },
+      { zone: 14, header: "FQPS43", station: "NZKL" },
+    ],
+    fetchImpl: mockFetch({
+      "tgftp.nws.noaa.gov": (url) => ({
+        ok: true,
+        text: async () => `${url}\nMARINE WEATHER BULLETIN\nNNNN`,
+      }),
+    }),
+  });
+  // Nadi's Islands bulletin and MetService's Subtropic bulletin both
+  // serve XIV: two entries, each its own URL, both zone-tagged
+  assert.equal(entries.length, 2);
+  assert.match(entries[0].url, /fqps01\.nffn/);
+  assert.match(entries[1].url, /fqps43\.nzkl/);
+  assert.deepEqual(
+    entries.map((e) => e.zone),
+    [14, 14],
+  );
+  assert.deepEqual(
+    entries.map((e) => e.source),
+    ["api", "api"],
+  );
+});
+
+test("fetch ladder: one station failing does not take the zone down", async () => {
+  const entries = await fetchZoneBulletins({
+    zones: [14],
+    tgftpStations: [
+      { zone: 14, header: "fqps01", station: "NFFN" },
+      { zone: 14, header: "fqps43", station: "NZKL" },
+    ],
+    fetchImpl: mockFetch({
+      "tgftp.nws.noaa.gov": (url) => {
+        if (/nzkl/.test(url)) {
+          throw new Error("503 service unavailable");
+        }
+        return {
+          ok: true,
+          text: async () => "FQPS01 NFFN\nGALE WARNING\nNNNN",
+        };
+      },
+      "weather.gmdss.org": () => {
+        throw new Error("portal must not run when a station answered");
+      },
+    }),
+  });
+  assert.equal(entries.length, 1);
+  assert.match(entries[0].url, /nffn/);
+});
+
+test("fetch ladder: portal runs when no configured station answered", async () => {
+  const failures = [];
+  const entries = await fetchZoneBulletins({
+    zones: [14],
+    tgftpStations: [
+      { zone: 14, header: "fqps01", station: "NFFN" },
+      { zone: 14, header: "fqps43", station: "NZKL" },
+    ],
+    fetchImpl: mockFetch({
+      "tgftp.nws.noaa.gov": new Error("connection refused"),
+      "weather.gmdss.org": () => ({
+        ok: true,
+        text: async () =>
+          "<html><pre>MARINE WEATHER BULLETIN FOR SUBTROPIC</pre></html>",
+      }),
+    }),
+    onFailure: (zone, url, error) => failures.push({ zone, url, error }),
+  });
+  assert.equal(entries.length, 1);
+  assert.match(entries[0].url, /gmdss/);
+  // The whole ladder answered: no failure recorded
+  assert.equal(failures.length, 0);
+});
+
 test("fetch ladder: TGFTP preferred when configured, portal fallback", async () => {
   const calls = [];
   const tgftpResponse = (url) => {

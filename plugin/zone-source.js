@@ -310,9 +310,11 @@ function extractGmdssPre(html) {
 
 /**
  * Fetches zone bulletins through the doc #9 ladder. For each active
- * zone: the configured TGFTP station when present, then the GMDSS
- * portal. Per-zone failures skip that zone (the next refresh
- * retries); nothing is fetched for zones not in the list.
+ * zone: every configured TGFTP station (a METAREA can carry several
+ * issuers — Nadi and Wellington both serve XIV), then the GMDSS
+ * portal when no station answered. Per-zone failures skip that zone
+ * (the next refresh retries); nothing is fetched for zones not in
+ * the list.
  *
  * @param {object} params
  * @param {number[]} params.zones - Active zone integers
@@ -335,8 +337,13 @@ async function fetchZoneBulletins({
 }) {
   const out = [];
   for (const zone of zones ?? []) {
-    const station = (tgftpStations ?? []).find((s) => s.zone === zone);
-    if (station) {
+    // A METAREA can carry several issuers — Nadi's Islands bulletin and
+    // MetService's Subtropic bulletin both serve XIV — so every
+    // configured station for the zone fetches, each into its own
+    // zone-tagged cache entry
+    const stations = (tgftpStations ?? []).filter((s) => s.zone === zone);
+    let answered = 0;
+    for (const station of stations) {
       const url = tgftpUrl(station.header, station.station);
       try {
         const { text } = await resolveBulletinSource(url, {
@@ -344,10 +351,14 @@ async function fetchZoneBulletins({
           timeoutMs,
         });
         out.push({ url, text, source: "api", zone });
-        continue;
+        answered += 1;
       } catch {
-        // Ladder: fall through to the portal
+        // Station down: the other stations still try; the portal takes
+        // over only when none answered
       }
+    }
+    if (answered > 0) {
+      continue;
     }
     const url = gmdssBulletinUrl(zone);
     try {

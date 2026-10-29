@@ -300,10 +300,16 @@ const DEFAULTS = {
     "https://api.weather.gov/products/types/HSF/locations/EP1",
     "https://api.weather.gov/products/types/HSF/locations/EP2",
   ],
-  /** TGFTP station→zone fast path (work doc #9 §sources 3): the
-   * doc's XIV example (Fiji radio re-broadcasting NAVAREA XIV) as the
-   * seed; extend via configuration. */
-  bulletin_stations: [{ zone: 14, header: "FQPS01", station: "NFFN" }],
+  /** TGFTP station→zone fast path (work doc #9 §sources 3): a
+   * METAREA can carry several issuers — METAREA XIV carries Nadi's
+   * Islands bulletin (equator–25S) and MetService's Subtropic
+   * bulletin (25S–40S), and the Tonga→NZ route crosses that 25S
+   * boundary mid-passage. Every configured station for a zone
+   * fetches; extend via configuration. */
+  bulletin_stations: [
+    { zone: 14, header: "FQPS01", station: "NFFN" },
+    { zone: 14, header: "FQPS43", station: "NZKL" },
+  ],
   publish_metarea_notes: true,
   /** Automatic synoptic front passages from the weather provider's
    * grid caches (work doc #50). Reads local caches — no downloads —
