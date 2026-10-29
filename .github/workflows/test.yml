@@ -16,6 +16,10 @@ jobs:
       with:
         node-version: ${{ matrix.node-version }}
     - run: npm install
+    # node:sqlite is flag-gated before Node 22.13; the flag is a
+    # no-op warning on newer versions, so every matrix entry can
+    # carry it
     - run: npm test
       env:
         CI: true
+        NODE_OPTIONS: --experimental-sqlite

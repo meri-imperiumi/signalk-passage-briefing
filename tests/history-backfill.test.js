@@ -177,20 +177,28 @@ describe("createHistoryWindStats", () => {
   });
 
   test("a wedged History API query aborts on the timeout", async () => {
-    const getStats = createHistoryWindStats({
-      baseUrl: "http://localhost:3000",
-      timeoutMs: 20,
-      fetchImpl: (_url, init) =>
-        new Promise((_resolve, reject) => {
-          init.signal.addEventListener("abort", () =>
-            reject(new Error(`aborted: ${init.signal.reason?.name}`)),
-          );
-        }),
-    });
-    await assert.rejects(
-      getStats({ timestamp: "2023-03-20T09:28:00.000Z" }),
-      /aborted: TimeoutError/,
-    );
+    // Hold the event loop through the abort: the timeout signal's own
+    // timer is unref'd, and with nothing else pending the loop would
+    // drain before the abort could fire (Node 22, Windows CI)
+    const hold = setTimeout(() => {}, 1000);
+    try {
+      const getStats = createHistoryWindStats({
+        baseUrl: "http://localhost:3000",
+        timeoutMs: 20,
+        fetchImpl: (_url, init) =>
+          new Promise((_resolve, reject) => {
+            init.signal.addEventListener("abort", () =>
+              reject(new Error(`aborted: ${init.signal.reason?.name}`)),
+            );
+          }),
+      });
+      await assert.rejects(
+        getStats({ timestamp: "2023-03-20T09:28:00.000Z" }),
+        /aborted: TimeoutError/,
+      );
+    } finally {
+      clearTimeout(hold);
+    }
   });
 });
 
