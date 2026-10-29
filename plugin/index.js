@@ -34,6 +34,7 @@ const {
   readSailsConfiguration,
 } = require("./sails-configuration.js");
 const {
+  bboxIntersectsTrack,
   filterBulletin,
   parseCoverageArea,
   resolveBulletinSource,
