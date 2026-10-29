@@ -425,6 +425,59 @@ test("webapp view models", async (t) => {
   });
 
   await t.test(
+    "mergeTimeline shows the deployment window's wind (base + gusts)",
+    () => {
+      const timeline = mergeTimeline({
+        passageSummary: {
+          deploymentEvents: [
+            {
+              hoursFromNow: 107.4,
+              timestamp: "2026-11-04T17:35:00.000Z",
+              sailName: "Parasailor",
+              claim: "comfort",
+              hours: 4,
+              windMinKnots: 12,
+              windMaxKnots: 18,
+              gustMaxKnots: 24,
+            },
+            {
+              hoursFromNow: 110.4,
+              timestamp: "2026-11-04T20:35:00.000Z",
+              sailName: "Parasailor",
+              claim: "comfort",
+              takeDown: true,
+              breakReason: "squall window",
+              breakLabel: "squall window",
+              windMinKnots: 18,
+              windMaxKnots: 18,
+              gustMaxKnots: 31,
+            },
+            {
+              hoursFromNow: 112,
+              sailName: "poled-out jib",
+              claim: "drive",
+              hours: 6,
+            },
+          ],
+        },
+      });
+      const deploy = timeline.find((t) => t.label === "Deploy Parasailor");
+      assert.ok(deploy, "deploy row present");
+      assert.equal(
+        deploy.detail,
+        "smoother ride (measured) · wind 12–18 kt · gusts to 24 kt · 4 h window",
+      );
+      const down = timeline.find((t) => t.label === "Parasailor down");
+      assert.ok(down, "take-down row present");
+      assert.equal(down.detail, "squall window · wind 18 kt · gusts to 31 kt");
+      // An event without wind data renders without wind segments
+      const bare = timeline.find((t) => t.label === "Deploy poled-out jib");
+      assert.ok(bare, "no-wind row present");
+      assert.equal(bare.detail, "keeps the sails pulling · 6 h window");
+    },
+  );
+
+  await t.test(
     "sparse forecast stretches ride the timeline as warnings (doc #55)",
     () => {
       const timeline = mergeTimeline({

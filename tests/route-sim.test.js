@@ -1901,6 +1901,14 @@ test("deployment events fire in the slatting regime on a run (work doc #41)", as
   assert.equal(deploy.sailName, "Parasailor");
   assert.equal(deploy.claim, "comfort");
   assert.ok(deploy.hours >= 3, `hours ${deploy.hours}`);
+  // The window's own wind rides both events: the fixture blows a
+  // steady 10 kn base with gusts at tws + 5, so the base range is a
+  // single figure and the gust ceiling reads 15
+  for (const event of events) {
+    assert.equal(event.windMinKnots, 10, JSON.stringify(event));
+    assert.equal(event.windMaxKnots, 10);
+    assert.equal(event.gustMaxKnots, 15);
+  }
   // The summary carries them for the timeline
   const { filterExceptions } = await simPromise;
   const exceptions = filterExceptions(result);

@@ -1510,6 +1510,17 @@ export function mergeTimeline(exceptions, payload = null) {
       d.claim === "comfort"
         ? "smoother ride (measured)"
         : "keeps the sails pulling";
+    // The window's own wind rides the event (route-sim stamps the
+    // base range and the strongest gust across the hours the sail is
+    // up): the deploy/take-down decision is a wind decision
+    const windText =
+      d.windMinKnots != null && d.windMaxKnots != null
+        ? d.windMinKnots === d.windMaxKnots
+          ? `wind ${d.windMinKnots} kt`
+          : `wind ${d.windMinKnots}–${d.windMaxKnots} kt`
+        : null;
+    const gustText =
+      d.gustMaxKnots != null ? `gusts to ${d.gustMaxKnots} kt` : null;
     push({
       hoursFromNow: d.hoursFromNow ?? null,
       timestamp: d.timestamp ?? null,
@@ -1518,6 +1529,8 @@ export function mergeTimeline(exceptions, payload = null) {
       label,
       detail: [
         d.takeDown ? (d.breakLabel ?? null) : claimText,
+        windText,
+        gustText,
         d.anchored,
         d.takeDown ? null : d.hours != null ? `${d.hours} h window` : null,
       ]

@@ -1182,12 +1182,40 @@ function runDeploymentPass(
     }
     // Timeline entries: deploy (anchored when the watch schedule put
     // a handover inside the window), and the take-down where the
-    // forecast broke.
+    // forecast broke. Both carry the window's own wind: the base
+    // (sustained) range and the strongest gust across the hours the
+    // sail would be up — the deploy/take-down decision is a wind
+    // decision, not just a run-length one.
+    const windowWind = (startMs, untilMs) => {
+      const bases = [];
+      const gusts = [];
+      for (const row of hourly) {
+        const ms = Date.parse(row.timestamp);
+        if (ms < startMs || ms > untilMs) {
+          continue;
+        }
+        if (Number.isFinite(row.twsKnots)) {
+          bases.push(row.twsKnots);
+        }
+        if (Number.isFinite(row.gustKnots)) {
+          gusts.push(row.gustKnots);
+        }
+      }
+      if (bases.length === 0 && gusts.length === 0) {
+        return null;
+      }
+      return {
+        windMinKnots: bases.length > 0 ? Math.round(Math.min(...bases)) : null,
+        windMaxKnots: bases.length > 0 ? Math.round(Math.max(...bases)) : null,
+        gustMaxKnots: gusts.length > 0 ? Math.round(Math.max(...gusts)) : null,
+      };
+    };
     for (const d of plan) {
       const anchorText =
         d.anchoredMs != null && d.anchoredMs !== d.startMs
           ? "at the watch change"
           : null;
+      const wind = windowWind(d.startMs, d.untilMs);
       deploymentEvents.push({
         hoursFromNow: Math.round(((d.startMs - t0Ms) / 3600000) * 10) / 10,
         timestamp: new Date(d.startMs).toISOString(),
@@ -1195,6 +1223,7 @@ function runDeploymentPass(
         claim: d.claim,
         anchored: anchorText,
         hours: d.hours,
+        ...(wind ?? {}),
       });
       const breakLabel =
         d.breakReason === "squall gusts"
@@ -1234,6 +1263,7 @@ function runDeploymentPass(
           breakLabel,
           anchored: null,
           hours: d.hours,
+          ...(wind ?? {}),
           // For the conditions tab: the row the take-down lands on
           untilTimestamp: untilRow?.timestamp ?? null,
         });
