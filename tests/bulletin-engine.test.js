@@ -482,13 +482,21 @@ test("live fqps43: the Part 3 forecast sentences reach the waters they cover", (
     "East-of-F2 wind note retained east of the front",
   );
 
-  // At Minerva (18.3S) none of the subtropic area applies: empty
+  // At Minerva (18.3S): outside every applicability area (the A1 ring,
+  // the F1 rain band), but inside the console's relevance radius of
+  // the subtropic's own declared feature — the area statement is the
+  // synoptic picture the crew reads while hugging the 25S boundary
   const minerva = filterBulletin({
     rawText: raw,
     source: "api",
     track: [[174.3, -18.3]],
   });
-  assert.equal(minerva.blocks.length, 0);
+  assert.equal(minerva.blocks.length, 1);
+  assert.match(minerva.blocks[0].text, /Area A1 bounded by/);
+  assert.ok(
+    !minerva.blocks.some((b) => /^Within A1:/.test(b.text)),
+    "the A1 applicability forecast stays off a vessel outside A1",
+  );
 });
 
 test("prose around MetService feature grammar collects nothing", () => {
@@ -852,9 +860,11 @@ test("filterBulletin carries the issuing authority", () => {
   assert.equal(noIssuer.issuer, null);
 });
 
-test("live NFFN bulletin: axis lines band-filtered, cardinal areas kept", () => {
+test("live NFFN bulletin: axis lines proximity-filtered, cardinal areas kept", () => {
   // Real FQPS01 NFFN text as received on board 2026-09-27, vessel at
-  // anchor 18.7S 174W: T1/T2 axis bands lie well north (dropped), the
+  // anchor 18.7S 174W: T1's axis is 700 nm west (dropped), T2's
+  // southern end sits ~350 nm north (inside the console's relevance
+  // radius — the crew reads the trough north of them), and the
   // "south of 10S and west of 169W" area contains the vessel (kept)
   const text = [
     "FQPS01 NFFN 270700",
@@ -888,8 +898,14 @@ test("live NFFN bulletin: axis lines band-filtered, cardinal areas kept", () => 
     texts.some((t) => t.includes("SOUTHEAST WINDS 25")),
     "area containing the vessel kept",
   );
-  assert.ok(!texts.some((t) => t.includes("TROUGH T1")), "T1 band dropped");
-  assert.ok(!texts.some((t) => t.includes("TROUGH T2")), "T2 band dropped");
+  assert.ok(
+    !texts.some((t) => t.includes("TROUGH T1")),
+    "T1 axis 700 nm west: dropped",
+  );
+  assert.ok(
+    texts.some((t) => t.includes("TROUGH T2")),
+    "T2 end ~350 nm north: proximity keep",
+  );
 });
 
 /** Full FQPS01 NFFN synopsis with named features (CF, T1–T4, L). */
@@ -949,11 +965,14 @@ test("named-feature areas: NFFN synopsis filtered for six vessels", () => {
   assert.equal(has(marquesas, "WEST OF CF"), false);
   assert.equal(has(marquesas, "BETWEEN 150W AND CF"), false);
 
-  // The T1 band (160E–173E, 9S–18S ± 100nm) contains no test vessel
-  for (const track of [[[178, -17]], [[-147, -18]]]) {
-    const texts = kept(track);
-    assert.equal(has(texts, "TROUGH T1"), false);
-  }
+  // The T1 band (160E–173E, 9S–18S ± 100nm) contains no test vessel,
+  // but proximity decides the console: T1's axis ends at 18S 173E —
+  // ~280 nm west of the Fiji vessel, well inside the relevance radius
+  // — while the Marquesas vessel at 147W is 3000 nm past its end
+  const fijiT1 = has(kept([[178, -17]]), "TROUGH T1");
+  const marquesasT1 = has(kept([[-147, -18]]), "TROUGH T1");
+  assert.equal(fijiT1, true, "T1 axis within proximity of Fiji");
+  assert.equal(marquesasT1, false, "T1 axis far from Marquesas");
 });
 
 // --- Antimeridian -------------------------------------------------------------

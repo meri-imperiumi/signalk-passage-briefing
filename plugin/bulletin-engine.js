@@ -91,6 +91,18 @@ function isMastheadBlock(blockText) {
 }
 
 /**
+ * Console relevance radius for synoptic feature declarations (work
+ * doc #57 session, Tonga→NZ): a passage hugs subarea and METAREA
+ * boundaries, and the crew expects the area's weather picture — the
+ * trough 300 nm ahead, the front at the far edge — on the console
+ * while it is within this radius of the track. Applicability areas
+ * (the WITHIN bands, the swells notes) have no such slack: their
+ * geometry is exactly where the warning applies. Matches the hazard
+ * radii' order of magnitude.
+ */
+const BULLETIN_PROXIMITY_NM = 500;
+
+/**
  * Retained NAVTEX B_2 subject indicators (work doc #4): A navigational
  * warnings, B gale warnings, E meteorological forecasts. The rest
  * (C ice reports, D SAR, …) is dropped for the weather briefing.
@@ -1521,7 +1533,23 @@ function bboxIntersectsTrack(bbox, track) {
  * @param {number[][]} track - Track points [[lon, lat], …]
  * @returns {boolean} True when the block should be kept
  */
-function intersectsTrack(geometry, track) {
+/**
+ * Whether a block's geometry intersects the track. Blocks without
+ * extractable geometry are kept (cannot be placed — a conservative
+ * miss beats silently losing a warning). Axis-line polygons with a
+ * declared band ("WITHIN 120NM") expand their bounding box by the
+ * band before the test: the warning area is the band, not the line.
+ * A proximity radius (feature declarations near an area boundary)
+ * widens the test the same way, never below the block's own band.
+ *
+ * @param {{type: "polygon"|"bbox", coordinates: number[][]|number[],
+ *   bufferNm?: number}}|null geometry
+ * @param {number[][]} track - Track points [[lon, lat], …]
+ * @param {number} [proximityNm] - Console relevance radius around the
+ *   geometry's own extent
+ * @returns {boolean} True when the block should be kept
+ */
+function intersectsTrack(geometry, track, proximityNm = 0) {
   if (!geometry) {
     return true;
   }
@@ -1539,12 +1567,16 @@ function intersectsTrack(geometry, track) {
     }
     // Band expansion for axis lines and WITHIN-nm areas. Chains that
     // cross the antimeridian are unfolded into a continuous frame and
-    // track longitudes are tested in all three representations.
-    if (geometry.bufferNm > 0) {
+    // track longitudes are tested in all three representations. The
+    // radius is the wider of the block's own declared band and the
+    // caller's proximity: a 540 nm swell band keeps its full width,
+    // a bare trough axis gains the console's relevance radius.
+    const bandNm = Math.max(geometry.bufferNm ?? 0, proximityNm);
+    if (bandNm > 0) {
       const lats = geometry.coordinates.map(([, lat]) => lat);
       const meanLat =
         ((Math.min(...lats) + Math.max(...lats)) / 2) * (Math.PI / 180);
-      const latPad = geometry.bufferNm / 60;
+      const latPad = bandNm / 60;
       const lonPad = latPad / Math.max(0.2, Math.cos(meanLat));
       const unfolded = [];
       let prev = null;
@@ -2000,7 +2032,19 @@ function filterBulletin({
         return null;
       }
       const geometry = extractGeometry(blockText, features, coverage);
-      if (!intersectsTrack(geometry, track)) {
+      // The synoptic feature declarations (TROUGH T1, Front F1, Area
+      // A1 bounded by…) are the area's weather picture, and passages
+      // hug subarea and METAREA boundaries: a feature with a clear
+      // geolocation stays on the console while it sits within
+      // BULLETIN_PROXIMITY_NM of the track, whatever subarea it was
+      // printed under. The applicability areas (the WITHIN bands, the
+      // swells notes) have no such slack — their geometry is exactly
+      // where the warning applies, clamped to the declared area.
+      const declaresFeature = FEATURE_DECLARATION.test(
+        blockText.trim().split(/\r?\n/, 1)[0],
+      );
+      const proximityNm = declaresFeature ? BULLETIN_PROXIMITY_NM : 0;
+      if (!intersectsTrack(geometry, track, proximityNm)) {
         return null; // Discard rule: not on our waters
       }
       // Coordinates that failed to build geometry still place the
@@ -2280,6 +2324,7 @@ module.exports = {
   advisorySeverityLabel,
   quadrantRing,
   RETAINED_SUBJECTS,
+  BULLETIN_PROXIMITY_NM,
   SEVERE_KEYWORDS,
   SECTION_ANCHORS,
   STORM_DECLARATION,

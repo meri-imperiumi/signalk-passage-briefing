@@ -897,17 +897,18 @@ module.exports = (app) => {
   }
 
   /**
-   * Wider-area context for the map (work doc #47): severe, geometric
-   * blocks from the SAME cached bulletins that the track filter
-   * discarded. The console stays filtered — text noise offshore is
-   * noise — but a gale two hundred miles off the route belongs on a
-   * map the crew can zoom and pan. Nothing here reaches the console
-   * or the fit; the map draws them muted.
+   * Wider-area context for the map (work doc #47): geometric blocks
+   * from the SAME cached bulletins that the track filter discarded —
+   * the whole bulletin set's picture, troughs and fronts and swell
+   * areas alike, not only the severe ones. The map is zoomable and
+   * pannable: the crew pans to the trough 300 nm ahead, so the
+   * console's relevance filter is not the map's. Nothing here reaches
+   * the console or the fit; the map draws them muted.
    *
    * @param {object} entry - Bulletin cache entry
    * @param {Set<string>} excludeTexts - The track-filtered blocks'
    *   texts (already on the console)
-   * @returns {Array<object>} Severe geometric blocks not on the track
+   * @returns {Array<object>} Geometric blocks not on the console
    */
   function widerBlocksForEntry(entry, excludeTexts) {
     if (entry.format === "ukho-json") {
@@ -922,10 +923,7 @@ module.exports = (app) => {
     return withEntryProvenance(
       entry,
       (bulletin?.blocks ?? []).filter(
-        (block) =>
-          block.geometry != null &&
-          !excludeTexts.has(block.text) &&
-          hasSevereKeyword(block.text),
+        (block) => block.geometry != null && !excludeTexts.has(block.text),
       ),
     );
   }
