@@ -1152,8 +1152,7 @@ function runDeploymentPass(
       underCanvas: row.sailState !== "NO_SAILS",
       // The anchored schedule's own rig changes end the deployment
       // whatever the wind says (post-anchoring pass only)
-      rigChanged:
-        rigChangedHours != null && rigChangedHours.has(row.hoursFromNow),
+      rigChanged: rigChangedHours?.has(row.hoursFromNow) === true,
       // Named forecast events (probable rain squalls, convective air,
       // the squall-risk hours) kill the deployment the same way the
       // gust-factor gate does — the forecast's own "sail comes down"

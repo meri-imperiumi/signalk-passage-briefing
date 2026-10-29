@@ -95,12 +95,15 @@ function isMastheadBlock(blockText) {
  * doc #57 session, Tonga→NZ): a passage hugs subarea and METAREA
  * boundaries, and the crew expects the area's weather picture — the
  * trough 300 nm ahead, the front at the far edge — on the console
- * while it is within this radius of the track. Applicability areas
- * (the WITHIN bands, the swells notes) have no such slack: their
- * geometry is exactly where the warning applies. Matches the hazard
- * radii' order of magnitude.
+ * while it is within this TRUE distance of the track (not a padded
+ * bounding box, whose corners reach far past the radius). Measured
+ * against Minerva's 2026-10-29 bulletin set: the Islands trough end
+ * at 574 nm and the Subtropic's A1 edge at 532 nm keep, the T2 axis
+ * at 702 nm drops. Applicability areas (the WITHIN bands, the swells
+ * notes) have no such slack: their geometry is exactly where the
+ * warning applies.
  */
-const BULLETIN_PROXIMITY_NM = 500;
+const BULLETIN_PROXIMITY_NM = 600;
 
 /**
  * Retained NAVTEX B_2 subject indicators (work doc #4): A navigational
@@ -471,8 +474,8 @@ function parseCoordinatePoints(text) {
   );
   const pair = /(\d+(?:\.\d+)?|EQT)\s*([NS])?[,\s]+(\d+(?:\.\d+)?)\s*([EW])?/gi;
   const points = [];
-  let match;
-  while ((match = pair.exec(compact)) !== null) {
+  let match = pair.exec(compact);
+  while (match !== null) {
     const equator = match[1].toUpperCase() === "EQT";
     const latHemi = match[2]?.toUpperCase();
     const lonHemi = match[4]?.toUpperCase();
@@ -480,6 +483,7 @@ function parseCoordinatePoints(text) {
       // Prose numbers, not coordinates — resume inside the rejected
       // span so it cannot swallow a following real coordinate pair
       pair.lastIndex = match.index + 1;
+      match = pair.exec(compact);
       continue;
     }
     const lonValue = hemisphereDegrees(match[3], lonHemi ?? "E");
@@ -488,12 +492,14 @@ function parseCoordinatePoints(text) {
       // shorthand is prose's second number ("07N TO 31N" is two
       // latitudes, not 7N 31E) — reject it the same way
       pair.lastIndex = match.index + 1;
+      match = pair.exec(compact);
       continue;
     }
     const lat = equator ? 0 : hemisphereDegrees(match[1], latHemi ?? "N");
     if (Number.isFinite(lat) && Number.isFinite(lonValue)) {
       points.push([lonValue, lat]);
     }
+    match = pair.exec(compact);
   }
   return points;
 }
@@ -1428,6 +1434,102 @@ function unwrapLon(lon, reference) {
 }
 
 /**
+ * True distance in nautical miles from a point to the nearest point
+ * of a chain — equirectangular, fine at the sub-1000 nm radii the
+ * console relevance test uses, and antimeridian-safe: the chain
+ * unfolds into its own contiguous frame and the query point joins it
+ * at its nearest representative. Planar point-to-segment distance in
+ * the unfolded frame; the latitude scaling uses the chain's mean.
+ *
+ * @param {number[][]} chain - [[lon, lat], …] (closed or open)
+ * @param {number} lon - Query longitude
+ * @param {number} lat - Query latitude
+ * @returns {number} Distance in nautical miles
+ */
+function chainDistanceNm(chain, lon, lat) {
+  const lons = [chain[0][0]];
+  for (let i = 1; i < chain.length; i++) {
+    lons.push(unwrapLon(chain[i][0], lons[i - 1]));
+  }
+  const lats = chain.map(([, chainLat]) => chainLat);
+  const meanLat =
+    ((Math.min(...lats) + Math.max(...lats)) / 2) * (Math.PI / 180);
+  const knotsPerDegLon = 60 * Math.max(0.2, Math.cos(meanLat));
+  const px = unwrapLon(lon, (Math.min(...lons) + Math.max(...lons)) / 2);
+  // The query point is the planar origin; chain vertices project
+  // relative to it
+  const pts = chain.map(([, chainLat], i) => [
+    (lons[i] - px) * knotsPerDegLon,
+    (chainLat - lat) * 60,
+  ]);
+  const segmentDistance2 = (ax, ay, bx, by) => {
+    const dx = bx - ax;
+    const dy = by - ay;
+    const length2 = dx * dx + dy * dy;
+    let t = length2 > 0 ? -(ax * dx + ay * dy) / length2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const ex = ax + t * dx;
+    const ey = ay + t * dy;
+    return ex * ex + ey * ey;
+  };
+  let best = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) {
+    best = Math.min(
+      best,
+      segmentDistance2(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]),
+    );
+  }
+  return Math.sqrt(best);
+}
+
+/**
+ * True distance in nautical miles from a point to a geometry: zero
+ * inside a ring, else the nearest edge; a chain measures to its
+ * nearest segment; a point to itself. The inverse-unchained shapes
+ * (bboxes) measure as their corner ring.
+ *
+ * @param {{type: string, coordinates: number[][]|number[]}} geometry
+ * @param {number} lon - Query longitude
+ * @param {number} lat - Query latitude
+ * @returns {number} Distance in nautical miles
+ */
+function geometryDistanceNm(geometry, lon, lat) {
+  if (geometry.type === "point") {
+    const [pointLon, pointLat] = geometry.coordinates;
+    return chainDistanceNm(
+      [
+        [lon, lat],
+        [pointLon, pointLat],
+      ],
+      lon,
+      lat,
+    );
+  }
+  const ring =
+    geometry.type === "bbox"
+      ? (() => {
+          const [minLon, minLat, maxLon, maxLat] = geometry.coordinates;
+          return [
+            [minLon, minLat],
+            [maxLon, minLat],
+            [maxLon, maxLat],
+            [minLon, maxLat],
+            [minLon, minLat],
+          ];
+        })()
+      : geometry.coordinates;
+  if (geometry.type === "polygon" && ringContains(ring, lon, lat)) {
+    return 0;
+  }
+  const closed = [...ring];
+  const [first, last] = [closed[0], closed[closed.length - 1]];
+  if (first[0] !== last[0] || first[1] !== last[1]) {
+    closed.push([...first]);
+  }
+  return chainDistanceNm(closed, lon, lat);
+}
+
+/**
  * Ray-casting containment for a GeoJSON ring (lon/lat, closed or
  * unclosed). The ring is unwrapped against itself once (sequential
  * shortest-arc), so a polygon spanning the antimeridian stays
@@ -1549,7 +1651,7 @@ function bboxIntersectsTrack(bbox, track) {
  *   geometry's own extent
  * @returns {boolean} True when the block should be kept
  */
-function intersectsTrack(geometry, track, proximityNm = 0) {
+function intersectsTrack(geometry, track) {
   if (!geometry) {
     return true;
   }
@@ -1567,16 +1669,12 @@ function intersectsTrack(geometry, track, proximityNm = 0) {
     }
     // Band expansion for axis lines and WITHIN-nm areas. Chains that
     // cross the antimeridian are unfolded into a continuous frame and
-    // track longitudes are tested in all three representations. The
-    // radius is the wider of the block's own declared band and the
-    // caller's proximity: a 540 nm swell band keeps its full width,
-    // a bare trough axis gains the console's relevance radius.
-    const bandNm = Math.max(geometry.bufferNm ?? 0, proximityNm);
-    if (bandNm > 0) {
+    // track longitudes are tested in all three representations.
+    if (geometry.bufferNm > 0) {
       const lats = geometry.coordinates.map(([, lat]) => lat);
       const meanLat =
         ((Math.min(...lats) + Math.max(...lats)) / 2) * (Math.PI / 180);
-      const latPad = bandNm / 60;
+      const latPad = geometry.bufferNm / 60;
       const lonPad = latPad / Math.max(0.2, Math.cos(meanLat));
       const unfolded = [];
       let prev = null;
@@ -2043,9 +2141,20 @@ function filterBulletin({
       const declaresFeature = FEATURE_DECLARATION.test(
         blockText.trim().split(/\r?\n/, 1)[0],
       );
-      const proximityNm = declaresFeature ? BULLETIN_PROXIMITY_NM : 0;
-      if (!intersectsTrack(geometry, track, proximityNm)) {
-        return null; // Discard rule: not on our waters
+      if (!intersectsTrack(geometry, track)) {
+        // The declared features keep within the console's relevance
+        // radius — measured as true distance, so a trough axis 700 nm
+        // east does not ride a padded bounding box's corner
+        const near =
+          declaresFeature &&
+          geometry != null &&
+          track.some(
+            ([lon, lat]) =>
+              geometryDistanceNm(geometry, lon, lat) <= BULLETIN_PROXIMITY_NM,
+          );
+        if (!near) {
+          return null; // Discard rule: not on our waters
+        }
       }
       // Coordinates that failed to build geometry still place the
       // block: a synopsis naming "LOW 59N167W" is other ocean's text
@@ -2354,6 +2463,7 @@ module.exports = {
   extractGeometry,
   unwrapLon,
   ringContains,
+  geometryDistanceNm,
   polygonIntersectsTrack,
   bboxIntersectsTrack,
   intersectsTrack,

@@ -35,7 +35,6 @@ const {
 } = require("./sails-configuration.js");
 const {
   filterBulletin,
-  hasSevereKeyword,
   resolveBulletinSource,
   textNearTrack,
   ukhoBlocksFromWarnings,
