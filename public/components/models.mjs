@@ -2109,6 +2109,44 @@ export function etaTable(exceptions, payload = null) {
 }
 
 /**
+ * Comfort-tier distribution over the whole simulated passage: the
+ * summary track's hourly comfort tiers counted into hours per Sereno
+ * tier (best first), for the strategic ETA card's stacked ribbon and
+ * legend — the passage's character beside its arrival math. Rows
+ * without a tier (comfort never computed for them) count as unknown;
+ * they render in neither the bar nor the legend.
+ *
+ * @param {Array<{comfortLevel: string|null}|null>|null} track - The
+ *   passage summary's hourly track
+ * @returns {{tiers: Array<{level: string, css: string, hours: number}>,
+ *   totalHours: number, unknownHours: number}} Hours are whole sim
+ *   steps; totalHours counts only tiered rows (the ribbon's 100 %)
+ */
+export function comfortDistribution(track) {
+  const rows = Array.isArray(track) ? track : [];
+  const counts = new Map(COMFORT_TIERS.map((t) => [t.level, 0]));
+  let unknown = 0;
+  for (const row of rows) {
+    const level = row?.comfortLevel;
+    if (level != null && counts.has(level)) {
+      counts.set(level, counts.get(level) + 1);
+    } else {
+      unknown += 1;
+    }
+  }
+  const tiers = COMFORT_TIERS.map((t) => ({
+    level: t.level,
+    css: t.css,
+    hours: counts.get(t.level),
+  }));
+  return {
+    tiers,
+    totalHours: rows.length - unknown,
+    unknownHours: unknown,
+  };
+}
+
+/**
  * Glyph per timeline/timeline-event kind (work doc #18), shared by
  * the passage timeline rows and the map's event pins (work doc #47):
  * one map of kinds to marks so both views never drift apart.

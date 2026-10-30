@@ -14,6 +14,7 @@ test("webapp view models", async (t) => {
     compiledLabel,
     GLYPHS,
     comfortColor,
+    comfortDistribution,
     etaTable,
     fmtLiters,
     fmtHours,
@@ -984,6 +985,60 @@ test("webapp view models", async (t) => {
       { metadata: { fetchedAt: "2026-06-21T06:00:00.000Z" } },
     );
     assert.equal(farTable.rows[1].cloud, null);
+  });
+
+  await t.test("comfortDistribution counts passage hours per tier", () => {
+    const row = (level) => ({
+      hoursFromNow: 0,
+      comfortLevel: level,
+      slatting: false,
+    });
+    const dist = comfortDistribution([
+      row("champagne"),
+      row("champagne"),
+      row("champagne"),
+      row("champagne"),
+      row("champagne"),
+      row("easy"),
+      row("easy"),
+      row("easy"),
+      row("easy"),
+      row("easy"),
+      row("easy"),
+      row("easy"),
+      row("easy"),
+      row("easy"),
+      row("easy"),
+      row("sporty"),
+      row("sporty"),
+      row("sporty"),
+      row("sporty"),
+      row(null),
+    ]);
+    // Best first, hours as whole sim steps, unknown rows set aside
+    assert.deepEqual(
+      dist.tiers.map((tier) => [tier.level, tier.hours]),
+      [
+        ["champagne", 5],
+        ["easy", 10],
+        ["sporty", 4],
+        ["rough", 0],
+        ["miserable", 0],
+      ],
+    );
+    assert.equal(dist.totalHours, 19);
+    assert.equal(dist.unknownHours, 1);
+    // Tier colors ride along for the ribbon and legend
+    assert.equal(dist.tiers[0].css, "var(--comfort-champagne)");
+
+    // No track (no sim): all zeros, the card strip hides
+    const empty = comfortDistribution(null);
+    assert.deepEqual(
+      empty.tiers.map((tier) => tier.hours),
+      [0, 0, 0, 0, 0],
+    );
+    assert.equal(empty.totalHours, 0);
+    assert.equal(empty.unknownHours, 0);
   });
 
   await t.test(

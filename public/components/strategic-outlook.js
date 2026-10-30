@@ -8,7 +8,9 @@
 
 import { blockShapes, eventPins, trackLine } from "./map-model.mjs";
 import {
+  comfortDistribution,
   etaTable,
+  fmtHours,
   fmtShip,
   fmtUtc,
   mergeTimeline,
@@ -75,6 +77,39 @@ strong.sev {
           color: var(--color-grey);
           margin: 0 0 8px;
         }
+        /* Comfort distribution (strategic ETA card): one stacked
+         * ribbon of the passage's simulated hours per Sereno tier,
+         * the legend beneath in tier colors — the sparkline's
+         * palette, so the two never disagree */
+        .comfort-bar {
+          display: flex;
+          height: 10px;
+          border: 1px solid rgba(102, 198, 219, 0.3);
+        }
+        .comfort-bar .seg { min-width: 2px; }
+        .comfort-row {
+          display: flex;
+          align-items: baseline;
+          gap: 6px;
+          margin-top: 4px;
+          font-size: 0.85rem;
+        }
+        .comfort-swatch {
+          width: 10px;
+          height: 10px;
+          align-self: center;
+          flex: none;
+        }
+        .comfort-hours {
+          font-family: var(--font-data, ui-monospace, monospace);
+          font-variant-numeric: tabular-nums;
+          font-weight: 700;
+        }
+        .comfort-pct {
+          color: var(--text-muted);
+          font-family: var(--font-data, ui-monospace, monospace);
+          font-variant-numeric: tabular-nums;
+        }
       </style>
       <section class="sk-card theme-teal">
         <h2>ETA &amp; Motor Plan</h2>
@@ -88,6 +123,14 @@ strong.sev {
         <div class="grid-auto" style="margin-top: 8px">
           <div><div class="label">Motor hours</div><div class="value-small" id="motor">—</div></div>
           <div><div class="label">Fuel</div><div class="value-small" id="fuel">—</div></div>
+        </div>
+        <!-- Comfort distribution: the whole passage's simulated hours
+             per Sereno tier, stacked beside the arrival math -->
+        <div id="comfort-dist" hidden style="margin-top: 8px">
+          <div class="label" style="margin-bottom: 4px">Comfort</div>
+          <div class="comfort-bar" id="comfort-bar"
+            role="img" aria-label="Passage hours per comfort tier"></div>
+          <div id="comfort-legend"></div>
         </div>
         <!-- Landfall sightings (work doc #6): the gated episodes the
              simulation sights on the horizon, the arrival coast
@@ -352,9 +395,70 @@ strong.sev {
     }
     this._motorEl.textContent = table.motorHours || "—";
     this._fuelEl.textContent = table.fuel || "—";
+    this._renderComfort();
     this._renderLandfall();
 
     this._renderTimeline();
+  }
+
+  /**
+   * Comfort distribution (ETA card): the passage's simulated hours
+   * per Sereno tier as a stacked ribbon and a legend — each line the
+   * tier's share of the passage in the crew's own units. Hidden
+   * until the plan carries comfort tiers (no sim, no strip).
+   */
+  _renderComfort() {
+    const el = this.shadowRoot.getElementById("comfort-dist");
+    if (!el) {
+      return;
+    }
+    const bar = this.shadowRoot.getElementById("comfort-bar");
+    const legend = this.shadowRoot.getElementById("comfort-legend");
+    bar.innerHTML = "";
+    legend.innerHTML = "";
+    const track = this._exceptions?.passageSummary?.track ?? [];
+    const dist = comfortDistribution(track);
+    const present = dist.tiers.filter((tier) => tier.hours > 0);
+    const total = dist.totalHours;
+    el.hidden = present.length === 0 || total === 0;
+    if (el.hidden) {
+      return;
+    }
+    for (const tier of present) {
+      const pct = (tier.hours / total) * 100;
+      const seg = document.createElement("div");
+      seg.className = "seg";
+      seg.style.width = `${pct.toFixed(2)}%`;
+      seg.style.background = tier.css;
+      seg.title = `${tier.level} ${fmtHours(tier.hours)} (${Math.round(pct)} %)`;
+      bar.appendChild(seg);
+    }
+    for (const tier of present) {
+      const pct = Math.round((tier.hours / total) * 100);
+      const line = document.createElement("div");
+      line.className = "comfort-row";
+      const swatch = document.createElement("span");
+      swatch.className = "comfort-swatch";
+      swatch.style.background = tier.css;
+      const hours = document.createElement("span");
+      hours.className = "comfort-hours";
+      hours.textContent = fmtHours(tier.hours);
+      const name = document.createElement("span");
+      name.textContent = tier.level;
+      const share = document.createElement("span");
+      share.className = "comfort-pct";
+      share.textContent = `${pct} %`;
+      line.append(swatch, hours, name, share);
+      legend.appendChild(line);
+    }
+    if (dist.unknownHours > 0) {
+      const note = document.createElement("div");
+      note.className = "comfort-pct";
+      note.style.marginTop = "4px";
+      note.textContent = `${fmtHours(dist.unknownHours)} unrated`;
+      note.title = "Hours the simulation rated no comfort tier for";
+      legend.appendChild(note);
+    }
   }
 
   /**

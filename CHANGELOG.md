@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- Comfort-tier distribution on the strategic ETA card: the whole passage's simulated hours per Sereno tier render as a stacked ribbon plus a legend in the ETA & Motor Plan card — `5h champagne · 1d 10h easy · 4h sporty` beside the arrival math, the passage's character readable at a glance before the timeline. The palette is the sparkline's, so the ribbon, the timeline tabs and the tactical bars never disagree; hours past the horizon that carry no tier are withheld from the bar and noted as `unrated` beneath the legend, and a plan with no simulated track hides the strip entirely.
+
 ## [0.16.1] - 2026-10-30
 
 ### Fixed
