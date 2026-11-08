@@ -15,6 +15,7 @@
   "keywords": [
     "signalk-node-server-plugin",
     "signalk-category-weather",
+    "signalk-category-plotter-extensions",
     "signalk-webapp"
   ],
   "author": "Henri Bergius <henri.bergius@iki.fi>",
